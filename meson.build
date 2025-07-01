@@ -3,11 +3,11 @@ project('bramble', 'cpp', default_options : ['cpp_std=c++17'])
 cc = meson.get_compiler('cpp')
 
 # Paths to external directories
-htslib_dir = 'htslib'
+# htslib_dir = 'htslib'
 gclib_dir = 'gclib'
 
 # Include directories
-inc_dirs = include_directories('.', gclib_dir, htslib_dir)
+inc_dirs = include_directories('include', gclib_dir)
 
 # Compiler and linker options
 base_flags = [
@@ -23,18 +23,17 @@ endif
 add_project_arguments(base_flags, language: 'cpp')
 
 # External static libraries
-#libhts = static_library('hts', [], dependencies: [], include_directories: inc_dirs)  # placeholder
-libhts = declare_dependency(
-  include_directories: include_directories(htslib_dir),
-  #link_args: [htslib_dir + '/libhts.a']
-)
-libhts_path = meson.source_root() + '/htslib/libhts.a'
-libhts_file = files(libhts_path)
-libhts_dep = declare_dependency(link_args: [libhts_path])
 
-#libbz2 = declare_dependency(link_args: ['htslib/xlibs/lib/libbz2.a'])
-#liblzma = declare_dependency(link_args: ['htslib/xlibs/lib/liblzma.a'])
-#libdeflate = declare_dependency(link_args: ['htslib/xlibs/lib/libdeflate.a'])
+#libhts = declare_dependency(
+#  include_directories: include_directories(htslib_dir),
+#  #link_args: [htslib_dir + '/libhts.a']
+#)
+#libhts_path = meson.source_root() + '/htslib/libhts.a'
+#libhts_file = files(libhts_path)
+#libhts_dep = declare_dependency(link_args: [libhts_path])
+
+
+htslib_dep = dependency('htslib', fallback: ['htslib', 'htslib_dep'])
 
 zlib_dep = dependency('zlib', fallback: ['zlib', 'zlib_dep'])
 bz2_dep = dependency('bzip2', fallback: ['bzip2', 'bzip2_dep'])
@@ -56,7 +55,7 @@ gclib_srcs = files(
   'gclib/GFaSeqGet.cpp', 'gclib/gff.cpp', 'gclib/GThreads.cpp'
 )
 
-main_srcs = files('bramble.cpp', 'bam.cpp', 'reads.cpp', 'tree.cpp')
+main_srcs = files('src/bramble.cpp', 'src/bam.cpp', 'src/reads.cpp', 'src/tree.cpp')
 
 
 # Optional sanitizers
@@ -93,6 +92,6 @@ endif
 
 executable('bramble', gclib_srcs + main_srcs,
   include_directories: inc_dirs,
-  dependencies: [libhts_dep] + libs
+  dependencies: [htslib_dep] + libs
 )
 
