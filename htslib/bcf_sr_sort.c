@@ -1,5 +1,5 @@
 /*
-    Copyright (C) 2017-2019 Genome Research Ltd.
+    Copyright (C) 2017-2021,2024 Genome Research Ltd.
 
     Author: Petr Danecek <pd3@sanger.ac.uk>
 
@@ -32,6 +32,7 @@
 #include "htslib/khash_str2int.h"
 #include "htslib/kbitset.h"
 
+// Variant types and pair-wise compatibility of their combinations, see bcf_sr_init_scores()
 #define SR_REF   1
 #define SR_SNP   2
 #define SR_INDEL 4
@@ -259,6 +260,7 @@ static int cmpstringp(const void *p1, const void *p2)
     return strcmp(* (char * const *) p1, * (char * const *) p2);
 }
 
+#define DEBUG_VSETS 0
 #if DEBUG_VSETS
 void debug_vsets(sr_sort_t *srt)
 {
@@ -280,6 +282,7 @@ void debug_vsets(sr_sort_t *srt)
 }
 #endif
 
+#define DEBUG_VBUF 0
 #if DEBUG_VBUF
 void debug_vbuf(sr_sort_t *srt)
 {
@@ -364,7 +367,7 @@ static int bcf_sr_sort_set(bcf_srs_t *readers, sr_sort_t *srt, const char *chr, 
     // group VCFs into groups, each with a unique combination of variants in the duplicate lines
     int ireader,ivar,irec,igrp,ivset,iact;
     for (ireader=0; ireader<readers->nreaders; ireader++) srt->vcf_buf[ireader].nrec = 0;
-    for (iact=0; iact<srt->nactive; iact++)
+    for (iact=0; iact<srt->nactive; iact++) // process each of the active readers, ie which still have a record to process
     {
         ireader = srt->active[iact];
         bcf_sr_t *reader = &readers->readers[ireader];
@@ -380,13 +383,38 @@ static int bcf_sr_sort_set(bcf_srs_t *readers, sr_sort_t *srt, const char *chr, 
 
             if ( srt->str.l ) kputc(';',&srt->str);
             srt->off[srt->noff++] = srt->str.l;
-            size_t beg = srt->str.l;
+            size_t beg  = srt->str.l;
+            int end_pos = -1;
+            if ( srt->pair & BCF_SR_PAIR_ID )
+            {
+                kputs(line->d.id,&srt->str);
+                kputc(':',&srt->str);
+            }
             for (ivar=1; ivar<line->n_allele; ivar++)
             {
                 if ( ivar>1 ) kputc(',',&srt->str);
                 kputs(line->d.allele[0],&srt->str);
                 kputc('>',&srt->str);
                 kputs(line->d.allele[ivar],&srt->str);
+
+                // If symbolic allele, check also the END tag in case there are multiple events,
+                // such as <DEL>s, starting at the same positions
+                if ( line->d.allele[ivar][0]=='<' )
+                {
+                    if ( end_pos==-1 )
+                    {
+                        bcf_info_t *end_info = bcf_get_info(reader->header,line,"END");
+                        if ( end_info )
+                            end_pos = (int)end_info->v1.i;  // this is only to create a unique id, we don't mind a potential int64 overflow
+                        else
+                            end_pos = 0;
+                    }
+                    if ( end_pos )
+                    {
+                        kputc('/',&srt->str);
+                        kputw(end_pos, &srt->str);
+                    }
+                }
             }
             if ( line->n_allele==1 )
             {
@@ -395,7 +423,10 @@ static int bcf_sr_sort_set(bcf_srs_t *readers, sr_sort_t *srt, const char *chr, 
             }
 
             // Create new variant or attach to existing one. But careful, there can be duplicate
-            // records with the same POS,REF,ALT (e.g. in dbSNP-b142)
+            // records with the same POS,REF,ALT (e.g. in dbSNP-b142). In such case, use a
+            // hash table (srt->var_str2int) and a counter (var_idx) to ensure they are
+            // treated as separate variants, while still allowing them to be matched
+            // between readers.
             char *var_str = beg + srt->str.s;
             int ret, var_idx = 0, var_end = srt->str.l;
             while ( 1 )
@@ -413,6 +444,7 @@ static int bcf_sr_sort_set(bcf_srs_t *readers, sr_sort_t *srt, const char *chr, 
             }
             if ( ret==-1 )
             {
+                // the variant is not present, insert
                 ivar = srt->nvar++;
                 hts_expand0(var_t,srt->nvar,srt->mvar,srt->var);
                 srt->var[ivar].nvcf = 0;

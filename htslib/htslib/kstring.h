@@ -1,7 +1,7 @@
 /* The MIT License
 
    Copyright (C) 2011 by Attractive Chaos <attractor@live.co.uk>
-   Copyright (C) 2013-2014, 2016, 2018-2020 Genome Research Ltd.
+   Copyright (C) 2013-2014, 2016, 2018-2020, 2022, 2024-2025 Genome Research Ltd.
 
    Permission is hereby granted, free of charge, to any person obtaining
    a copy of this software and associated documentation files (the
@@ -53,6 +53,18 @@
 #if defined __GNUC__ && (__GNUC__ > 3 || (__GNUC__ == 3 && __GNUC_MINOR__ >= 4))
 #define HAVE___BUILTIN_CLZ 1
 #endif
+#endif
+
+// Ensure ssize_t exists within this header. All #includes must precede this,
+// and ssize_t must be undefined again at the end of this header.
+#if defined _MSC_VER && defined _INTPTR_T_DEFINED && !defined _SSIZE_T_DEFINED && !defined ssize_t
+#define HTSLIB_SSIZE_T
+#define ssize_t intptr_t
+#endif
+
+#ifndef EOVERFLOW
+#define HTSLIB_EOVERFLOW
+#define EOVERFLOW ERANGE
 #endif
 
 /* kstring_t is a simple non-opaque type whose fields are likely to be
@@ -164,8 +176,7 @@ static inline int ks_expand(kstring_t *s, size_t expansion)
 {
     size_t new_size = s->l + expansion;
 
-    if (new_size < s->l) // Overflow check
-        return -1;
+    if (new_size < s->l) { errno = EOVERFLOW; return -1; }
     return ks_resize(s, new_size);
 }
 
@@ -227,8 +238,8 @@ static inline void ks_free(kstring_t *s)
 static inline int kputsn(const char *p, size_t l, kstring_t *s)
 {
 	size_t new_sz = s->l + l + 2;
-	if (new_sz <= s->l || ks_resize(s, new_sz) < 0)
-		return EOF;
+	if (new_sz <= s->l) { errno = EOVERFLOW; return EOF; }
+	if (ks_resize(s, new_sz) < 0) return EOF;
 	memcpy(s->s + s->l, p, l);
 	s->l += l;
 	s->s[s->l] = 0;
@@ -261,8 +272,8 @@ static inline int kputc_(int c, kstring_t *s)
 static inline int kputsn_(const void *p, size_t l, kstring_t *s)
 {
 	size_t new_sz = s->l + l;
-	if (new_sz < s->l || ks_resize(s, new_sz ? new_sz : 1) < 0)
-		return EOF;
+	if (new_sz < s->l) { errno = EOVERFLOW; return EOF; }
+	if (ks_resize(s, new_sz ? new_sz : 1) < 0) return EOF;
 	memcpy(s->s + s->l, p, l);
 	s->l += l;
 	return l;
@@ -368,17 +379,63 @@ static inline int kputw(int c, kstring_t *s)
 
 static inline int kputll(long long c, kstring_t *s)
 {
-	char buf[32];
-	int i, l = 0;
-	unsigned long long x = c;
-	if (c < 0) x = -x;
-	do { buf[l++] = x%10 + '0'; x /= 10; } while (x > 0);
-	if (c < 0) buf[l++] = '-';
-	if (ks_resize(s, s->l + l + 2) < 0)
-		return EOF;
-	for (i = l - 1; i >= 0; --i) s->s[s->l++] = buf[i];
-	s->s[s->l] = 0;
-	return 0;
+    // Worst case expansion.  One check reduces function size
+    // and aids inlining chance.  Memory overhead is minimal.
+    if (ks_resize(s, s->l + 23) < 0)
+	return EOF;
+
+    unsigned long long x = c;
+    if (c < 0) {
+	x = -x;
+        s->s[s->l++] = '-';
+    }
+
+    if (x <= UINT32_MAX)
+	return kputuw(x, s);
+
+    static const char kputull_dig2r[] =
+        "00010203040506070809"
+        "10111213141516171819"
+        "20212223242526272829"
+        "30313233343536373839"
+        "40414243444546474849"
+        "50515253545556575859"
+        "60616263646566676869"
+        "70717273747576777879"
+        "80818283848586878889"
+        "90919293949596979899";
+    unsigned int l, j;
+    char *cp;
+
+    // Find out how long the number is (could consider clzll)
+    uint64_t m = 1;
+    l = 0;
+    if (sizeof(long long)==sizeof(uint64_t) && x >= 10000000000000000000ULL) {
+	// avoids overflow below
+	l = 20;
+    } else {
+	do {
+	    l++;
+	    m *= 10;
+	} while (x >= m);
+    }
+
+    // Add digits two at a time
+    j = l;
+    cp = s->s + s->l;
+    while (x >= 10) {
+        const char *d = &kputull_dig2r[2*(x%100)];
+        x /= 100;
+        memcpy(&cp[j-=2], d, 2);
+    }
+
+    // Last one (if necessary).  We know that x < 10 by now.
+    if (j == 1)
+        cp[0] = x + '0';
+
+    s->l += l;
+    s->s[s->l] = 0;
+    return 0;
 }
 
 static inline int kputl(long c, kstring_t *s) {
@@ -395,5 +452,66 @@ static inline int *ksplit(kstring_t *s, int delimiter, int *n)
 	*n = ksplit_core(s->s, delimiter, &max, &offsets);
 	return offsets;
 }
+
+/**
+ *  kinsert_char - inserts a char to kstring
+ *  @param c   - char to insert
+ *  @param pos - position at which to insert, starting from 0
+ *  @param s   - pointer to output string
+ *  Returns 0 on success and -1 on failure
+ *  0 for pos inserts at start and length of current string as pos appends at
+ *  the end.
+ */
+static inline int kinsert_char(char c, size_t pos, kstring_t *s)
+{
+    if (!s || pos > s->l)  {
+        return EOF;
+    }
+    if (ks_resize(s, s->l + 2) < 0) {
+        return EOF;
+    }
+    memmove(s->s + pos + 1, s->s + pos, s->l - pos);
+    s->s[pos] = c;
+    s->s[++s->l] = 0;
+    return 0;
+}
+
+/**
+ *  kinsert_str - inserts a null terminated string to kstring
+ *  @param str - string to insert
+ *  @param pos - position at which to insert, starting from 0
+ *  @param s   - pointer to output string
+ *  Returns 0 on success and -1 on failure
+ *  0 for pos inserts at start and length of current string as pos appends at
+ *  the end. empty string makes no update.
+ */
+static inline int kinsert_str(const char *str, size_t pos, kstring_t *s)
+{
+    size_t len = 0;
+    if (!s || pos > s->l || !str)  {
+        return EOF;
+    }
+    if (!(len = strlen(str))) {
+        return 0;
+    }
+    if (ks_resize(s, s->l + len + 1) < 0) {
+        return EOF;
+    }
+    memmove(s->s + pos + len, s->s + pos, s->l - pos);
+    memcpy(s->s + pos, str, len);
+    s->l += len;
+    s->s[s->l] = '\0';
+    return 0;
+}
+
+#ifdef HTSLIB_SSIZE_T
+#undef HTSLIB_SSIZE_T
+#undef ssize_t
+#endif
+
+#ifdef HTSLIB_EOVERFLOW
+#undef HTSLIB_EOVERFLOW
+#undef EOVERFLOW
+#endif
 
 #endif

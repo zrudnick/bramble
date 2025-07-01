@@ -1,6 +1,6 @@
 /*  tbx.c -- tabix API functions.
 
-    Copyright (C) 2009, 2010, 2012-2015, 2017-2020 Genome Research Ltd.
+    Copyright (C) 2009, 2010, 2012-2015, 2017-2020, 2022-2023, 2025 Genome Research Ltd.
     Copyright (C) 2010-2012 Broad Institute.
 
     Author: Heng Li <lh3@sanger.ac.uk>
@@ -53,6 +53,7 @@ const tbx_conf_t tbx_conf_sam = { TBX_SAM, 3, 4, 0, '@', 0 };
 
 HTSLIB_EXPORT
 const tbx_conf_t tbx_conf_vcf = { TBX_VCF, 1, 2, 0, '#', 0 };
+const tbx_conf_t tbx_conf_gaf = { TBX_GAF, 1, 6, 0, '#', 0 };
 
 typedef struct {
     int64_t beg, end;
@@ -64,6 +65,7 @@ static inline int get_tid(tbx_t *tbx, const char *ss, int is_add)
 {
     khint_t k;
     khash_t(s2i) *d;
+    if ((tbx->conf.preset&0xffff) == TBX_GAF) return(0);
     if (tbx->dict == 0) tbx->dict = kh_init(s2i);
     if (!tbx->dict) return -1; // Out of memory
     d = (khash_t(s2i)*)tbx->dict;
@@ -91,24 +93,60 @@ int tbx_name2id(tbx_t *tbx, const char *ss)
     return get_tid(tbx, ss, 0);
 }
 
-int tbx_parse1(const tbx_conf_t *conf, int len, char *line, tbx_intv_t *intv)
+int tbx_parse1(const tbx_conf_t *conf, size_t len, char *line, tbx_intv_t *intv)
 {
-    int i, b = 0, id = 1, ncols = 0;
-    char *s;
+    size_t i, b = 0;
+    int id = 1, getlen = 0, alcnt = 0, haveins = 0, lenpos = -1;
+    char *s, *t;
+    uint8_t insals[8192];
+    int64_t reflen = 0, svlen = 0, fmtlen = 0, tmp = 0;
+
     intv->ss = intv->se = 0; intv->beg = intv->end = -1;
     for (i = 0; i <= len; ++i) {
         if (line[i] == '\t' || line[i] == 0) {
-            ++ncols;
             if (id == conf->sc) {
                 intv->ss = line + b; intv->se = line + i;
             } else if (id == conf->bc) {
                 // here ->beg is 0-based.
-                intv->beg = intv->end = strtoll(line + b, &s, 0);
-                if ( s==line+b ) return -1; // expected int
-                if (!(conf->preset&TBX_UCSC)) --intv->beg;
-                else ++intv->end;
-                if (intv->beg < 0) intv->beg = 0;
-                if (intv->end < 1) intv->end = 1;
+                if ((conf->preset&0xffff) == TBX_GAF){
+                    // if gaf find the smallest and largest node id
+                    char *t;
+                    int64_t nodeid = -1;
+                    for (s = line + b + 1; s < line + i;) {
+                        nodeid = strtoll(s, &t, 0);
+                        if(intv->beg == -1){
+                            intv->beg = intv->end = nodeid;
+                        } else {
+                            if(nodeid < intv->beg){
+                                intv->beg = nodeid;
+                            }
+
+                            if(nodeid > intv->end){
+                                intv->end = nodeid;
+                            }
+                        }
+                        s = t + 1;
+                    }
+                } else {
+                    intv->beg = strtoll(line + b, &s, 0);
+
+                    if (conf->bc <= conf->ec) // don't overwrite an already set end point
+                        intv->end = intv->beg;
+
+                    if ( s==line+b ) return -1; // expected int
+
+                    if (!(conf->preset&TBX_UCSC))
+                        --intv->beg;
+                    else if (conf->bc <= conf->ec)
+                        ++intv->end;
+
+                    if (intv->beg < 0) {
+                        hts_log_warning("Coordinate <= 0 detected. "
+                                        "Did you forget to use the -0 option?");
+                        intv->beg = 0;
+                    }
+                    if (intv->end < 1) intv->end = 1;
+                }
             } else {
                 if ((conf->preset&0xffff) == TBX_GENERIC) {
                     if (id == conf->ec)
@@ -130,10 +168,42 @@ int tbx_parse1(const tbx_conf_t *conf, int len, char *line, tbx_intv_t *intv)
                         intv->end = intv->beg + l;
                     }
                 } else if ((conf->preset&0xffff) == TBX_VCF) {
-                    if (id == 4) {
+                    if (id == 4) { //ref allele
                         if (b < i) intv->end = intv->beg + (i - b);
-                    } else if (id == 8) { // look for "END="
-                        int c = line[i];
+                        ++alcnt;
+                        reflen = i - b;
+                    } if (id == 5) {    //alt allele
+                        int lastbyte = 0, c = line[i];
+                        insals[lastbyte] = 0;
+                        line[i] = 0;
+                        s = line + b;
+                        do {
+                            t = strchr(s, ',');
+                            if (alcnt >> 3 != lastbyte) {   //initialize insals
+                                lastbyte = alcnt >> 3;
+                                insals[lastbyte] = 0;
+                            }
+                            ++alcnt;
+                            if (t) {
+                                *t = 0;
+                            }
+                            if (s[0] == '<') {
+                                if (!strcmp("<INS>", s)) {  //note inserts
+                                    insals[lastbyte] |= 1 << ((alcnt - 1) & 7);
+                                    haveins = 1;
+                                } else if (!strcmp("<*>", s) ||
+                                    !strcmp("<NON_REF>", s)) {  //note gvcf
+                                    getlen = 1;
+                                }
+                            }
+                            if (t) {
+                                *t = ',';
+                                s = t + 1;
+                            }
+                        } while (t && alcnt < 65536);   //max allcnt is 65535
+                        line[i] = c;
+                    } else if (id == 8) { //INFO, look for "END=" / "SVLEN"
+                        int c = line[i], d = 1;
                         line[i] = 0;
                         s = strstr(line + b, "END=");
                         if (s == line + b) s += 4;
@@ -159,13 +229,84 @@ int tbx_parse1(const tbx_conf_t *conf, int len, char *line, tbx_intv_t *intv)
                                 intv->end = end;
                             }
                         }
+                        s = strstr(line + b, "SVLEN=");
+                        if (s == line + b) s += 6;  //at start of info
+                        else if (s) {               //not at the start
+                            s = strstr(line + b, ";SVLEN=");
+                            if (s) s += 7;
+                        }
+                        while (s && d < alcnt) {
+                            t = strchr(s, ',');
+                            if ((haveins) && (insals[d >> 3] & (1 << (d & 7)))) {
+                                tmp = 1;    //<INS>
+                            } else {
+                                tmp = atoll(s);
+                                tmp = tmp < 0 ? llabs(tmp) : tmp;
+                            }
+                            svlen = svlen < tmp ? tmp : svlen;
+                            s = t ? t + 1 : NULL;
+                            ++d;
+                        }
+                        line[i] = c;
+                    } else if (getlen && id == 9 ) {    //FORMAT
+                        int c = line[i], pos = -1;
+                        line[i] = 0;
+                        s = line + b;
+                        while (s) {
+                            ++pos;
+                            if (!(t = strchr(s, ':'))) {    //no further fields
+                                if (!strcmp(s, "LEN")) {
+                                    lenpos = pos;
+                                }
+                                break;  //not present at all!
+                            } else {
+                                *t = '\0';
+                                if (!strcmp(s, "LEN")) {
+                                    lenpos = pos;
+                                    *t = ':';
+                                    break;
+                                }
+                                *t = ':';
+                                s = t + 1;  //check next one
+                            }
+                        }
+                        line[i] = c;
+                        if (lenpos == -1) { //not present
+                            break;
+                        }
+                    } else if (id > 9 && getlen && lenpos != -1) {
+                        //get LEN from sample
+                        int c = line[i], d = 0;
+                        line[i] = 0; tmp = 0;
+                        s = line + b;
+                        for (d = 0; d <= lenpos; ++d) {
+                            if (d == lenpos) {
+                                tmp = atoll(s);
+                                break;
+                            }
+                            if ((t = strchr(s, ':'))) {
+                                s = t + 1;
+                            } else {
+                                break;    //not in sycn with fmt def!
+                            }
+                        }
+                        fmtlen = fmtlen < tmp ? tmp : fmtlen;
                         line[i] = c;
                     }
                 }
             }
-            b = i + 1;
+            b = i + 1;  //beginning if current field
             ++id;
         }
+    }
+    if ((conf->preset&0xffff) == TBX_VCF) {
+        tmp = reflen < svlen ?
+                svlen < fmtlen ? fmtlen : svlen :
+                reflen < fmtlen ? fmtlen : reflen ;
+        tmp += intv->beg;
+        intv->end = intv->end < tmp ? tmp : intv->end;
+
+        //NOTE: 'end' calculation be in sync with end/rlen in vcf.c:get_rlen
     }
     if (intv->ss == 0 || intv->se == 0 || intv->beg < 0 || intv->end < 0) return -1;
     return 0;
@@ -175,7 +316,13 @@ static inline int get_intv(tbx_t *tbx, kstring_t *str, tbx_intv_t *intv, int is_
 {
     if (tbx_parse1(&tbx->conf, str->l, str->s, intv) == 0) {
         int c = *intv->se;
-        *intv->se = '\0'; intv->tid = get_tid(tbx, intv->ss, is_add); *intv->se = c;
+        *intv->se = '\0';
+        if ((tbx->conf.preset&0xffff) == TBX_GAF){
+            intv->tid = 0;
+        } else {
+            intv->tid = get_tid(tbx, intv->ss, is_add);
+        }
+        *intv->se = c;
         if (intv->tid < 0) return -2;  // get_tid out of memory
         return (intv->beg >= 0 && intv->end >= 0)? 0 : -1;
     } else {
@@ -184,11 +331,15 @@ static inline int get_intv(tbx_t *tbx, kstring_t *str, tbx_intv_t *intv, int is_
         {
             case TBX_SAM: type = "TBX_SAM"; break;
             case TBX_VCF: type = "TBX_VCF"; break;
+            case TBX_GAF: type = "TBX_GAF"; break;
             case TBX_UCSC: type = "TBX_UCSC"; break;
             default: type = "TBX_GENERIC"; break;
         }
-        hts_log_error("Failed to parse %s, was wrong -p [type] used?\nThe offending line was: \"%s\"",
-            type, str->s);
+        if (hts_is_utf16_text(str))
+            hts_log_error("Failed to parse %s: offending line appears to be encoded as UTF-16", type);
+        else
+            hts_log_error("Failed to parse %s: was wrong -p [type] used?\nThe offending line was: \"%s\"",
+                type, str->s);
         return -1;
     }
 }
@@ -279,7 +430,7 @@ static void adjust_max_ref_len_sam(const char *str, int64_t *max_ref_len)
 // files with very large contigs.
 static int adjust_n_lvls(int min_shift, int n_lvls, int64_t max_len)
 {
-    int64_t s = 1LL << (min_shift + n_lvls * 3);
+    int64_t s = hts_bin_maxpos(min_shift, n_lvls);
     max_len += 256;
     for (; max_len > s; ++n_lvls, s <<= 3) {}
     return n_lvls;
@@ -318,15 +469,17 @@ tbx_t *tbx_index(BGZF *fp, int min_shift, const tbx_conf_t *conf)
             continue;
         }
         if (first == 0) {
-            if (fmt == HTS_FMT_CSI)
+            if (fmt == HTS_FMT_CSI) {
+                if (!max_ref_len)
+                    max_ref_len = (int64_t)100*1024*1024*1024; // 100G default
                 n_lvls = adjust_n_lvls(min_shift, n_lvls, max_ref_len);
+            }
             tbx->idx = hts_idx_init(0, fmt, last_off, min_shift, n_lvls);
             if (!tbx->idx) goto fail;
             first = 1;
         }
         ret = get_intv(tbx, &str, &intv, 1);
-        if (ret < -1) goto fail;  // Out of memory
-        if (ret < 0) continue; // Skip unparsable lines
+        if (ret < 0) goto fail;  // Out of memory or unparsable lines
         if (hts_idx_push(tbx->idx, intv.tid, intv.beg, intv.end,
                          bgzf_tell(fp), 1) < 0) {
             goto fail;
