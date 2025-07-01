@@ -1,0 +1,5 @@
+#define HTS_CC "gcc"
+#define HTS_CPPFLAGS "-I./xlibs/include"
+#define HTS_CFLAGS "-g -Wall -O2 -fvisibility=hidden -D HAVE_LIBDEFLATE -D HAVE_LIBLZMA"
+#define HTS_LDFLAGS "-fvisibility=hidden -L./xlibs/lib"
+#define HTS_LIBS "-lz -lm -lbz2 -ldeflate -llzma "

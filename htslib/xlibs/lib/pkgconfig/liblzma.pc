@@ -1,0 +1,20 @@
+#
+# Author: Lasse Collin
+#
+# This file has been put into the public domain.
+# You can do whatever you want with this file.
+#
+
+prefix=/ccb/salz4-1/zrudnic1/stringtie/htslib/xlibs
+exec_prefix=/ccb/salz4-1/zrudnic1/stringtie/htslib/xlibs
+libdir=/ccb/salz4-1/zrudnic1/stringtie/htslib/xlibs/lib
+includedir=/ccb/salz4-1/zrudnic1/stringtie/htslib/xlibs/include
+
+Name: liblzma
+Description: General purpose data compression library
+URL: https://tukaani.org/xz/
+Version: 5.4.7
+Cflags: -I${includedir}
+Cflags.private: -DLZMA_API_STATIC
+Libs: -L${libdir} -llzma
+Libs.private: -pthread -lpthread
