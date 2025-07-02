@@ -45,17 +45,15 @@ struct IntervalNode {
    uint32_t height;
    std::set<tid_t> tids;
    // does this need to be an ordered map?
-   std::map<tid_t, uint32_t> tid_cum_len;
+   std::unordered_map<tid_t, uint32_t> tid_cum_len;
 
-   //std::set<std::string> tids;
-   //std::map<std::string, uint32_t> tid_cum_len;
-   IntervalNode *left;
+    IntervalNode *left;
    IntervalNode *right;
  
    // Maps from TID to previous/next nodes in genomic order for that TID
-  std::map<tid_t, IntervalNode *>
+  std::unordered_map<tid_t, IntervalNode *>
        tid_prev_nodes; // TID -> previous node with same TID
-  std::map<tid_t, IntervalNode *>
+  std::unordered_map<tid_t, IntervalNode *>
        tid_next_nodes; // TID -> next node with same TID
  
    IntervalNode(uint32_t s, uint32_t e)
@@ -619,8 +617,7 @@ public:
 
 struct MateInfo {
    uint32_t mate_index;
-  //std::string transcript_id;
-  tid_t transcript_id;
+   tid_t transcript_id;
    uint32_t match_pos;
    uint32_t mate_size;
    bool same_transcript; // true if both mates map to same transcript
@@ -642,7 +639,7 @@ struct ReadInfo {
    bool is_first_mate;
    bool is_reverse;
    bool mate_is_reverse;
-  std::map<tid_t, MateInfo *> mate_info;
+   std::map<tid_t, MateInfo *> mate_info;
  
    ReadInfo()
        : matches(), brec(nullptr), valid_read(false), read_index(0),

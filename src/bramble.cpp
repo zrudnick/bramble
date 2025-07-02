@@ -8,6 +8,7 @@
 #include "proc_mem.h" 			// for GMEMTRACE
 #include "GThreads.h" 			// for THREADING_ENABLED
 #include "htslib/sam.h"
+#include "CLI/CLI11.hpp"
 #include <numeric>
 
 #define VERSION "1.0.0"
@@ -37,7 +38,7 @@ FILE* f_out=NULL;
 FILE* c_out=NULL;
 FILE* dbg_out=NULL;
 
-const char* bam_file_in;
+char* bam_file_in;
 const char* bam_file_out;
 
 GStr outfname;
@@ -208,7 +209,7 @@ void process_options(GArgs& args) {
 		exit(1);
 	}
 
-	const char* ifn=NULL;
+	char* ifn=NULL;
 	int i = 0;
 	while ( (ifn=args.nextNonOpt())!=NULL) {
 		//input alignment files
@@ -510,12 +511,51 @@ int gseqstat_cmpName(const pointer p1, const pointer p2) {
 // Main function
 int main(int argc, char* argv[]) {
 
+
+ /*
+ --fr : assume stranded library fw-firststrand\n\
+ --rf : assume stranded library fw-secondstrand\n\
+ -G reference annotation to use for guiding the assembly process (GTF/GFF)\n\
+ -o output path/file name for the assembled transcripts GTF (default: stdout)\n\
+ -L BAM file contains long reads \n\
+ -s minimum reads per bp coverage to consider for single-exon transcript\n\
+    (default: 4.75)\n\
+ -v verbose (log bundle processing details)\n\
+ -g maximum gap allowed between read mappings (default: 50)\n\
+ -p number of threads (CPUs) to use (default: 1)\n\
+ -u no multi-mapping correction (default: correction enabled)\n\
+ -h print this usage message and exit\n\
+ */
+
+
 	// Process arguments
+	/*
 	GArgs args(argc, argv,
    	"debug;help;version;mix;ref=;cram-ref=cds=;keeptmp;rseq=;ptf=;bam;fr;rf;merge;"
    	"exclude=zihvteuLRx:n:j:s:D:G:C:S:l:m:o:a:j:c:f:p:g:P:M:Bb:A:E:F:T:");
  	args.printError(USAGE, true);
  	process_options(args);
+ 	*/
+
+	
+	CLI::App app{"A program to project spliced genomic alignments onto the transcriptome", "Bramble"};
+	std::string gff;
+	std::string bam_file;
+	std::string input_bam;
+	app.add_option("in.bam", input_bam, "input bam file")->required();
+ 	app.add_flag("--fr", fr_strand, "assume stranded library fw-firststrand");
+ 	app.add_flag("--rf", rf_strand, "assume stranded library fw-secondstrand");
+ 	app.add_flag("-v", verbose, "verbose (log processing details)");
+ 	app.add_option("-G", gff, "reference annotation to use for guiding the assembly process (GTF/GFF)")->check(CLI::ExistingFile);
+ 	app.add_option("-o", bam_file, "output path/file name for the projected alignments")->required();
+	app.add_option("-p", num_cpus, "number of threads (CPUs) to use")->default_val(1);
+
+	CLI11_PARSE(app, argc, argv);
+
+	bam_file_in = new char[input_bam.size()+1];
+	std::strcpy(bam_file_in, input_bam.c_str());
+	guide_gff = gff.c_str();
+	bam_file_out = bam_file.c_str();
 
 	GVec<GRefData> refguides;                   		// Plain vector with transcripts for each chromosome
 
@@ -854,6 +894,7 @@ int main(int argc, char* argv[]) {
 				total_guides = 0;
 				guides = NULL;
 				first_possible_overlap = 0;
+				// NOTE: What is this below?
 				last_guide_idx =- 1;
 				
 				// Check if BAM ref_id found in guide annotations
@@ -1030,7 +1071,7 @@ int main(int argc, char* argv[]) {
 	// }
 
 	fprintf(f_out,"# ");
-	args.printCmdLine(f_out);
+	// args.printCmdLine(f_out);
 	fprintf(f_out,"# Bramble version %s\n",VERSION);
 
 	//FILE *g_out=NULL;

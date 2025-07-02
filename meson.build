@@ -13,7 +13,7 @@ inc_dirs = include_directories('include', gclib_dir)
 base_flags = [
   '-Wall', '-Wextra', '-fsigned-char',
   '-D_FILE_OFFSET_BITS=64', '-D_LARGEFILE_SOURCE',
-  '-fno-strict-aliasing', '-fno-exceptions', '-fno-rtti',
+  '-fno-strict-aliasing', '-fno-rtti',
 ]
 
 if get_option('buildtype') == 'debug'
@@ -23,18 +23,7 @@ endif
 add_project_arguments(base_flags, language: 'cpp')
 
 # External static libraries
-
-#libhts = declare_dependency(
-#  include_directories: include_directories(htslib_dir),
-#  #link_args: [htslib_dir + '/libhts.a']
-#)
-#libhts_path = meson.source_root() + '/htslib/libhts.a'
-#libhts_file = files(libhts_path)
-#libhts_dep = declare_dependency(link_args: [libhts_path])
-
-
 htslib_dep = dependency('htslib', fallback: ['htslib', 'htslib_dep'])
-
 zlib_dep = dependency('zlib', fallback: ['zlib', 'zlib_dep'])
 bz2_dep = dependency('bzip2', fallback: ['bzip2', 'bzip2_dep'])
 lzma_dep = dependency('liblzma', required: true)
@@ -56,7 +45,6 @@ gclib_srcs = files(
 )
 
 main_srcs = files('src/bramble.cpp', 'src/bam.cpp', 'src/reads.cpp', 'src/tree.cpp')
-
 
 # Optional sanitizers
 if get_option('memcheck')
