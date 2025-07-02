@@ -13,6 +13,7 @@
 #include <set>
 #include <algorithm>
 #include <memory>
+#include <unordered_map>
 using namespace std;
 
 #define MAX_NODE 1000000
@@ -812,6 +813,76 @@ struct CReadAln:public GSeg {
 	}
 };
 
+
+struct GroupKey {
+    uint start;
+    std::string cigar_str;
+    
+    // for std::map
+    bool operator<(const GroupKey& other) const {
+        if (start != other.start) return start < other.start;
+        return cigar_str < other.cigar_str;
+    }
+    
+    bool operator==(const GroupKey& other) const {
+        return start == other.start && cigar_str == other.cigar_str;
+    }
+};
+
+struct AlnGroups {
+    std::map<GroupKey, uint> key_to_group;
+    std::vector<std::vector<uint32_t>> groups;
+    
+    AlnGroups() : key_to_group(), groups() {}
+
+    std::string getCigar(bam1_t* b) {
+        uint32_t n_cigar = b->core.n_cigar;
+        uint32_t* cigar = bam_get_cigar(b);
+        
+        std::string cigar_str;
+        cigar_str.reserve(n_cigar * 8);
+        
+        for (uint32_t i = 0; i < n_cigar; i++) {
+            uint32_t op_len = bam_cigar_oplen(cigar[i]);
+            char op_char = bam_cigar_opchr(cigar[i]);
+            cigar_str += std::to_string(op_len) + op_char;
+        }
+        return cigar_str;
+    }
+
+    void Add(CReadAln* read, uint n) {
+        if (!read || !read->brec) return;
+        bam1_t* b = read->brec->get_b();
+        
+		std::string cigar = getCigar(b);
+        GroupKey key{read->start, cigar};
+        
+        auto it = key_to_group.find(key);
+        uint32_t group_num;
+        
+		// Key exists
+        if (it != key_to_group.end()) {
+            group_num = it->second;
+            groups[group_num].push_back(n);
+
+		// New key, create new group
+        } else {
+            group_num = groups.size();
+            key_to_group[key] = group_num;
+            groups.push_back(std::vector<uint>{n});
+        }
+    }
+    
+    void Clear() {
+       	key_to_group.clear();
+        groups.clear();
+    }
+    
+    ~AlnGroups() {
+        Clear();
+    }
+};
+
 struct GReadAlnData {
 	GSamRecord* brec;
 	char strand; // -1, 0, 1
@@ -1221,7 +1292,6 @@ struct BundleData {
 	bool evalReadAln(GReadAlnData& alndata, char& strand);
 
 	void Clear() {
-
 		guides.Clear();
 		reads.Clear();
 		junction.Clear();

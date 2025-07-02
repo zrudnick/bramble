@@ -315,9 +315,10 @@ uint get_match_pos(IntervalNode* interval, std::string tid, char read_strand,
  * @param bam_info read_info for all reads in bundle
  * @param read_index index of read in bundle->reads
  */
-void process_read_out(CReadAln* read, BundleData* bundle, g2tTree* g2t, 
-                std::map<std::string, ReadInfo*>& bam_info, uint read_index) {
+void process_read_out(BundleData*& bundle, uint read_index, g2tTree* g2t, 
+    std::map<std::string, ReadInfo*>& bam_info, std::vector<uint32_t> group) {
     
+    CReadAln* read = bundle->reads[read_index];
     std::set<std::tuple<std::string, uint>> matches;
     std::set<std::tuple<std::string, uint>> tmp_matches;
     
@@ -346,12 +347,12 @@ void process_read_out(CReadAln* read, BundleData* bundle, g2tTree* g2t,
         // Find all guide intervals that contain the read exon
         auto sorted_intervals = g2t->getIntervals(exon_start, exon_end, read_strand);
 
+        // No overlap at all
+        if (sorted_intervals.empty()) return;
+
         prev_last_interval = last_interval;
         first_interval = sorted_intervals[0];
         last_interval = sorted_intervals[sorted_intervals.size() - 1];
-
-        // No overlap at all
-        if (sorted_intervals.empty()) return;
 
         bool is_first_exon = (j == 0) ? true : false;
         bool is_last_exon = (j == exon_count - 1) ? true : false;
@@ -411,23 +412,27 @@ void process_read_out(CReadAln* read, BundleData* bundle, g2tTree* g2t,
     }
 
     // If we reach here, read is valid
+    // Set up read_info for this read group
 
-    // Set up read_info for this read
-    ReadInfo* read_info = new ReadInfo();
+    for (auto& i : group) {
+        CReadAln* group_read = bundle->reads[i];
+        std::string group_read_name = group_read->brec->name();
 
-    read_info->valid_read = true;
-    read_info->matches = matches;
-    read_info->brec = read->brec;
-    read_info->read_index = read_index; 
-    read_info->read_size = read->len;
-    bam_info[std::to_string(read_index)] = read_info;
+        ReadInfo* read_info = new ReadInfo();
+        read_info->valid_read = true;
+        read_info->matches = matches;
+        read_info->brec = group_read->brec;
+        read_info->read_index = i; 
+        read_info->read_size = group_read->len;
+        bam_info[std::to_string(i)] = read_info;
 
-    // Record mate information
-    read_info->mate_name = read_name;
-    read_info->is_paired = (read->brec->flags() & BAM_FPAIRED); 
-    read_info->is_first_mate = (read->brec->flags() & BAM_FREAD1);  
-    read_info->is_reverse = (read->brec->flags() & BAM_FREVERSE);     
-    read_info->mate_is_reverse = (read->brec->flags() & BAM_FMREVERSE); 
+        // Record mate information
+        read_info->mate_name = group_read_name;
+        read_info->is_paired = (group_read->brec->flags() & BAM_FPAIRED); 
+        read_info->is_first_mate = (group_read->brec->flags() & BAM_FREAD1);  
+        read_info->is_reverse = (group_read->brec->flags() & BAM_FREVERSE);     
+        read_info->mate_is_reverse = (group_read->brec->flags() & BAM_FMREVERSE); 
+    }
 
     return;
 }
@@ -643,15 +648,28 @@ void process_mate_pairs(BundleData* bundle, std::map<std::string, ReadInfo*>& ba
  * @param io BAM reader and writer
  */
 void convert_reads(BundleData* bundle, BamIO* io) {
+
+    // Use bundle guides to build g2t tree
     g2tTree* g2t = make_g2t_tree(bundle);
     if (g2t == nullptr) return;
-    
+
+    // Create read groups
+    AlnGroups* aln_groups = new AlnGroups();
     GList<CReadAln>& reads = bundle->reads;
-    std::map<std::string, ReadInfo*> bam_info;
-    
-    // First pass: process reads
     for (int n = 0; n < reads.Count(); n++) {
-        process_read_out(reads[n], bundle, g2t, bam_info, n);
+        aln_groups->Add(reads[n], n);
+    }
+
+    // Create bam_info to store info for every read
+    std::map<std::string, ReadInfo*> bam_info;
+
+    // First pass: process reads
+    auto groups = aln_groups->groups;
+    for (uint i = 0; i < groups.size(); i++) {
+        uint n = groups[i][0];                      // index of first read in group
+        
+        // Process the first read from this group
+        process_read_out(bundle, n, g2t, bam_info, groups[i]);
     }
 
     // Second pass: process mate pairs
@@ -662,6 +680,7 @@ void convert_reads(BundleData* bundle, BamIO* io) {
 
     // Free allocated structures
     delete g2t;
+    delete aln_groups;
     for (const auto& pair : bam_info) {
         auto info = std::get<1>(pair);
         delete info;

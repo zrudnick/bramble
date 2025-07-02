@@ -33,8 +33,8 @@ bool check_forward_overhang(IntervalNode* interval, uint exon_end, char read_str
 uint get_match_pos(IntervalNode* interval, std::string tid, char read_strand,
                    g2tTree* g2t, uint exon_start, bool used_backwards_overhang);
 
-void process_read_out(CReadAln* read, BundleData* bundle, g2tTree* g2t, 
-                std::map<std::string, ReadInfo*>& bam_info, uint read_index);
+void process_read_out(BundleData*& bundle, uint read_index, g2tTree* g2t, 
+    std::map<std::string, ReadInfo*>& bam_info, std::vector<uint32_t> group);
 
 void add_mate_info(const std::set<std::string>& final_transcripts, 
     const std::set<std::string>& read_transcripts, const std::set<std::string>& mate_transcripts,
