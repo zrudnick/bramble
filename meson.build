@@ -24,6 +24,7 @@ add_project_arguments(base_flags, language: 'cpp')
 
 # External static libraries
 htslib_dep = dependency('htslib', fallback: ['htslib', 'htslib_dep'])
+quill_dep = dependency('quill', fallback: ['quill', 'quill_dep'])
 zlib_dep = dependency('zlib', fallback: ['zlib', 'zlib_dep'])
 bz2_dep = dependency('bzip2', fallback: ['bzip2', 'bzip2_dep'])
 lzma_dep = dependency('liblzma', required: true)
@@ -80,6 +81,6 @@ endif
 
 executable('bramble', gclib_srcs + main_srcs,
   include_directories: inc_dirs,
-  dependencies: [htslib_dep] + libs
+  dependencies: [htslib_dep, quill_dep] + libs
 )
 

@@ -1,6 +1,8 @@
 // Bramble v1.0.0
 // Main file
 
+#include <cstdlib>
+#include <numeric>
 #include "bramble.h"
 #include "bam.h"
 #include "reads.h"
@@ -9,7 +11,12 @@
 #include "GThreads.h" 			// for THREADING_ENABLED
 #include "htslib/sam.h"
 #include "CLI/CLI11.hpp"
-#include <numeric>
+
+#include "quill/Backend.h"
+#include "quill/Frontend.h"
+#include "quill/LogMacros.h"
+#include "quill/Logger.h"
+#include "quill/sinks/ConsoleSink.h"
 
 #define VERSION "1.0.0"
 
@@ -510,6 +517,10 @@ int gseqstat_cmpName(const pointer p1, const pointer p2) {
 
 // Main function
 int main(int argc, char* argv[]) {
+	quill::Backend::start();
+  // Get a logger
+  quill::Logger* logger = quill::Frontend::create_or_get_logger(
+    "root", quill::Frontend::create_or_get_sink<quill::ConsoleSink>("sink_id_1"));
 
 
  /*
@@ -542,16 +553,19 @@ int main(int argc, char* argv[]) {
 	std::string gff;
 	std::string bam_file;
 	std::string input_bam;
-	app.add_option("in.bam", input_bam, "input bam file")->required();
+	auto input_opt = app.add_option("in.bam", input_bam, "input bam file")->required();
  	app.add_flag("--fr", fr_strand, "assume stranded library fw-firststrand");
  	app.add_flag("--rf", rf_strand, "assume stranded library fw-secondstrand");
  	app.add_flag("-v", verbose, "verbose (log processing details)");
  	app.add_option("-G", gff, "reference annotation to use for guiding the assembly process (GTF/GFF)")->check(CLI::ExistingFile);
  	app.add_option("-o", bam_file, "output path/file name for the projected alignments")->required();
 	app.add_option("-p", num_cpus, "number of threads (CPUs) to use")->default_val(1);
+	auto version_callback = [](int count){ std::cout << "version: " << VERSION << "\n";  std::exit(EXIT_SUCCESS); };
+	app.add_flag_function("-V,--version", version_callback, "print version.");
 
 	CLI11_PARSE(app, argc, argv);
 
+	LOG_INFO(logger, "command line parsed --- running bramble");
 	bam_file_in = new char[input_bam.size()+1];
 	std::strcpy(bam_file_in, input_bam.c_str());
 	guide_gff = gff.c_str();
