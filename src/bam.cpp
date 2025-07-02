@@ -107,8 +107,8 @@ void update_cigar(bam1_t* b, uint32_t* cigar, uint32_t n_cigar) {
 }
 
 // Set mate information for a read
-void set_mate_info(BamIO* io, std::string transcript_id, bam1_t* b, int tid, 
-    ReadInfo* read_info) {
+void set_mate_info(BamIO* io, const std::string& transcript_name, tid_t transcript_id, bam1_t* b, int tid, 
+    ReadInfo* read_info, g2tTree* gt2) {
     
     auto mate_info = read_info->mate_info[transcript_id];
     if (!mate_info || !mate_info->valid_pair) {
@@ -145,7 +145,8 @@ void set_mate_info(BamIO* io, std::string transcript_id, bam1_t* b, int tid,
         // Mates map to different transcripts
 
         // Get mate's transcript ID in BAM header
-        int mate_tid = io->get_tid(mate_info->transcript_id.c_str());
+        auto& mate_transcript_name = gt2->get_tid_name(mate_info->transcript_id);
+        int mate_tid = io->get_tid(mate_transcript_name.c_str());
         if (mate_tid < 0) {
             // Mate transcript not found in header - treat as unmapped mate
             // This shouldn't happen
@@ -177,7 +178,7 @@ void set_nh_tag(bam1_t* b, uint nh_i) {
 }
 
 // Write bundle reads to BAM file
-void write_to_bam(BamIO* io, std::map<std::string, ReadInfo*>& bam_info) {
+void write_to_bam(BamIO* io, std::map<tid_t, ReadInfo*>& bam_info, g2tTree* g2t) {
     GSamRecord new_brec;
 
     for (const auto& pair : bam_info) {
@@ -203,8 +204,9 @@ void write_to_bam(BamIO* io, std::map<std::string, ReadInfo*>& bam_info) {
         // bool secondary = false;
 
         for (const auto& match : read_info->matches) {
-            std::string transcript_id = std::get<0>(match);
-            int tid = io->get_tid(transcript_id.c_str());
+            tid_t transcript_id = std::get<0>(match);
+            auto& transcript_name = g2t->get_tid_name(transcript_id);
+            int tid = io->get_tid(transcript_name.c_str());
             uint match_pos = std::get<1>(match);
                 
             // Set new coordinates
@@ -214,7 +216,7 @@ void write_to_bam(BamIO* io, std::map<std::string, ReadInfo*>& bam_info) {
             // TODO: choose matches to be secondary
 
             // Set mate information if available
-            set_mate_info(io, transcript_id, b, tid, read_info);
+            set_mate_info(io, transcript_name, transcript_id, b, tid, read_info, g2t);
 
             // Write the read match to the BAM
             io->write(&new_brec);

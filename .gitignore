@@ -1,5 +1,6 @@
 # MacOS --- arghh
 .DS_Store
+/test
 
 # meson 
 # subproject directories

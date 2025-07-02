@@ -9,7 +9,8 @@
 #include "bam.h"
 
 extern bool use_fasta;
-uint overhang_threshold = 8;
+uint32_t overhang_threshold = 8;
+using tid_t = uint32_t;
 
 /**
  * Prints g2t tree with nodes sorted by genome coordinate
@@ -23,7 +24,7 @@ void print_tree(g2tTree* g2t) {
     for (auto& interval : intervals) {
         printf("(%u, %u)", interval->start, interval->end);
         for (auto& tid : interval->tids) {
-            printf(" %s ", tid.c_str());
+            printf(" %d ", tid);//tid.c_str());
             printf(" %d ", interval->tid_cum_len[tid]);
         }
         printf("-> ");
@@ -35,7 +36,7 @@ void print_tree(g2tTree* g2t) {
     for (auto& interval : intervals) {
         printf("(%u, %u)", interval->start, interval->end);
         for (auto& tid : interval->tids) {
-            printf(" %s ", tid.c_str());
+            printf(" %d ", tid);//tid.c_str());
             printf(" %d ", interval->tid_cum_len[tid]);
         }
         printf("-> ");
@@ -49,18 +50,19 @@ void print_tree(g2tTree* g2t) {
  * @param bundle current bundle of reads
  * @return complete g2t tree for bundle
  */
-g2tTree* make_g2t_tree(BundleData* bundle) {
+std::unique_ptr<g2tTree> make_g2t_tree(BundleData* bundle) {
     GPVec<GffObj> guides = bundle->guides;
     
     if (guides.Count() == 0) return nullptr;
     
-    g2tTree* g2t = new g2tTree();
-    
+    auto g2t = std::make_unique<g2tTree>();
+
     // Insert all guide exons into the interval tree
     for (int i = 0; i < guides.Count(); i++) {
         GffObj* guide = guides[i];
         char strand = guide->strand;
-        std::string tid = guide->getID();
+        std::string tid_string = guide->getID();
+        tid_t tid = g2t->insert_tid_string(tid_string);
     
         for (int j = 0; j < guide->exons.Count(); j++) {
             uint g_start, g_end;
@@ -113,9 +115,12 @@ std::string extract_sequence(const char* gseq, uint start, uint length, char str
 
 // Function to check backward overhang (left extension)
 bool check_backward_overhang(IntervalNode* interval, uint exon_start, char read_strand, 
-                          std::set<std::string>& exon_tids, g2tTree* g2t, BundleData* bundle) {
+                             //std::set<std::string>& exon_tids, 
+                             std::set<tid_t>& exon_tids, 
+                             g2tTree* g2t, BundleData* bundle) {
     
-    std::set<std::string> tmp_exon_tids;
+    //std::set<std::string> tmp_exon_tids;
+    std::set<tid_t> tmp_exon_tids;
     uint overhang_start;
     uint overhang_length = interval->start - exon_start;
     if (overhang_length > overhang_threshold) return false;      // overhang is too long
@@ -153,19 +158,21 @@ bool check_backward_overhang(IntervalNode* interval, uint exon_start, char read_
             }
         }
     }
-    exon_tids = tmp_exon_tids;
+    std::swap(exon_tids, tmp_exon_tids);
+    //exon_tids = tmp_exon_tids;
     tmp_exon_tids.clear();
     
     // Return true if we found matching transcripts
     return !exon_tids.empty();
 }
 
-std::set<std::string> collapse_intervals(std::vector<IntervalNode*> sorted_intervals, uint exon_start, 
+std::set<tid_t> collapse_intervals(std::vector<IntervalNode*> sorted_intervals, uint exon_start, 
     bool is_first_exon, char read_strand, g2tTree* g2t, BundleData* bundle, 
     bool& used_backwards_overhang, uint& soft_clip, IntervalNode* prev_last_interval) {
     
     // 1. Ensure each read exon is fully covered by a series of adjacent guide exons
-    std::set<std::string> exon_tids;
+    //std::set<std::string> exon_tids;
+    std::set<tid_t> exon_tids;
 
     auto first_interval = sorted_intervals[0];
     uint prev_end = first_interval->end;
@@ -233,9 +240,12 @@ std::set<std::string> collapse_intervals(std::vector<IntervalNode*> sorted_inter
  * @param interval first interval the read matched to
  */
 bool check_forward_overhang(IntervalNode* interval, uint exon_end, char read_strand,
-                         std::set<std::string>& exon_tids, g2tTree* g2t, BundleData* bundle) {
+                            //std::set<std::string>& exon_tids, 
+                            std::set<tid_t>& exon_tids, 
+                            g2tTree* g2t, BundleData* bundle) {
     
-    std::set<std::string> tmp_exon_tids;
+    //std::set<std::string> tmp_exon_tids;
+    std::set<tid_t> tmp_exon_tids;
     uint overhang_start;
     uint overhang_length = exon_end - interval->end;
     if (overhang_length > overhang_threshold) return false;      // overhang is too long
@@ -276,9 +286,10 @@ bool check_forward_overhang(IntervalNode* interval, uint exon_end, char read_str
         }
         
     }
-    
-    exon_tids = tmp_exon_tids;
+    //exon_tids = tmp_exon_tids;
+    std::swap(exon_tids, tmp_exon_tids); 
     tmp_exon_tids.clear();
+
     // Return true if we found matching transcripts
     return !exon_tids.empty();
 }
@@ -293,7 +304,7 @@ bool check_forward_overhang(IntervalNode* interval, uint exon_end, char read_str
  * @param exon_start start of first read exon
  * @param used_backwards_overhang did we match backwards to a previous interval? (use_fasta mode)
  */
-uint get_match_pos(IntervalNode* interval, std::string tid, char read_strand,
+uint get_match_pos(IntervalNode* interval, tid_t tid, char read_strand,
                    g2tTree* g2t, uint exon_start, bool used_backwards_overhang) {
     IntervalNode* first_interval = interval;
 
@@ -316,18 +327,18 @@ uint get_match_pos(IntervalNode* interval, std::string tid, char read_strand,
  * @param read_index index of read in bundle->reads
  */
 void process_read_out(CReadAln* read, BundleData* bundle, g2tTree* g2t, 
-                std::map<std::string, ReadInfo*>& bam_info, uint read_index) {
+                std::map<tid_t, ReadInfo*>& bam_info, uint read_index) {
     
-    std::set<std::tuple<std::string, uint>> matches;
-    std::set<std::tuple<std::string, uint>> tmp_matches;
+    std::set<std::tuple<tid_t, uint>> matches;
+    std::set<std::tuple<tid_t, uint>> tmp_matches;
     
     GVec<GSeg> read_exons = read->segs;
     std::string read_name = read->brec->name();
-    uint read_strand = read->strand;
+    char read_strand = read->strand;
 
-    IntervalNode* first_interval;
-    IntervalNode* last_interval;
-    IntervalNode* prev_last_interval;
+    IntervalNode* first_interval = nullptr;
+    IntervalNode* last_interval = nullptr;
+    IntervalNode* prev_last_interval = nullptr;
     
     uint exon_count = read_exons.Count();
 
@@ -346,12 +357,13 @@ void process_read_out(CReadAln* read, BundleData* bundle, g2tTree* g2t,
         // Find all guide intervals that contain the read exon
         auto sorted_intervals = g2t->getIntervals(exon_start, exon_end, read_strand);
 
+        // No overlap at all
+        if (sorted_intervals.empty()) return;
+
+        // NOTE: This must come *after* the empty check!!
         prev_last_interval = last_interval;
         first_interval = sorted_intervals[0];
         last_interval = sorted_intervals[sorted_intervals.size() - 1];
-
-        // No overlap at all
-        if (sorted_intervals.empty()) return;
 
         bool is_first_exon = (j == 0) ? true : false;
         bool is_last_exon = (j == exon_count - 1) ? true : false;
@@ -420,7 +432,7 @@ void process_read_out(CReadAln* read, BundleData* bundle, g2tTree* g2t,
     read_info->brec = read->brec;
     read_info->read_index = read_index; 
     read_info->read_size = read->len;
-    bam_info[std::to_string(read_index)] = read_info;
+    bam_info[read_index] = read_info;
 
     // Record mate information
     read_info->mate_name = read_name;
@@ -446,19 +458,25 @@ void process_read_out(CReadAln* read, BundleData* bundle, g2tTree* g2t,
  * @param read_size length of read
  * @param mate_size length of mate
  */
-void add_mate_info(const std::set<std::string>& final_transcripts, 
-    const std::set<std::string>& read_transcripts, const std::set<std::string>& mate_transcripts,
-    const std::map<std::string, uint>& read_positions, const std::map<std::string, uint>& mate_positions,
-    std::map<std::string, ReadInfo*>& bam_info, uint read_index, uint mate_index, 
-    uint read_size, uint mate_size) {
+void add_mate_info(
+    const std::set<tid_t>& final_transcripts, 
+    const std::set<tid_t>& read_transcripts, 
+    const std::set<tid_t>& mate_transcripts,
+    const std::map<tid_t, uint>& read_positions, 
+    const std::map<tid_t, uint>& mate_positions,
+    std::map<tid_t, ReadInfo*>& bam_info, 
+    uint read_index, 
+    uint mate_index, 
+    uint read_size, 
+    uint mate_size) {
     
-    for (const std::string& tid : final_transcripts) {
+    for (const tid_t& tid : final_transcripts) {
         bool same_transcript = (read_transcripts.find(tid) != read_transcripts.end() && 
                                 mate_transcripts.find(tid) != mate_transcripts.end());
         
         // Create mate info for current read (only if it maps to this transcript)
         if (read_transcripts.find(tid) != read_transcripts.end()) {
-            auto read_info = bam_info[std::to_string(mate_index)];
+            auto read_info = bam_info[mate_index];
             auto mate_info = new MateInfo();
             mate_info->mate_index = read_index;
             mate_info->mate_size = read_size;
@@ -472,7 +490,7 @@ void add_mate_info(const std::set<std::string>& final_transcripts,
         
         // Create mate info for mate read (only if it maps to this transcript)
         if (mate_transcripts.find(tid) != mate_transcripts.end()) {
-            auto read_info = bam_info[std::to_string(read_index)];
+            auto read_info = bam_info[read_index];
             auto mate_info = new MateInfo();
             mate_info->mate_index = mate_index;
             mate_info->mate_size = mate_size;
@@ -492,11 +510,11 @@ void add_mate_info(const std::set<std::string>& final_transcripts,
  * @param read_info current read information
  * @param final_transcripts tids to keep for this read
  */
-void update_read_matches(ReadInfo* read_info, const std::set<std::string>& final_transcripts) {
-    std::set<std::tuple<std::string, uint>> new_matches;
+void update_read_matches(ReadInfo* read_info, const std::set<tid_t>& final_transcripts) {
+    std::set<std::tuple<tid_t, uint>> new_matches;
     
     for (const auto& match : read_info->matches) {
-        const std::string& tid = std::get<0>(match);
+        const tid_t& tid = std::get<0>(match);
         if (final_transcripts.find(tid) != final_transcripts.end()) {
             new_matches.insert(match);
         }
@@ -512,14 +530,14 @@ void update_read_matches(ReadInfo* read_info, const std::set<std::string>& final
  * @param bam_info read_info for all reads in bundle
  * @param mate_map map between read_id and mate_info
  */
-void process_mate_pairs(BundleData* bundle, std::map<std::string, ReadInfo*>& bam_info) {
+void process_mate_pairs(BundleData* bundle, std::map<tid_t, ReadInfo*>& bam_info) {
     
     GList<CReadAln>& reads = bundle->reads;
     const int MAX_MAPPINGS_PER_READ = 200;
     
     // Pre-compute read transcript sets to avoid repeated extraction
-    std::vector<std::set<std::string>> read_transcript_cache(reads.Count());
-    std::vector<std::map<std::string, uint>> read_position_cache(reads.Count());
+    std::vector<std::set<tid_t>> read_transcript_cache(reads.Count());
+    std::vector<std::map<tid_t, uint>> read_position_cache(reads.Count());
     std::vector<bool> read_valid(reads.Count(), false);
     
     // *^*^*^ *^*^*^ *^*^*^ *^*^*^
@@ -528,7 +546,7 @@ void process_mate_pairs(BundleData* bundle, std::map<std::string, ReadInfo*>& ba
 
     for (int i = 0; i < reads.Count(); i++) {
         
-        auto read_info_it = bam_info.find(std::to_string(i));
+        auto read_info_it = bam_info.find(i);
         if (read_info_it == bam_info.end() || !read_info_it->second->valid_read || !read_info_it->second->is_paired) {
             continue;
         }
@@ -544,7 +562,7 @@ void process_mate_pairs(BundleData* bundle, std::map<std::string, ReadInfo*>& ba
         
         // Cache transcript sets
         for (const auto& match : read_info->matches) {
-            std::string tid = std::get<0>(match);
+            tid_t tid = std::get<0>(match);
             uint pos = std::get<1>(match);
             read_transcript_cache[i].insert(tid);
             read_position_cache[i][tid] = pos;
@@ -556,14 +574,14 @@ void process_mate_pairs(BundleData* bundle, std::map<std::string, ReadInfo*>& ba
     // *^*^*^ *^*^*^ *^*^*^ *^*^*^
 
     // Track processed pairs to avoid duplicates
-    std::set<std::pair<int, int>> processed_pairs;  
+    std::set<std::pair<int32_t, int32_t>> processed_pairs;  
     
     for (int i = 0; i < reads.Count(); i++) {
         if (!read_valid[i]) continue;
         
         CReadAln* read = reads[i];
         std::string read_name = read->brec->name();
-        auto read_info = bam_info[std::to_string(i)];
+        auto read_info = bam_info[i];
         
         // Process all known mate relationships for this read
         for (int j = 0; j < read->pair_idx.Count(); j++) {
@@ -577,7 +595,7 @@ void process_mate_pairs(BundleData* bundle, std::map<std::string, ReadInfo*>& ba
             }
             
             // Avoid processing the same pair twice (both directions)
-            std::pair<int, int> pair_key = std::make_pair(std::min(i, mate_index), std::max(i, mate_index));
+            std::pair<int32_t, int32_t> pair_key = std::make_pair(std::min(i, mate_index), std::max(i, mate_index));
             if (processed_pairs.find(pair_key) != processed_pairs.end()) {
                 continue;
             }
@@ -585,7 +603,7 @@ void process_mate_pairs(BundleData* bundle, std::map<std::string, ReadInfo*>& ba
             
             CReadAln* mate_read = reads[mate_index];
             std::string mate_name = mate_read->brec->name();
-            auto mate_read_info = bam_info[std::to_string(mate_index)];
+            auto mate_read_info = bam_info[mate_index];
 
             uint read_size = read_info->read_size;
             uint mate_size = mate_read_info->read_size;
@@ -597,15 +615,13 @@ void process_mate_pairs(BundleData* bundle, std::map<std::string, ReadInfo*>& ba
             const auto& mate_positions = read_position_cache[mate_index];
 
             // Find common transcripts
-            std::set<std::string> common_transcripts;
-            for (const auto& tid : read_transcripts) {
-                if (mate_transcripts.find(tid) != mate_transcripts.end()) {
-                    common_transcripts.insert(tid);
-                }
-            }
+            std::set<tid_t> common_transcripts;
+            std::set_intersection(read_transcripts.begin(), read_transcripts.end(),
+                                  mate_transcripts.begin(), mate_transcripts.end(),
+                                  std::inserter(common_transcripts, common_transcripts.begin()));
             
             // Apply mate pairing logic with early exit
-            std::set<std::string> final_transcripts;
+            std::set<tid_t> final_transcripts;
 
             // *^*^*^ *^*^*^ *^*^*^ *^*^*^
             // Mate pair cases
@@ -643,25 +659,27 @@ void process_mate_pairs(BundleData* bundle, std::map<std::string, ReadInfo*>& ba
  * @param io BAM reader and writer
  */
 void convert_reads(BundleData* bundle, BamIO* io) {
-    g2tTree* g2t = make_g2t_tree(bundle);
+    std::unique_ptr<g2tTree> g2t = make_g2t_tree(bundle);
     if (g2t == nullptr) return;
     
     GList<CReadAln>& reads = bundle->reads;
-    std::map<std::string, ReadInfo*> bam_info;
+    std::map<tid_t, ReadInfo*> bam_info;
     
     // First pass: process reads
     for (int n = 0; n < reads.Count(); n++) {
-        process_read_out(reads[n], bundle, g2t, bam_info, n);
+        // LOG
+        // std::cerr << "READ: " << *(reads[n]) << "\n";
+        process_read_out(reads[n], bundle, g2t.get(), bam_info, n);
     }
 
     // Second pass: process mate pairs
     process_mate_pairs(bundle, bam_info);
 
     // Third pass: write to BAM
-    write_to_bam(io, bam_info);
+    write_to_bam(io, bam_info, g2t.get());
 
     // Free allocated structures
-    delete g2t;
+    // delete g2t;
     for (const auto& pair : bam_info) {
         auto info = std::get<1>(pair);
         delete info;
