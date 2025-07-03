@@ -1,11 +1,13 @@
 # MacOS --- arghh
 .DS_Store
 /test
+.cache
 
 # meson 
 # subproject directories
-/subprojects/*
 !/subprojects/*.wrap
+!/subprojects/packagefiles/*
+/subprojects/*
 
 # Meson Directories
 meson-logs

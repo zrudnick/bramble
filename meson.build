@@ -2,13 +2,6 @@ project('bramble', 'cpp', default_options : ['cpp_std=c++17'])
 
 cc = meson.get_compiler('cpp')
 
-# Paths to external directories
-# htslib_dir = 'htslib'
-gclib_dir = 'gclib'
-
-# Include directories
-inc_dirs = include_directories('include', gclib_dir)
-
 # Compiler and linker options
 base_flags = [
   '-Wall', '-Wextra', '-fsigned-char',
@@ -32,6 +25,23 @@ curl_dep = dependency('libcurl', required: true)
 libdeflate_dep = dependency('libdeflate', required: true)
 
 libs = [libdeflate_dep, curl_dep, zlib_dep, bz2_dep, lzma_dep, cc.find_library('m', required: false)]
+
+# Paths to external directories
+# htslib_dir = 'htslib'
+gclib_dir = 'gclib'
+htslib_sp = subproject('htslib')
+htslib_inc = htslib_sp.get_variable('htslib_lib')
+gclib_dep = custom_target('gclib_dep',
+  command:['sh', '-c', 'echo "custom dep"'],
+  output: 'gclib.stat',
+  build_by_default: true,
+  depends: htslib_inc
+)
+
+# Include directories
+build_dir = meson.project_build_root()
+htslib_inc = join_paths('.', 'subprojects', 'htslib-1.22', 'install', 'include')
+inc_dirs = include_directories('include', gclib_dir, htslib_inc)
 
 # Add pthread if available
 if not host_machine.system().startswith('windows')
