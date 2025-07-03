@@ -30,19 +30,20 @@ Options:\n\
  -S <file>  : genome sequence file (FASTA format)\n\
 "
 
-FILE* F_OUT=NULL;
 bool VERBOSE = false;				// Verbose, --verbose
 bool LONG_READS = false;				// BAM file contains long reads, --long
 bool FR_STRAND = false;				// Read 1 is on forward strand, --fr
 bool RF_STRAND = false;				// Read 1 is on reverse strand, --fr
-uint8_t N_THREADS = 1;				// Threads, -p
-GStr BAM_PATH_OUT;					// Output BAM path, -o
-GStr GUIDE_GFF; 					// Reference annotation, -G
-GFastaDb* GFASTA = NULL;			// FASTA file, -S
 bool USE_FASTA = false;				// Use FASTA for reducing soft clips
-const char* BAM_FILE_IN;			// Input BAM path
-const char* BAM_FILE_OUT;			// Output BAM path
-const char* OUT_DIR;				// Output folder
+
+FILE* f_out = NULL;					// Default: stdout
+uint8_t n_threads = 1;				// Threads, -p
+GStr bam_path_out;					// Output BAM path, -o
+GStr guide_gff; 					// Reference annotation, -G
+GFastaDb* gfasta = NULL;			// FASTA file, -S
+const char* bam_file_in;			// Input BAM path
+const char* bam_file_out;			// Output BAM path
+const char* out_dir;				// Output folder
 
 #ifndef NOTHREADS
 // Threading: single producer, multiple consumers
@@ -50,25 +51,25 @@ const char* OUT_DIR;				// Output folder
 
 // THREADING_ENABLED defined in bramble.h
 
-GMutex DATA_MUTEX; 					// Manage availability of data records ready to be loaded by main thread
-GVec<int> CLEAR_DATA_POOL; 			// Indices of data bundles cleared for loading by main thread (clear data pool)
-GConditionVar HAVE_BUNDLES; 		// Will notify a thread that a bundle was loaded in the ready queue
+GMutex data_mutex; 					// Manage availability of data records ready to be loaded by main thread
+GVec<int> clear_data_pool; 			// Indices of data bundles cleared for loading by main thread (clear data pool)
+GConditionVar have_bundles; 		// Will notify a thread that a bundle was loaded in the ready queue
                            			// (or that no more bundles are coming)
-char BUNDLE_WORK = 1; 				// Bit 0 set if bundles are still being prepared (BAM file not exhausted yet)
+char bundle_work = 1; 				// Bit 0 set if bundles are still being prepared (BAM file not exhausted yet)
                   					// Bit 1 set if there are Bundles ready in the queue
 
-GMutex WAIT_MUTEX; 					// Controls THREADS_WAITING (idle threads counter)
-uint8_t THREADS_WAITING; 			// Idle worker threads
-GConditionVar HAVE_THREADS; 		// Will notify the bundle loader when a thread
+GMutex wait_mutex; 					// Controls threads_waiting (idle threads counter)
+uint8_t threads_waiting; 			// Idle worker threads
+GConditionVar have_threads; 		// Will notify the bundle loader when a thread
                           			// Is available to process the currently loaded bundle
 
-GConditionVar HAVE_CLEAR; 			// Will notify when bundle buf space available
-GMutex QUEUE_MUTEX; 				// Controls bundle_queue and bundles access
-GFastMutex LOG_MUTEX; 				// Only when verbose - to avoid mangling the log output
-GFastMutex READING_MUTEX;
+GConditionVar have_clear; 			// Will notify when bundle buf space available
+GMutex queue_mutex; 				// Controls bundle_queue and bundles access
+GFastMutex log_mutex; 				// Only when verbose - to avoid mangling the log output
+GFastMutex reading_mutex;
 #endif
 
-bool NO_MORE_BUNDLES = false;
+bool no_more_bundles = false;
 
 // Process input parameters
 void process_options(GArgs& args) {
@@ -114,33 +115,33 @@ void process_options(GArgs& args) {
 	// Number of Threads, -p
 	GStr s = args.getOpt('p');
 	if (!s.is_empty()) {
-		N_THREADS = s.asInt();
-		if (N_THREADS <= 0) N_THREADS = 1;
+		n_threads = s.asInt();
+		if (n_threads <= 0) n_threads = 1;
 	}
 
 	// Reference Annotation, -G
     s = args.getOpt('G');
     if (!s.is_empty()) {
-        GUIDE_GFF = s;
-        if (!fileExists(GUIDE_GFF.chars()) > 1) {
+        guide_gff = s;
+        if (!fileExists(guide_gff.chars()) > 1) {
             GError("Error: reference annotation file (%s) not found.\n",
-                   GUIDE_GFF.chars());
+                   guide_gff.chars());
         }
     }
 
 	// Genome sequence file, -S
 	s = args.getOpt('S');
 	if (!s.is_empty()) {
-		GFASTA = new GFastaDb(s.chars());
+		gfasta = new GFastaDb(s.chars());
 		USE_FASTA = true;
 	}
 
 	// Output path, -o
     s = args.getOpt('o');
     if (!s.is_empty()) {
-        BAM_PATH_OUT = s;
-		BAM_FILE_OUT = BAM_PATH_OUT;
-        GMessage("Output file: %s\n", BAM_FILE_OUT);
+        bam_path_out = s;
+		bam_file_out = bam_path_out;
+        GMessage("Output file: %s\n", bam_file_out);
     } else {
         GMessage("%s\nError: no output file name provided!\n", USAGE);
         exit(1);
@@ -154,7 +155,7 @@ void process_options(GArgs& args) {
 		exit(1);
 	}
 
-	if (GUIDE_GFF == NULL) {
+	if (guide_gff == NULL) {
 		GMessage("%s\nError: no input file provided!\n", USAGE);
 		exit(1);
 	}
@@ -163,43 +164,43 @@ void process_options(GArgs& args) {
 	const char* ifn = NULL;
 	int i = 0;
 	while ((ifn = args.nextNonOpt()) != NULL) {
-		if (i == 0) BAM_FILE_IN = ifn;				// currently only uses first BAM file
+		if (i == 0) bam_file_in = ifn;				// currently only uses first BAM file
 		i++;
 	}
 }
 
 // Check if there are more bundles
 bool has_more_bundles() {
-	if (THREADING_ENABLED) GLockGuard<GFastMutex> lock(READING_MUTEX);
-	return !NO_MORE_BUNDLES;
+	if (THREADING_ENABLED) GLockGuard<GFastMutex> lock(reading_mutex);
+	return !no_more_bundles;
 }
 
 // Wait for threads and set bundle status
 void wait_for_bundles() {
 
 	if (THREADING_ENABLED) {
-		READING_MUTEX.lock();
-		NO_MORE_BUNDLES = true;
-		READING_MUTEX.unlock();
+		reading_mutex.lock();
+		no_more_bundles = true;
+		reading_mutex.unlock();
 
-		QUEUE_MUTEX.lock();
-		BUNDLE_WORK &= ~(int)0x01; // clear bit 0;
-		QUEUE_MUTEX.unlock();
+		queue_mutex.lock();
+		bundle_work &= ~(int)0x01; // clear bit 0;
+		queue_mutex.unlock();
 
 		bool are_threads_waiting = true;
 		while (are_threads_waiting) {
 
-			WAIT_MUTEX.lock();
-			are_threads_waiting = (THREADS_WAITING > 0);
-			WAIT_MUTEX.unlock();
+			wait_mutex.lock();
+			are_threads_waiting = (threads_waiting > 0);
+			wait_mutex.unlock();
 
 			if (are_threads_waiting) {
-				HAVE_BUNDLES.notify_all();
+				have_bundles.notify_all();
 				current_thread::sleep_for(1);
 
-				WAIT_MUTEX.lock();
-				are_threads_waiting = (THREADS_WAITING > 0);
-				WAIT_MUTEX.unlock();
+				wait_mutex.lock();
+				are_threads_waiting = (threads_waiting > 0);
+				wait_mutex.unlock();
 
 				current_thread::sleep_for(1);
 			}
@@ -207,7 +208,7 @@ void wait_for_bundles() {
 	} 
 	
 	else {
-		NO_MORE_BUNDLES = true;
+		no_more_bundles = true;
 	}
 }
 
@@ -215,7 +216,7 @@ void wait_for_bundles() {
 void process_bundle(BundleData* bundle, BamIO* io) {
 
 	if (VERBOSE) {
-		if (THREADING_ENABLED) GLockGuard<GFastMutex> lock(LOG_MUTEX);
+		if (THREADING_ENABLED) GLockGuard<GFastMutex> lock(log_mutex);
 		GMessage(">bundle %s:%d-%d [%lu alignments (%d distinct), %d junctions, %d guides] begins processing...\n",
 				bundle->refseq.chars(), bundle->start, bundle->end, bundle->reads.Count(), bundle->junction.Count(),
 				bundle->guides.Count());
@@ -225,7 +226,7 @@ void process_bundle(BundleData* bundle, BamIO* io) {
 	convert_reads(bundle, io);
 
 	if (VERBOSE) {
-		if (THREADING_ENABLED) GLockGuard<GFastMutex> lock(LOG_MUTEX);
+		if (THREADING_ENABLED) GLockGuard<GFastMutex> lock(log_mutex);
 		GMessage("^bundle %s:%d-%d done (%d processed potential transcripts).\n", bundle->refseq.chars(), bundle->start, bundle->end);
 	}
 
@@ -234,9 +235,9 @@ void process_bundle(BundleData* bundle, BamIO* io) {
 
 // Check that there aren't any threads waiting
 bool no_threads_waiting() {
-	WAIT_MUTEX.lock();
-	int threads = THREADS_WAITING;
-	WAIT_MUTEX.unlock();
+	wait_mutex.lock();
+	int threads = threads_waiting;
+	wait_mutex.unlock();
 	return (threads < 1);
 }
 
@@ -247,62 +248,62 @@ void worker_thread(GThreadData& td) {
 	BamIO* io = args->io;
 
 	// Wait for a ready bundle in the queue
-	QUEUE_MUTEX.lock(); // enter wait-for-notification loop
+	queue_mutex.lock(); // enter wait-for-notification loop
 
-	while (BUNDLE_WORK) {
-		WAIT_MUTEX.lock();
-		THREADS_WAITING++;
-		QUEUE_MUTEX.unlock();
-		WAIT_MUTEX.unlock();
-		HAVE_THREADS.notify_one(); 			// in case main thread is waiting
+	while (bundle_work) {
+		wait_mutex.lock();
+		threads_waiting++;
+		queue_mutex.unlock();
+		wait_mutex.unlock();
+		have_threads.notify_one(); 			// in case main thread is waiting
 		current_thread::yield();
-		QUEUE_MUTEX.lock();
-		while (BUNDLE_WORK && bundle_queue->Count() == 0) {
-			// Unlocks QUEUE_MUTEX and wait until notified
-			// When notified, locks QUEUE_MUTEX and resume
-			HAVE_BUNDLES.wait(QUEUE_MUTEX); 
+		queue_mutex.lock();
+		while (bundle_work && bundle_queue->Count() == 0) {
+			// Unlocks queue_mutex and wait until notified
+			// When notified, locks queue_mutex and resume
+			have_bundles.wait(queue_mutex); 
 		}
 
-		WAIT_MUTEX.lock();
-		if (THREADS_WAITING > 0) THREADS_WAITING--;
-		WAIT_MUTEX.unlock();
+		wait_mutex.lock();
+		if (threads_waiting > 0) threads_waiting--;
+		wait_mutex.unlock();
 
 		BundleData* readyBundle = NULL;
-		if ((BUNDLE_WORK & 0x02) != 0) {
+		if ((bundle_work & 0x02) != 0) {
 			readyBundle = bundle_queue->Pop();
 
 			if (readyBundle != NULL) {
 				if (bundle_queue->Count() == 0)
-				BUNDLE_WORK &= ~(int)0x02; 		// clear bit 1 (queue is empty)
+				bundle_work &= ~(int)0x02; 		// clear bit 1 (queue is empty)
 			
-				QUEUE_MUTEX.unlock();
+				queue_mutex.unlock();
 				process_bundle(readyBundle, io);
 
-				DATA_MUTEX.lock();
-				CLEAR_DATA_POOL.Push(readyBundle->idx);
-				DATA_MUTEX.unlock();
+				data_mutex.lock();
+				clear_data_pool.Push(readyBundle->idx);
+				data_mutex.unlock();
 				
-				HAVE_CLEAR.notify_one(); 		// inform main thread
+				have_clear.notify_one(); 		// inform main thread
 				current_thread::yield();
 				
-				QUEUE_MUTEX.lock();
+				queue_mutex.lock();
 			}
 		}
 	}
-	QUEUE_MUTEX.unlock();
+	queue_mutex.unlock();
 }
 
 // Prepare the next available bundle slot for loading
 int wait_for_data(BundleData* bundles) {
 	int idx = -1;
 
-	DATA_MUTEX.lock();
-	while (CLEAR_DATA_POOL.Count() == 0) {
-		HAVE_CLEAR.wait(DATA_MUTEX);
+	data_mutex.lock();
+	while (clear_data_pool.Count() == 0) {
+		have_clear.wait(data_mutex);
 	}
-	idx = CLEAR_DATA_POOL.Pop();
+	idx = clear_data_pool.Pop();
 	if (idx >= 0) bundles[idx].status = BundleStatus::BUNDLE_STATUS_LOADING;
-	DATA_MUTEX.unlock();
+	data_mutex.unlock();
 
 	return idx;
 }
@@ -406,8 +407,8 @@ int main(int argc, char* argv[]) {
 	if (VERBOSE) GMessage(" Loading reference annotation (guides)..\n");
 	
 	// Open GFF/GTF file
-	FILE* f = fopen(GUIDE_GFF.chars(), "r");
-	if (f == NULL) GError("Error: could not open reference annotation file (%s)!\n", GUIDE_GFF.chars());
+	FILE* f = fopen(guide_gff.chars(), "r");
+	if (f == NULL) GError("Error: could not open reference annotation file (%s)!\n", guide_gff.chars());
 
 	// GffReader: transcripts only, sort by location
 	GffReader gffreader(f, true, true);           // loading only recognizable transcript features
@@ -420,7 +421,7 @@ int main(int argc, char* argv[]) {
 	
 	int n_refguides = gffreader.gseqtable.Count();
 	if (n_refguides == 0 || gffreader.gflst.Count() == 0) {
-		GError("Error: could not any valid reference transcripts in %s (invalid GTF/GFF file?)\n", GUIDE_GFF.chars());
+		GError("Error: could not any valid reference transcripts in %s (invalid GTF/GFF file?)\n", guide_gff.chars());
 	}
 
 	GVec<GRefData> refguides;           // vector with guides for each chromosome
@@ -471,7 +472,7 @@ int main(int argc, char* argv[]) {
 	GffNames* guide_seq_names = GffObj::names; 		// might have been populated already by gff data
 	gffnames_ref(guide_seq_names);  		// initialize the names collection if not guided
 
-	fprintf(header_file, "@CO\tGenerated from GTF: %s\n", GUIDE_GFF.chars());
+	fprintf(header_file, "@CO\tGenerated from GTF: %s\n", guide_gff.chars());
     fclose(header_file);
 
 	if (VERBOSE) {
@@ -483,7 +484,7 @@ int main(int argc, char* argv[]) {
 	// Start BAM IO
 	// ^**^^^*^**^^^*^**^^^*^**^^^*
 
-	BamIO* io = new BamIO(BAM_FILE_IN, BAM_FILE_OUT, header_path);
+	BamIO* io = new BamIO(bam_file_in, bam_file_out, header_path);
 	io->start();
 
 	// *.** Bundle reads into overlapping groups
@@ -515,21 +516,21 @@ int main(int argc, char* argv[]) {
 	}
 	#endif
 
-	GThread* threads = new GThread[N_THREADS]; 							// threads for processing bundles
+	GThread* threads = new GThread[n_threads]; 							// threads for processing bundles
 	GPVec<BundleData>* bundle_queue = new GPVec<BundleData>(false); 	// queue for holding loaded bundles
-	BundleData* bundles = new BundleData[N_THREADS + 1]; 				// redef with more bundles
+	BundleData* bundles = new BundleData[n_threads + 1]; 				// redef with more bundles
 
-	CLEAR_DATA_POOL.setCapacity(N_THREADS + 1);
+	clear_data_pool.setCapacity(n_threads + 1);
 
 	WorkerArgs* worker_args = new WorkerArgs(bundle_queue, io);
 
 	// Start worker threads
-	for (int b = 0; b < N_THREADS; b++) {
+	for (int b = 0; b < n_threads; b++) {
 		threads[b].kickStart(worker_thread, (void*) worker_args, def_stack_size);
 		bundles[b+1].idx = b + 1;
-		CLEAR_DATA_POOL.Push(b);
+		clear_data_pool.Push(b);
 	}
-	BundleData* bundle = &(bundles[N_THREADS]);
+	BundleData* bundle = &(bundles[n_threads]);
 
 	
 #else // !THREADING_ENABLED
@@ -634,7 +635,7 @@ int main(int argc, char* argv[]) {
 				// For -S option: load genome FASTA
 				if (USE_FASTA) {
 					const char* chr_name = bundle->refseq.chars();
-					GFaSeqGet* fasta_seq = GFASTA->fetch(chr_name);
+					GFaSeqGet* fasta_seq = gfasta->fetch(chr_name);
 					
 					// Try alternative naming convention
 					if (fasta_seq == NULL) {
@@ -646,7 +647,7 @@ int main(int argc, char* argv[]) {
 							alt_chr_name = "chr";
 							alt_chr_name.append(chr_name); // add "chr" prefix
 						}
-						fasta_seq = GFASTA->fetch(alt_chr_name.chars());
+						fasta_seq = gfasta->fetch(alt_chr_name.chars());
 					}
 					
 					if (fasta_seq == NULL) {
@@ -662,29 +663,29 @@ int main(int argc, char* argv[]) {
 				// Push this in the bundle queue where it'll be picked up by the threads	
 				int queue_count = 0;
 
-				QUEUE_MUTEX.lock();
+				queue_mutex.lock();
 				bundle_queue->Push(bundle);
-				BUNDLE_WORK |= 0x02; // set bit 1 to 1
+				bundle_work |= 0x02; // set bit 1 to 1
 				queue_count = bundle_queue->Count();
-				QUEUE_MUTEX.unlock();
+				queue_mutex.unlock();
 				
-				WAIT_MUTEX.lock();
-				while (THREADS_WAITING == 0) {
-					HAVE_THREADS.wait(WAIT_MUTEX);
+				wait_mutex.lock();
+				while (threads_waiting == 0) {
+					have_threads.wait(wait_mutex);
 				}
-				WAIT_MUTEX.unlock();
-				HAVE_BUNDLES.notify_one();
+				wait_mutex.unlock();
+				have_bundles.notify_one();
 				
 				current_thread::yield();
 
-				QUEUE_MUTEX.lock();
+				queue_mutex.lock();
 				while (bundle_queue->Count()==queue_count) {
-					QUEUE_MUTEX.unlock();
-					HAVE_BUNDLES.notify_one();
+					queue_mutex.unlock();
+					have_bundles.notify_one();
 					current_thread::yield();
-					QUEUE_MUTEX.lock();
+					queue_mutex.lock();
 				}
-				QUEUE_MUTEX.unlock();
+				queue_mutex.unlock();
 				
 				
 #else // !THREADING_ENABLED
@@ -696,13 +697,13 @@ int main(int argc, char* argv[]) {
 
 			// Clear bundle (no more alignments)
 			else { 
-				if (THREADING_ENABLED) DATA_MUTEX.lock();
+				if (THREADING_ENABLED) data_mutex.lock();
 
 				bundle->Clear();
 
 				if (THREADING_ENABLED) {
-					CLEAR_DATA_POOL.Push(bundle->idx);
-					DATA_MUTEX.unlock();
+					clear_data_pool.Push(bundle->idx);
+					data_mutex.unlock();
 				}
 			} 
 
@@ -852,7 +853,7 @@ int main(int argc, char* argv[]) {
 
 	// Delete thread and bundle arrays
 	if (THREADING_ENABLED) {
-		for (int t = 0; t < N_THREADS; t++) threads[t].join();
+		for (int t = 0; t < n_threads; t++) threads[t].join();
 		if (VERBOSE) {
 			GMessage(" All threads finished.\n");
 		}
@@ -864,12 +865,12 @@ int main(int argc, char* argv[]) {
 	io->stop(); 		// close BAM reader & writer
 	delete io;
 	delete worker_args;
-	delete GFASTA;
+	delete gfasta;
 
-	F_OUT = stdout;
-	fprintf(F_OUT, "# ");
-	args.printCmdLine(F_OUT);
-	fprintf(F_OUT,"# Bramble version %s\n", VERSION);
+	f_out = stdout;
+	fprintf(f_out, "# ");
+	args.printCmdLine(f_out);
+	fprintf(f_out,"# Bramble version %s\n", VERSION);
 
 	gffnames_unref(guide_seq_names); 	// deallocate names collection
 }
