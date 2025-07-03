@@ -129,146 +129,6 @@ char* sprint_time() {
 	return(sbuf);
 }
 
-// Process input parameters
-void process_options(GArgs& args) {
-	// Help
-	if (args.getOpt('h') || args.getOpt("help")) {
-		fprintf(stdout,"%s",USAGE);
-		exit(0);
-	}
-
-	// Version
-	if (args.getOpt("version")) {
-	fprintf(stdout,"%s\n",VERSION);
-	exit(0);
-	}
-
-	// FR (Forward-Reverse)
-	// First read is on forward strand, second read is on reverse strand
-	if (args.getOpt("fr")) fr_strand=true;
-
-	// RF (Reverse-Forward)
-	// First read is on reverse strand, second read is on forward strand
-	if (args.getOpt("rf")) {
-		rf_strand=true;
-		if(fr_strand) GError("Error: --fr and --rf options are incompatible.\n");
-	}
-
-	// Debug Mode
-	debugMode=(args.getOpt("debug")!=NULL || args.getOpt('D')!=NULL);
-
-	// Verbose
-	verbose=(args.getOpt('v')!=NULL);
-	if (verbose) {
-		fprintf(stderr, "Running StringTie " VERSION ". Command line:\n");
-		args.printCmdLine(stderr);
-	}
-
-	GStr s;
-
-	// Number of Threads, -p
-	s=args.getOpt('p');
-	if (!s.is_empty()) {
-		num_cpus=s.asInt();
-		if (num_cpus<=0) num_cpus=1;
-	}
-
-	// Bundle Distance, -g
-	s=args.getOpt('g');
-	if (!s.is_empty()) {
-		bundledist=s.asInt();
-		if (bundledist>runoffdist) runoffdist = bundledist;
-	}
-
-	// Reference Annotation
-	if (args.getOpt('G')) {
-	guide_gff=args.getOpt('G');
-	if (!fileExists(guide_gff.chars())>1) 
-	    GError("Error: reference annotation file (%s) not found.\n",
-				guide_gff.chars());
-	}
-
-	s = args.getOpt('S');
-	if (!s.is_empty()) {
-		gfasta = new GFastaDb(s.chars());
-		use_fasta = true;
-	}
-
-    s=args.getOpt('C');
-    if (!s.is_empty()) {
-        c_out=fopen(s.chars(), "w");
-        if (c_out==NULL) GError("Error creating output file %s\n", s.chars());
-    }
-
-	// Long Reads
-	longreads=(args.getOpt('L')!=NULL);
-	if (longreads) bundledist = 0;
-
-	int numbam=args.startNonOpt();
-
-	if (numbam < 1) {
-		GMessage("%s\nError: no input file provided!\n",USAGE);
-		exit(1);
-	}
-
-	if (guide_gff == NULL) {
-		GMessage("%s\nError: no input file provided!\n",USAGE);
-		exit(1);
-	}
-
-	char* ifn=NULL;
-	int i = 0;
-	while ( (ifn=args.nextNonOpt())!=NULL) {
-		//input alignment files
-		if (i == 0) bam_file_in = ifn;
-	}
-
-	// Create output path
-
-	// Output path, -o
-	tmp_fname = args.getOpt('o');
-	bam_file_out = tmp_fname;
-	GMessage("Output file: %s\n", bam_file_out);
-
-	if (bam_file_out == NULL) {
-		GMessage("%s\nError: no output file name provided!\n",USAGE);
-		exit(1);
-	}
-	
-	// outfname="stdout";
-	// out_dir="./";
-	// if (!tmp_fname.is_empty() && tmp_fname!="-") {
-	// 	if (tmp_fname[0]=='.' && tmp_fname[1]=='/')
-	// 		tmp_fname.cut(0,2);
-	// 	outfname=tmp_fname;
-	// 	int pidx=outfname.rindex('/');
-	// 	if (pidx>=0) {//path given
-	// 		out_dir=outfname.substr(0,pidx+1);
-	// 		tmp_fname=outfname.substr(pidx+1);
-	// 	}
-	// }
-	// else { // stdout
-	// 	tmp_fname=outfname;
-	// 	char *stime=sprint_time();
-	// 	tmp_fname.tr(":","-");
-	// 	tmp_fname+='.';
-	// 	tmp_fname+=stime;
-	// }
-	// if (out_dir!="./") {
-	// 	if (fileExists(out_dir.chars())==0) {
-	// 		//directory does not exist, create it
-	// 		if (Gmkdir(out_dir.chars()) && !fileExists(out_dir.chars())) {
-	// 			GError("Error: cannot create directory %s!\n", out_dir.chars());
-	// 		}
-	// 	}
-	// }
- 
-	// if(outfname != "stdout") {
-	// 	GStr bam_file_out = outfname;
-	// 	if (bam_file_out==NULL) GError("Error creating output file %s\n", bam_file_out.chars());
-	// }
-}
-
 // Check if there are more bundles
 bool has_more_bundles() {
 	if (THREADING_ENABLED) GLockGuard<GFastMutex> lock(bam_reading_mutex);
@@ -522,7 +382,7 @@ int main(int argc, char* argv[]) {
   quill::Logger* logger = quill::Frontend::create_or_get_logger(
     "root", quill::Frontend::create_or_get_sink<quill::ConsoleSink>("sink_id_1"));
 
-
+	// Process arguments
  /*
  --fr : assume stranded library fw-firststrand\n\
  --rf : assume stranded library fw-secondstrand\n\
@@ -537,19 +397,8 @@ int main(int argc, char* argv[]) {
  -u no multi-mapping correction (default: correction enabled)\n\
  -h print this usage message and exit\n\
  */
-
-
-	// Process arguments
-	/*
-	GArgs args(argc, argv,
-   	"debug;help;version;mix;ref=;cram-ref=cds=;keeptmp;rseq=;ptf=;bam;fr;rf;merge;"
-   	"exclude=zihvteuLRx:n:j:s:D:G:C:S:l:m:o:a:j:c:f:p:g:P:M:Bb:A:E:F:T:");
- 	args.printError(USAGE, true);
- 	process_options(args);
- 	*/
-
-	
 	CLI::App app{"A program to project spliced genomic alignments onto the transcriptome", "Bramble"};
+
 	std::string gff;
 	std::string bam_file;
 	std::string input_bam;
