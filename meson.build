@@ -16,7 +16,7 @@ endif
 add_project_arguments(base_flags, language: 'cpp')
 
 # External static libraries
-htslib_dep = dependency('htslib', fallback: ['htslib', 'htslib_dep'])
+htslib_dep = dependency('', fallback: ['htslib', 'htslib_dep'])
 quill_dep = dependency('quill', fallback: ['quill', 'quill_dep'])
 zlib_dep = dependency('zlib', fallback: ['zlib', 'zlib_dep'])
 bz2_dep = dependency('bzip2', fallback: ['bzip2', 'bzip2_dep'])
@@ -29,11 +29,11 @@ libs = [libdeflate_dep, curl_dep, zlib_dep, bz2_dep, lzma_dep, cc.find_library('
 # Paths to external directories
 # htslib_dir = 'htslib'
 gclib_dir = 'gclib'
-htslib_sp = subproject('htslib')
-htslib_inc = htslib_sp.get_variable('htslib_inc')
-htslib_lib = htslib_sp.get_variable('htslib_lib')
+#htslib_sp = subproject('htslib')
+htslib_inc = subproject('htslib').get_variable('htslib_inc')
+htslib_lib = subproject('htslib').get_variable('htslib_lib')
 gclib_dep = declare_dependency(
-  include_directories: [gclib_dir, htslib_inc],
+  include_directories: gclib_dir,
   dependencies: [htslib_dep]
 )
 

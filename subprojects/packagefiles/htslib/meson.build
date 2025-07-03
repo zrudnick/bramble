@@ -1,6 +1,7 @@
 project('htslib', 'c')
 
 # Get absolute paths
+source_dir = meson.current_source_dir()
 build_dir = meson.current_build_dir()
 install_dir = join_paths(build_dir, 'install')
 include_dir = join_paths(install_dir, 'include')
@@ -10,94 +11,86 @@ lib_dir = join_paths(install_dir, 'lib')
 run_command('mkdir', '-p', include_dir, check: true)
 run_command('mkdir', '-p', lib_dir, check: true)
 
-## All-in-one target that does configure, build, and install
-#htslib_build_and_install = custom_target('htslib-build-and-install',
-#    command: [
-#        'sh', '-c', '''
-#        cd @CURRENT_SOURCE_DIR@/../htslib-1.22 && 
-#        echo "=== Configuring ===" &&
-#        ./configure --prefix="''' + install_dir + '''" --disable-gcs --disable-s3 &&
-#        echo "=== Building ===" &&
-#        make -j8 &&
-#        echo "=== Installing ===" &&
-#        make install &&
-#        echo "=== Checking installation ===" &&
-#        ls -la "''' + install_dir + '''/lib/" &&
-#        ls -la "''' + install_dir + '''/include/" &&
-#        echo "=== Copying library ===" &&
-#        cp "''' + install_dir + '''/lib/libhts.a" "''' + install_dir + '''/../libhts.a"
-#        '''
-#    ],
-#    output: 'libhts.a',
-#    build_by_default: true,
-#    console: true,
-#)
+# Get source files to track --- uglyyy
+source_files = files([
+    '../htslib-1.22/configure',
+    '../htslib-1.22/configure.ac',
+    '../htslib-1.22/version.sh',
+])
+
+# Get all C source files (this will make rebuilds more accurate)
+c_source_files = run_command('find', source_dir + '/../htslib-1.22', '-name', '*.c', '-o', '-name', '*.h', '-i', '-name', '*.in', check: false)
+if c_source_files.returncode() == 0
+    # Add the source files if find command succeeded
+    source_files += files(c_source_files.stdout().strip().split('\n'))
+endif
 
 # Step 1: Configure htslib
 htslib_configure = custom_target('htslib-configure',
+    input: source_files,  # Use all source files
     command: [
         'sh', '-c', '''
-        cd @CURRENT_SOURCE_DIR@ && 
+        cd ''' + source_dir + '''/../htslib-1.22 &&
+        echo "=== CONFIGURE DEBUG INFO ===" &&
         echo "Configuring in: $(pwd)" &&
         echo "Install prefix will be: ''' + install_dir + '''" &&
-        ./configure --prefix="''' + install_dir + '''" --disable-shared --enable-static --disable-gcs --disable-s3 &&
-        touch configure.done
+        echo "Output file will be: ''' + build_dir + '''/configure.done" &&
+        echo "Checking if configure.done exists: $(ls -la ''' + build_dir + '''/configure.done 2>/dev/null || echo 'NOT FOUND')" &&
+        echo "Checking if configure script exists: $(ls -la configure 2>/dev/null || echo 'NOT FOUND')" &&
+        echo "==============================" &&
+        
+        # Only configure if config.status doesn't exist or is older than configure
+        if [ ! -f config.status ] || [ configure -nt config.status ]; then
+            echo "Running configure..."
+            ./configure --prefix="''' + install_dir + '''" --disable-shared --enable-static --disable-gcs --disable-s3
+        else
+            echo "Configure is up to date, skipping..."
+        fi
+        
+        # Create our stamp file with a checksum of key files
+        echo "$(stat -c %Y configure 2>/dev/null || stat -f %m configure)" > "''' + build_dir + '''/configure.done"
+        echo "Created stamp file: ''' + build_dir + '''/configure.done"
         '''
     ],
     output: 'configure.done',
-    build_by_default: true,
     console: true,
 )
 
-# Step 2: Build htslib
+# Step 2: Build htslib  
 htslib_make = custom_target('htslib-make',
+    input: [htslib_configure],  # Depends on configure step
     command: [
         'sh', '-c', '''
-        cd @CURRENT_SOURCE_DIR@ && 
-        echo "Building in: $(pwd)" &&
+        cd ''' + source_dir + '''/../htslib-1.22 && 
         make -j8 && 
-        touch make.done
+        touch "''' + build_dir + '''/make.done"
         '''
     ],
-    depends: htslib_configure,
     output: 'make.done',
-    build_by_default: true,
     console: true,
 )
 
 # Step 3: Install htslib
 htslib_install = custom_target('htslib-install',
+    input: [htslib_make],  # Depends on make step
     command: [
         'sh', '-c', '''
-        cd @CURRENT_SOURCE_DIR@/../htslib-1.22 && 
-        echo "Installing from: $(pwd)" &&
-        echo "Install directory should be: ''' + install_dir + '''" &&
+        cd ''' + source_dir + '''/../htslib-1.22 && 
         make install &&
-        echo "Contents of install directory:" &&
-        ls -la "''' + install_dir + '''" || echo "Install directory not found!" &&
-        ls -la "''' + install_dir + '''/lib" || echo "Lib directory not found!" &&
-        ls -la "''' + install_dir + '''/include" || echo "Include directory not found!" &&
-        touch install.done
+        touch "''' + build_dir + '''/install.done"
         '''
     ],
-    depends: htslib_make,
     output: 'install.done',
-    build_by_default: true,
     console: true,
 )
 
-# Step 4: Create the actual library artifact that Meson can link against
+# Step 4: Create the library artifact
 htslib_lib = custom_target('htslib-lib',
+    input: [htslib_install],  # Depends on install step
     command: [
-        'sh', '-c', '''
-        echo "Looking for library at: ''' + install_dir + '''/lib/libhts.a" &&
-        ls -la "''' + install_dir + '''/lib/" &&
-        cp "''' + install_dir + '''/lib/libhts.a" @OUTPUT@
-        '''
+        'cp', join_paths(install_dir, 'lib', 'libhts.a'), '@OUTPUT@'
     ],
-    depends: htslib_install,
     output: 'libhts.a',
-    build_by_default: true,
     console: true,
 )
 
@@ -110,6 +103,3 @@ htslib_dep = declare_dependency(
 
 # This is what makes it available to `get_variable()`
 meson.override_dependency('htslib', htslib_dep)
-htslib_lib = htslib_lib
-htslib_inc = include_directories(join_paths('install', 'include'))
-
