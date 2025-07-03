@@ -40,7 +40,7 @@ gclib_dep = declare_dependency(
 gclib_target = custom_target(
   'gclib-target',
   output: 'gclib.stat',
-  command: ['sh', '-c', 'touch @OUTPUT@'],
+  command: ['sh', '-c', 'touch gclib.stat'],
   depends: htslib_lib
 )
 

@@ -40,7 +40,8 @@ htslib_configure = custom_target('htslib-configure',
         cd @CURRENT_SOURCE_DIR@ && 
         echo "Configuring in: $(pwd)" &&
         echo "Install prefix will be: ''' + install_dir + '''" &&
-        ./configure --prefix="''' + install_dir + '''" --disable-shared --enable-static --disable-gcs --disable-s3
+        ./configure --prefix="''' + install_dir + '''" --disable-shared --enable-static --disable-gcs --disable-s3 &&
+        touch configure.done
         '''
     ],
     output: 'configure.done',

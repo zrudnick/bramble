@@ -8,7 +8,7 @@
 #include "bam.h"
 #include "bramble.h"
 
-extern bool use_fasta;
+extern bool USE_FASTA;
 uint32_t overhang_threshold = 8;
 using tid_t = uint32_t;
 
@@ -221,7 +221,7 @@ std::set<tid_t> collapse_intervals(std::vector<IntervalNode *> sorted_intervals,
     exon_tids.insert(first_interval->tids.begin(), first_interval->tids.end());
 
     // Use input FASTA (-S) to check for previous transcript exons to map to
-  } else if (use_fasta) {
+  } else if (USE_FASTA) {
     // Copy TIDs
     exon_tids.insert(first_interval->tids.begin(), first_interval->tids.end());
     used_backwards_overhang = check_backward_overhang(
@@ -266,7 +266,7 @@ std::set<tid_t> collapse_intervals(std::vector<IntervalNode *> sorted_intervals,
 }
 
 /**
- * Check if we can match forwards to another interval (use_fasta mode)
+ * Check if we can match forwards to another interval (USE_FASTA mode)
  *
  * @param interval first interval the read matched to
  */
@@ -339,7 +339,7 @@ bool check_forward_overhang(IntervalNode *interval, uint exon_end,
  * @param g2t g2t tree for bundle
  * @param exon_start start of first read exon
  * @param used_backwards_overhang did we match backwards to a previous interval?
- * (use_fasta mode)
+ * (USE_FASTA mode)
  */
 uint get_match_pos(IntervalNode *interval, tid_t tid, char read_strand,
                    g2tTree *g2t, uint exon_start,
@@ -423,8 +423,8 @@ void process_read_out(BundleData *&bundle, uint32_t read_index, g2tTree *g2t,
         sorted_intervals, exon_start, is_first_exon, read_strand, g2t, bundle,
         used_backwards_overhang, soft_clip_front, prev_last_interval);
 
-    // Exon extends beyond guide interval (use_fasta mode)
-    if (use_fasta && (is_last_exon) && (last_interval->end < exon_end)) {
+    // Exon extends beyond guide interval (USE_FASTA mode)
+    if (USE_FASTA && (is_last_exon) && (last_interval->end < exon_end)) {
       // Update valid transcripts to only those with matching extensions
       if (!check_forward_overhang(last_interval, exon_end, read_strand,
                                   exon_tids, g2t, bundle))
