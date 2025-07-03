@@ -110,3 +110,5 @@ htslib_dep = declare_dependency(
 # This is what makes it available to `get_variable()`
 meson.override_dependency('htslib', htslib_dep)
 htslib_lib = htslib_build_and_install
+htslib_inc = include_directories(join_paths('install', 'include'))
+

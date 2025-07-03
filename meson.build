@@ -30,18 +30,22 @@ libs = [libdeflate_dep, curl_dep, zlib_dep, bz2_dep, lzma_dep, cc.find_library('
 # htslib_dir = 'htslib'
 gclib_dir = 'gclib'
 htslib_sp = subproject('htslib')
-htslib_inc = htslib_sp.get_variable('htslib_lib')
-gclib_dep = custom_target('gclib_dep',
-  command:['sh', '-c', 'echo "custom dep"'],
+htslib_inc = htslib_sp.get_variable('htslib_inc')
+htslib_lib = htslib_sp.get_variable('htslib_lib')
+gclib_dep = declare_dependency(
+  include_directories: [gclib_dir, htslib_inc],
+  dependencies: [htslib_dep]
+)
+
+gclib_target = custom_target(
+  'gclib-target',
   output: 'gclib.stat',
-  build_by_default: true,
-  depends: htslib_inc
+  command: ['sh', '-c', 'touch @OUTPUT@'],
+  depends: htslib_lib
 )
 
 # Include directories
-build_dir = meson.project_build_root()
-htslib_inc = join_paths('.', 'subprojects', 'htslib-1.22', 'install', 'include')
-inc_dirs = include_directories('include', gclib_dir, htslib_inc)
+inc_dirs = [htslib_inc] + include_directories('include', gclib_dir)
 
 # Add pthread if available
 if not host_machine.system().startswith('windows')
@@ -89,8 +93,7 @@ if get_option('static_cpp')
 endif
 
 
-executable('bramble', gclib_srcs + main_srcs,
+executable('bramble', gclib_srcs + main_srcs + gclib_target,
   include_directories: inc_dirs,
-  dependencies: [htslib_dep, quill_dep] + libs
+  dependencies: [htslib_dep, quill_dep, gclib_dep] + libs,
 )
-
