@@ -8,8 +8,9 @@
 #include "bramble.h"
 #include "bam.h"
 
-extern bool use_fasta;
-uint overhang_threshold = 8;
+extern bool USE_FASTA;
+const uint8_t overhang_threshold = 8;
+const uint8_t max_mappings_per_read = 1000;
 
 /**
  * Prints g2t tree with nodes sorted by genome coordinate
@@ -64,7 +65,7 @@ g2tTree* make_g2t_tree(BundleData* bundle) {
     
         for (int j = 0; j < guide->exons.Count(); j++) {
             uint g_start, g_end;
-            if (strand == '+' || strand == 1) {
+            if (strand == '+') {
                 g_start = guide->exons[j]->start - bundle->start;
                 g_end = guide->exons[j]->end - bundle->start; 
             } else {
@@ -105,7 +106,7 @@ std::string extract_sequence(const char* gseq, uint start, uint length, char str
     
     // Get substring (or reverse complement)
     std::string seq(gseq + start, length);
-    if (strand == '-' || strand == -1) {
+    if (strand == '-') {
         seq = reverse_complement(seq);
     }
     return seq;
@@ -120,7 +121,7 @@ bool check_backward_overhang(IntervalNode* interval, uint exon_start, char read_
     uint overhang_length = interval->start - exon_start;
     if (overhang_length > overhang_threshold) return false;      // overhang is too long
     
-    if (read_strand == '+' || read_strand == 1) {
+    if (read_strand == '+') {
         overhang_start = exon_start;
     } else {
         uint relative_end = bundle->end - bundle->start;
@@ -140,7 +141,7 @@ bool check_backward_overhang(IntervalNode* interval, uint exon_start, char read_
             uint check_length = std::min(overhang_length, prev_interval->end - prev_interval->start);
             uint prev_overhang_start;
             
-            if (read_strand == '+' || read_strand == 1) {
+            if (read_strand == '+') {
                 prev_overhang_start = prev_interval->end - check_length;
             } else {
                 prev_overhang_start = bundle->end - prev_interval->end - bundle->start;
@@ -161,7 +162,7 @@ bool check_backward_overhang(IntervalNode* interval, uint exon_start, char read_
 }
 
 std::set<std::string> collapse_intervals(std::vector<IntervalNode*> sorted_intervals, uint exon_start, 
-    bool is_first_exon, char read_strand, g2tTree* g2t, BundleData* bundle, 
+    bool is_first_exon, bool is_last_exon, char read_strand, g2tTree* g2t, BundleData* bundle, 
     bool& used_backwards_overhang, uint& soft_clip, IntervalNode* prev_last_interval) {
     
     // 1. Ensure each read exon is fully covered by a series of adjacent guide exons
@@ -170,7 +171,10 @@ std::set<std::string> collapse_intervals(std::vector<IntervalNode*> sorted_inter
     auto first_interval = sorted_intervals[0];
     uint prev_end = first_interval->end;
 
+    // **^**^**^**^**^**^**^
     // Process first interval
+    // **^**^**^**^**^**^**^
+
     if (!is_first_exon) {
         // Copy TIDs from interval 
         // --> skip any with exons between current and previous interval
@@ -186,7 +190,7 @@ std::set<std::string> collapse_intervals(std::vector<IntervalNode*> sorted_inter
         exon_tids.insert(first_interval->tids.begin(), first_interval->tids.end());
 
     // Use input FASTA (-S) to check for previous transcript exons to map to
-    } else if (use_fasta) {
+    } else if (USE_FASTA) {
         // Copy TIDs
         exon_tids.insert(first_interval->tids.begin(), first_interval->tids.end());
         used_backwards_overhang = check_backward_overhang(first_interval, exon_start, read_strand, exon_tids, g2t, bundle);
@@ -200,8 +204,11 @@ std::set<std::string> collapse_intervals(std::vector<IntervalNode*> sorted_inter
         return {};
     }      
     
+    // **^**^**^**^**^**^**^
+    // Process next intervals
+    // **^**^**^**^**^**^**^
 
-    // Following intervals: just check for TIDs, remove any we don't see
+    // Following intervals: check for TIDs, remove any we don't see
     for (size_t i = 1; i < sorted_intervals.size(); ++i) {
         const auto& interval = sorted_intervals[i];
         
@@ -228,7 +235,7 @@ std::set<std::string> collapse_intervals(std::vector<IntervalNode*> sorted_inter
 }
 
 /**
- * Check if we can match forwards to another interval (use_fasta mode)
+ * Check if we can match forwards to another interval (USE_FASTA mode)
  * 
  * @param interval first interval the read matched to
  */
@@ -240,7 +247,7 @@ bool check_forward_overhang(IntervalNode* interval, uint exon_end, char read_str
     uint overhang_length = exon_end - interval->end;
     if (overhang_length > overhang_threshold) return false;      // overhang is too long
 
-    if (read_strand == '+' || read_strand == 1) {
+    if (read_strand == '+') {
         overhang_start = interval->end;
     } else {
         uint relative_end = bundle->end - bundle->start;
@@ -262,7 +269,7 @@ bool check_forward_overhang(IntervalNode* interval, uint exon_end, char read_str
             uint check_length = std::min(overhang_length, next_interval->end - next_interval->start);
             uint next_overhang_start;
             
-            if (read_strand == '+' || read_strand == 1) {
+            if (read_strand == '+') {
                 next_overhang_start = next_interval->start;
             } else {
                 next_overhang_start = bundle->end - next_interval->start - check_length - bundle->start;
@@ -291,7 +298,7 @@ bool check_forward_overhang(IntervalNode* interval, uint exon_end, char read_str
  * @param read_strand strand that the read aligned to
  * @param g2t g2t tree for bundle
  * @param exon_start start of first read exon
- * @param used_backwards_overhang did we match backwards to a previous interval? (use_fasta mode)
+ * @param used_backwards_overhang did we match backwards to a previous interval? (USE_FASTA mode)
  */
 uint get_match_pos(IntervalNode* interval, std::string tid, char read_strand,
                    g2tTree* g2t, uint exon_start, bool used_backwards_overhang) {
@@ -316,7 +323,7 @@ uint get_match_pos(IntervalNode* interval, std::string tid, char read_strand,
  * @param read_index index of read in bundle->reads
  */
 void process_read_out(BundleData*& bundle, uint read_index, g2tTree* g2t, 
-    std::map<std::string, ReadInfo*>& bam_info, std::vector<uint32_t> group) {
+    std::map<uint, ReadInfo*>& bam_info, std::vector<uint32_t> group) {
     
     CReadAln* read = bundle->reads[read_index];
     std::set<std::tuple<std::string, uint>> matches;
@@ -336,7 +343,11 @@ void process_read_out(BundleData*& bundle, uint read_index, g2tTree* g2t,
         GSeg curr_exon = read_exons[j];
         uint exon_start, exon_end;
 
-        if (read_strand == '+' || read_strand == 1 ) {
+        std::vector<IntervalNode*> sorted_intervals;
+
+        // TODO: Improve method of inferring splice strand
+        if (read_strand == '+' || read_strand == '.') {
+            if (read_strand == '.') read_strand = '+'; // this should only happen for first read exon
             exon_start = curr_exon.start - bundle->start;
             exon_end = curr_exon.end - bundle->start; 
         } else {
@@ -345,7 +356,13 @@ void process_read_out(BundleData*& bundle, uint read_index, g2tTree* g2t,
         }
         
         // Find all guide intervals that contain the read exon
-        auto sorted_intervals = g2t->getIntervals(exon_start, exon_end, read_strand);
+        sorted_intervals = g2t->getIntervals(exon_start, exon_end, read_strand);
+
+        // If uncertain strand and forward didn't work, try reverse
+        if (read_strand == '.' && sorted_intervals.empty()) { // this should only happen for first read exon
+            read_strand = '-';
+            sorted_intervals = g2t->getIntervals(exon_start, exon_end, read_strand);
+        }
 
         // No overlap at all
         if (sorted_intervals.empty()) return;
@@ -365,23 +382,22 @@ void process_read_out(BundleData*& bundle, uint read_index, g2tTree* g2t,
         // First, check the intervals for this read exon
         // *^*^*^ *^*^*^ *^*^*^ *^*^*^
 
-        auto exon_tids = collapse_intervals(sorted_intervals, exon_start, is_first_exon, read_strand, 
-            g2t, bundle, used_backwards_overhang, soft_clip_front, prev_last_interval);
+        auto exon_tids = collapse_intervals(sorted_intervals, exon_start, is_first_exon, is_last_exon, 
+            read_strand, g2t, bundle, used_backwards_overhang, soft_clip_front, prev_last_interval);
 
-        // Exon extends beyond guide interval (use_fasta mode) 
-        if (use_fasta && (is_last_exon) && (last_interval->end < exon_end)) {
+        // Exon extends beyond guide interval (USE_FASTA mode) 
+        if (USE_FASTA && (is_last_exon) && (last_interval->end < exon_end)) {
             // Update valid transcripts to only those with matching extensions
             if (!check_forward_overhang(last_interval, exon_end, read_strand, exon_tids, g2t, bundle))
                 soft_clip_back = exon_end - last_interval->end;
             
         // Exon extends beyond guide interval (no fasta)
-        } else if (last_interval->end < exon_end && (exon_end - last_interval->end < 10)) {
+        } else if ((is_last_exon) && last_interval->end < exon_end) {
             soft_clip_back = exon_end - last_interval->end;
             return;
 
         // Intervals don't support any TIDs
         } else if (exon_tids.empty()) return;
-
        
         // *^*^*^ *^*^*^ *^*^*^ *^*^*^
         // Next, update match TIDs and positions for read
@@ -411,8 +427,9 @@ void process_read_out(BundleData*& bundle, uint read_index, g2tTree* g2t,
         }
     }
 
+    // *^*^*^ *^*^*^ *^*^*^ *^*^*^
     // If we reach here, read is valid
-    // Set up read_info for this read group
+    // *^*^*^ *^*^*^ *^*^*^ *^*^*^
 
     for (auto& i : group) {
         CReadAln* group_read = bundle->reads[i];
@@ -424,7 +441,7 @@ void process_read_out(BundleData*& bundle, uint read_index, g2tTree* g2t,
         read_info->brec = group_read->brec;
         read_info->read_index = i; 
         read_info->read_size = group_read->len;
-        bam_info[std::to_string(i)] = read_info;
+        read_info->nh_i = matches.size();
 
         // Record mate information
         read_info->mate_name = group_read_name;
@@ -432,6 +449,8 @@ void process_read_out(BundleData*& bundle, uint read_index, g2tTree* g2t,
         read_info->is_first_mate = (group_read->brec->flags() & BAM_FREAD1);  
         read_info->is_reverse = (group_read->brec->flags() & BAM_FREVERSE);     
         read_info->mate_is_reverse = (group_read->brec->flags() & BAM_FMREVERSE); 
+
+        bam_info[i] = read_info;
     }
 
     return;
@@ -454,7 +473,7 @@ void process_read_out(BundleData*& bundle, uint read_index, g2tTree* g2t,
 void add_mate_info(const std::set<std::string>& final_transcripts, 
     const std::set<std::string>& read_transcripts, const std::set<std::string>& mate_transcripts,
     const std::map<std::string, uint>& read_positions, const std::map<std::string, uint>& mate_positions,
-    std::map<std::string, ReadInfo*>& bam_info, uint read_index, uint mate_index, 
+    std::map<uint, ReadInfo*>& bam_info, uint read_index, uint mate_index, 
     uint read_size, uint mate_size) {
     
     for (const std::string& tid : final_transcripts) {
@@ -463,7 +482,7 @@ void add_mate_info(const std::set<std::string>& final_transcripts,
         
         // Create mate info for current read (only if it maps to this transcript)
         if (read_transcripts.find(tid) != read_transcripts.end()) {
-            auto read_info = bam_info[std::to_string(mate_index)];
+            auto read_info = bam_info[mate_index];
             auto mate_info = new MateInfo();
             mate_info->mate_index = read_index;
             mate_info->mate_size = read_size;
@@ -477,7 +496,7 @@ void add_mate_info(const std::set<std::string>& final_transcripts,
         
         // Create mate info for mate read (only if it maps to this transcript)
         if (mate_transcripts.find(tid) != mate_transcripts.end()) {
-            auto read_info = bam_info[std::to_string(read_index)];
+            auto read_info = bam_info[read_index];
             auto mate_info = new MateInfo();
             mate_info->mate_index = mate_index;
             mate_info->mate_size = mate_size;
@@ -517,10 +536,9 @@ void update_read_matches(ReadInfo* read_info, const std::set<std::string>& final
  * @param bam_info read_info for all reads in bundle
  * @param mate_map map between read_id and mate_info
  */
-void process_mate_pairs(BundleData* bundle, std::map<std::string, ReadInfo*>& bam_info) {
+void process_mate_pairs(BundleData* bundle, std::map<uint, ReadInfo*>& bam_info) {
     
     GList<CReadAln>& reads = bundle->reads;
-    const int MAX_MAPPINGS_PER_READ = 200;
     
     // Pre-compute read transcript sets to avoid repeated extraction
     std::vector<std::set<std::string>> read_transcript_cache(reads.Count());
@@ -533,7 +551,7 @@ void process_mate_pairs(BundleData* bundle, std::map<std::string, ReadInfo*>& ba
 
     for (int i = 0; i < reads.Count(); i++) {
         
-        auto read_info_it = bam_info.find(std::to_string(i));
+        auto read_info_it = bam_info.find(i);
         if (read_info_it == bam_info.end() || !read_info_it->second->valid_read || !read_info_it->second->is_paired) {
             continue;
         }
@@ -541,7 +559,7 @@ void process_mate_pairs(BundleData* bundle, std::map<std::string, ReadInfo*>& ba
         auto read_info = read_info_it->second;
         
         // Skip reads with too many mappings
-        if (read_info->matches.size() > MAX_MAPPINGS_PER_READ) {
+        if (read_info->matches.size() > max_mappings_per_read) {
             continue;
         }
         
@@ -568,7 +586,7 @@ void process_mate_pairs(BundleData* bundle, std::map<std::string, ReadInfo*>& ba
         
         CReadAln* read = reads[i];
         std::string read_name = read->brec->name();
-        auto read_info = bam_info[std::to_string(i)];
+        auto read_info = bam_info[i];
         
         // Process all known mate relationships for this read
         for (int j = 0; j < read->pair_idx.Count(); j++) {
@@ -590,7 +608,7 @@ void process_mate_pairs(BundleData* bundle, std::map<std::string, ReadInfo*>& ba
             
             CReadAln* mate_read = reads[mate_index];
             std::string mate_name = mate_read->brec->name();
-            auto mate_read_info = bam_info[std::to_string(mate_index)];
+            auto mate_read_info = bam_info[mate_index];
 
             uint read_size = read_info->read_size;
             uint mate_size = mate_read_info->read_size;
@@ -661,12 +679,12 @@ void convert_reads(BundleData* bundle, BamIO* io) {
     }
 
     // Create bam_info to store info for every read
-    std::map<std::string, ReadInfo*> bam_info;
+    std::map<uint, ReadInfo*> bam_info;
 
     // First pass: process reads
     auto groups = aln_groups->groups;
     for (uint i = 0; i < groups.size(); i++) {
-        uint n = groups[i][0];                      // index of first read in group
+        uint n = groups[i][0];  // index of first read in group
         
         // Process the first read from this group
         process_read_out(bundle, n, g2t, bam_info, groups[i]);

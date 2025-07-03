@@ -34,17 +34,17 @@ uint get_match_pos(IntervalNode* interval, std::string tid, char read_strand,
                    g2tTree* g2t, uint exon_start, bool used_backwards_overhang);
 
 void process_read_out(BundleData*& bundle, uint read_index, g2tTree* g2t, 
-    std::map<std::string, ReadInfo*>& bam_info, std::vector<uint32_t> group);
+    std::map<uint, ReadInfo*>& bam_info, std::vector<uint32_t> group);
 
 void add_mate_info(const std::set<std::string>& final_transcripts, 
     const std::set<std::string>& read_transcripts, const std::set<std::string>& mate_transcripts,
     const std::map<std::string, uint>& read_positions, const std::map<std::string, uint>& mate_positions,
-    std::map<std::string, ReadInfo*>& bam_info, uint read_index, uint mate_index, 
+    std::map<uint, ReadInfo*>& bam_info, uint read_index, uint mate_index, 
     uint read_size, uint mate_size);
 
 void update_read_matches(ReadInfo* read_info, const std::set<std::string>& final_transcripts);
 
-void process_mate_pairs(BundleData* bundle, std::map<std::string, ReadInfo*>& bam_info);
+void process_mate_pairs(BundleData* bundle, std::map<uint, ReadInfo*>& bam_info);
 
 void convert_reads(BundleData* bundle, BamIO* io);
 

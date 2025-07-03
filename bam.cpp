@@ -107,7 +107,7 @@ void update_cigar(bam1_t* b, uint32_t* cigar, uint32_t n_cigar) {
 }
 
 // Set mate information for a read
-void set_mate_info(BamIO* io, std::string transcript_id, bam1_t* b, int tid, 
+MateInfo* set_mate_info(BamIO* io, std::string transcript_id, bam1_t* b, int tid, 
     ReadInfo* read_info) {
     
     auto mate_info = read_info->mate_info[transcript_id];
@@ -117,7 +117,7 @@ void set_mate_info(BamIO* io, std::string transcript_id, bam1_t* b, int tid,
         b->core.mpos = -1;
         b->core.isize = 0;
         // Don't set BAM_FPAIRED if no valid mate
-        return;
+        return nullptr;
     }
     
     // Set basic paired flags
@@ -153,7 +153,7 @@ void set_mate_info(BamIO* io, std::string transcript_id, bam1_t* b, int tid,
             b->core.mpos = -1;
             b->core.isize = 0;
             b->core.flag |= BAM_FMUNMAP;
-            return;
+            return nullptr;
         }
         
         // Set mate reference and position for different transcript
@@ -167,6 +167,8 @@ void set_mate_info(BamIO* io, std::string transcript_id, bam1_t* b, int tid,
     if (read_info->mate_is_reverse) {
         b->core.flag |= BAM_FMREVERSE;
     }
+
+    return mate_info;
 }
 
 // Add new NH tag (after removing current one)
@@ -177,13 +179,14 @@ void set_nh_tag(bam1_t* b, uint nh_i) {
 }
 
 // Write bundle reads to BAM file
-void write_to_bam(BamIO* io, std::map<std::string, ReadInfo*>& bam_info) {
+void write_to_bam(BamIO* io, std::map<uint, ReadInfo*>& bam_info) {
     GSamRecord new_brec;
 
     for (const auto& pair : bam_info) {
         auto read_info = std::get<1>(pair);
         if (!read_info || !read_info->valid_read) continue;
 
+        // Get BAM and CIGAR string
         bam1_t* read_b = read_info->brec->get_b();
         uint32_t* cigar = bam_get_cigar(read_b);
         uint32_t n_cigar = read_b->core.n_cigar;
@@ -193,14 +196,12 @@ void write_to_bam(BamIO* io, std::map<std::string, ReadInfo*>& bam_info) {
         if (read_has_introns) update_cigar(read_b, cigar, n_cigar);
 
         // Set the NH (number of hits) tag
-        auto nh_i = (read_info->matches).size();
+        auto nh_i = read_info->nh_i;
         set_nh_tag(read_b, nh_i);
 
         // Create new BAM record
         new_brec = *(read_info->brec);
         bam1_t* b = new_brec.get_b();
-
-        // bool secondary = false;
 
         for (const auto& match : read_info->matches) {
             std::string transcript_id = std::get<0>(match);
@@ -214,10 +215,13 @@ void write_to_bam(BamIO* io, std::map<std::string, ReadInfo*>& bam_info) {
             // TODO: choose matches to be secondary
 
             // Set mate information if available
-            set_mate_info(io, transcript_id, b, tid, read_info);
+            auto mate_info = set_mate_info(io, transcript_id, b, tid, read_info);
 
             // Write the read match to the BAM
             io->write(&new_brec);
+            
+            // TODO: write mate at same time
+            // Salmon needs to see paired reads next to each other
         }
     }  
 }

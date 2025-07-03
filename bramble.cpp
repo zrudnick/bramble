@@ -217,9 +217,9 @@ void process_bundle(BundleData* bundle, BamIO* io) {
 
 	if (VERBOSE) {
 		if (THREADING_ENABLED) GLockGuard<GFastMutex> lock(log_mutex);
-		GMessage(">bundle %s:%d-%d [%lu alignments (%d distinct), %d junctions, %d guides] begins processing...\n",
-				bundle->refseq.chars(), bundle->start, bundle->end, bundle->reads.Count(), bundle->junction.Count(),
-				bundle->guides.Count());
+		GMessage(">bundle %s:%d-%d [%lu alignments (%d distinct), %d guides] begins processing...\n",
+				bundle->refseq.chars(), bundle->start, bundle->end, 
+				bundle->reads.Count(), bundle->guides.Count());
 	}
 
 	// This is where reads are added to new BAM file
@@ -308,78 +308,6 @@ int wait_for_data(BundleData* bundles) {
 	return idx;
 }
 
-void rc_updateExonCounts(const RC_ExonOvl& exonovl, int nh) {
-  	//this only gets read overlaps > 5bp and otherwise filtered in evalReadAln()
-  	exonovl.feature->rcount++;
-  	if (nh>1) {
-		exonovl.feature->mrcount += (1.0/nh);
-	  	exonovl.feature->movlcount += ((double)exonovl.ovlen/nh);
-  	}
-  	else { // nh<=1
-	  	exonovl.feature->mrcount++;
-	  	exonovl.feature->movlcount += exonovl.ovlen;
-	  	exonovl.feature->ucount++;
- 	 }
-}
-
-bool BundleData::evalReadAln(GReadAlnData& alndata, char& xstrand) {
-    if (rc_data == NULL) return false; // no guides available for this read's region
-
-    GSamRecord* brec = alndata.brec;
-    int mate_pos = brec->mate_start();
-    int nh = alndata.nh;
-    if ((int)brec->end < rc_data->lmin || (int)brec->start > rc_data->rmax) return false; //hit outside coverage area
-    if (rc_data->g_exons.Count() == 0 || rc_data->g_tdata.Count() == 0) return false; //nothing to do without transcripts
-
-    // Check this read alignment against guide exons and introns
-    char strandbits = 0;
-    bool overlaps_guide = false;
-    bool is_in_guide = true; // exons and junctions are in reference transcripts but they might be in different guides
-    
-    for (int i = 0; i < brec->exons.Count(); i++) {
-        GArray<RC_ExonOvl> exonOverlaps(true, true); //overlaps sorted by decreasing length
-
-        if (rc_data->findOvlExons(exonOverlaps, brec->exons[i].start, brec->exons[i].end, xstrand, mate_pos)) {
-            overlaps_guide = true;
-            int max_ovl = exonOverlaps[0].ovlen;
-             
-            if (is_in_guide && (uint)max_ovl < brec->exons[i].len()) is_in_guide = false;
-
-            for (int k = 0; k < exonOverlaps.Count(); ++k) {
-                //if (exonOverlaps[k].ovlen < 5) break; //ignore very short overlaps
-                if (k && (exonOverlaps[k].mate_ovl < exonOverlaps[0].mate_ovl || exonOverlaps[k].ovlen + 5 < max_ovl))
-                    break; //ignore further overlaps after a mate matched or if they are shorter than max_overlap-5
-
-                if (exonOverlaps[k].feature->strand == '+') strandbits |= 0x01;
-                else if (exonOverlaps[k].feature->strand == '-') strandbits |= 0x02;
-
-                rc_updateExonCounts(exonOverlaps[k], nh);
-            }
-        }
-
-        // Intron processing
-        if (i > 0) {
-            int j_l = brec->exons[i-1].end + 1;
-            int j_r = brec->exons[i].start - 1;
-            RC_Feature* ri = rc_data->findIntron(j_l, j_r, xstrand);
-            alndata.juncs.Add(new CJunction(j_l, j_r)); //don't set strand, etc. for now
-            if (ri) { //update guide intron counts
-                ri->rcount++;
-                ri->mrcount += (nh > 1) ? (1.0/nh) : 1;
-                if (nh == 1) ri->ucount++;
-                alndata.juncs.Last()->guide_match = 1;
-            }
-            else is_in_guide = false;
-        }
-    }
-
-    if (xstrand == '.' && strandbits && strandbits < 3) {
-        xstrand = (strandbits == 1) ? '+' : '-';
-    }
-
-    return overlaps_guide;
-}
-
 int main(int argc, char* argv[]) {
 
 	GArgs args(argc, argv,
@@ -390,9 +318,9 @@ int main(int argc, char* argv[]) {
 	const char* ERR_BAM_SORT = "\nError: the input alignment file is not sorted!\n";
 
 	// Table indexes for raw counts data
-	GPVec<RC_TData> guides_RC_tdata(true);     	 		// Raw count data for all guide transcripts
-	GPVec<RC_Feature> guides_RC_exons(true);    		// Raw count data for all guide exons
-	GPVec<RC_Feature> guides_RC_introns(true);  		// Raw count data for all guide introns
+	//GPVec<RC_TData> guides_RC_tdata(true);     	 		// Raw count data for all guide transcripts
+	//GPVec<RC_Feature> guides_RC_exons(true);    		// Raw count data for all guide exons
+	//GPVec<RC_Feature> guides_RC_introns(true);  		// Raw count data for all guide introns
 
 	// ^**^^^*^**^^^*^**^^^*^**^^^*
 	// Read in reference annotation
@@ -461,9 +389,10 @@ int main(int argc, char* argv[]) {
         }
 
 		// Always keep a RC_TData pointer around, with additional info about guides
-		RC_TData* tdata = new RC_TData(*guide, ++curr_tid);
-		guide->uptr = tdata;
-		guides_RC_tdata.Add(tdata);
+		//RC_TData* tdata = new RC_TData(*guide, ++curr_tid);
+		//guide->uptr = tdata;
+		//guides_RC_tdata.Add(tdata);
+
 		GRefData& grefdata = refguides[guide->gseq_id];
 	   	grefdata.add(&gffreader, guide); // transcripts already sorted by location
 
@@ -791,11 +720,13 @@ int main(int argc, char* argv[]) {
 
 					// Add all overlapping and transitively overlapping guides
 					for (int i = first_transitive_overlap; i <= guide_idx; ++i) {
-						bundle->keepGuide((*guides)[i], &guides_RC_tdata, &guides_RC_exons, &guides_RC_introns);
+						// bundle->keepGuide((*guides)[i], &guides_RC_tdata, &guides_RC_exons, &guides_RC_introns);
+						bundle->keepGuide((*guides)[i]);
 					}
 				} else {
 					// Directly overlapping guide
-					bundle->keepGuide((*guides)[guide_idx], &guides_RC_tdata, &guides_RC_exons, &guides_RC_introns);
+					//bundle->keepGuide((*guides)[guide_idx], &guides_RC_tdata, &guides_RC_exons, &guides_RC_introns);
+					bundle->keepGuide((*guides)[guide_idx]);
 				}
 				++guide_idx;
 			}
@@ -820,7 +751,8 @@ int main(int argc, char* argv[]) {
 					++last_guide_idx;
 					auto* guide = (*guides)[last_guide_idx];
 					if (guide->end >= curr_bundle_start) {
-						bundle->keepGuide(guide, &guides_RC_tdata, &guides_RC_exons, &guides_RC_introns);
+						// bundle->keepGuide(guide, &guides_RC_tdata, &guides_RC_exons, &guides_RC_introns);
+						bundle->keepGuide(guide);
 						if (curr_bundle_end < guide->end) {
 							curr_bundle_end = guide->end;
 							expanded = true;
@@ -831,20 +763,8 @@ int main(int argc, char* argv[]) {
 			}
 		} 
 
-		GReadAlnData alndata(brec, 0, nh, hi);
-     	bool overlaps_guide = bundle->evalReadAln(alndata, splice_strand);
-		
-		// Only process the read if it overlaps a guide
-		if (overlaps_guide) { // reads with "." strand never overlap
-
-			// Splice_strand may have been set by evalReadAln
-			if (splice_strand == '+') 
-				alndata.strand = 1;
-			else if (splice_strand == '-') 
-				alndata.strand = -1;
-
-			process_read_in(curr_bundle_start, curr_bundle_end, *bundle, hashread, alndata, brec);
-		}
+		process_read_in(curr_bundle_start, curr_bundle_end, *bundle, hashread, 
+			brec, splice_strand, nh, hi);
 	}
 
 	//^**^^^*^**^^^*^**^^^*^**^^^*
