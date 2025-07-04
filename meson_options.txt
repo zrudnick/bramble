@@ -1,0 +1,11 @@
+option('nothreads', type: 'boolean', value: false,
+  description: 'Disable multithreading support')
+
+option('memcheck', type: 'boolean', value: false,
+  description: 'Enable memory debugging with AddressSanitizer')
+
+option('tsan', type: 'boolean', value: false,
+  description: 'Enable thread sanitizer for concurrency bugs')
+
+option('static_cpp', type: 'boolean', value: false,
+  description: 'Statically link C++ standard library')

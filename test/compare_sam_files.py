@@ -32,16 +32,26 @@ def main():
     parser.add_argument('sam1', help='First SAM file')
     parser.add_argument('sam2', help='Second SAM file')
     parser.add_argument('-o', '--output', help='Output file (default: stdout)')
+    parser.add_argument('-d', '--diff-only', help='Output differences only', action='store_true')
+
     
     args = parser.parse_args()
-    
+
+    diff_only = args.diff_only
+
     # Parse both SAM files
     print(f"Reading {args.sam1}...", file=sys.stderr)
     sam1_reads = parse_sam_file(args.sam1)
-    
+    if diff_only:
+        for k,v in sam1_reads.items():
+            sam1_reads[k] = list(sorted(v))
+        
     print(f"Reading {args.sam2}...", file=sys.stderr)
     sam2_reads = parse_sam_file(args.sam2)
-    
+    if diff_only:
+        for k,v in sam2_reads.items():
+            sam2_reads[k] = list(sorted(v))
+        
     # Get all unique read names from both files
     all_read_names = set(sam1_reads.keys()) | set(sam2_reads.keys())
     
@@ -51,15 +61,19 @@ def main():
     try:
         # Process each read name
         for read_name in sorted(all_read_names):
+            if diff_only:
+                if (read_name in sam1_reads) and (read_name in sam2_reads):
+                    if sam1_reads[read_name] == sam2_reads[read_name]:
+                        continue
             # Print sam1 lines for this read
             if read_name in sam1_reads:
-                output_file.write(f"sam1:\n")
+                output_file.write("sam1:\n")
                 for line in sam1_reads[read_name]:
                     output_file.write(f"{line}\n")
             
             # Print sam2 lines for this read
             if read_name in sam2_reads:
-                output_file.write(f"sam2:\n")
+                output_file.write("sam2:\n")
                 for line in sam2_reads[read_name]:
                     output_file.write(f"{line}\n")
             
