@@ -18,7 +18,7 @@ uint8_t* copy_cigar_memory(bam1_t* b, uint32_t new_n_cigar, uint32_t n_cigar, ui
 
 void update_cigar(bam1_t* b, uint32_t* cigar, uint32_t n_cigar);
 
-void set_mate_info(BamIO* io, const std::string &transcript_name, tid_t transcript_id, bam1_t* b, int tid, ReadInfo* read_info, g2tTree* gt2);
+MateInfo* set_mate_info(BamIO* io, const std::string &transcript_name, tid_t transcript_id, bam1_t* b, int tid, ReadInfo* read_info, g2tTree* gt2);
 
 void set_nh_tag(bam1_t* b, uint nh_i);
 

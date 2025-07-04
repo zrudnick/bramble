@@ -39,7 +39,9 @@ bool check_forward_overhang(IntervalNode *interval, uint exon_end,
 uint get_match_pos(IntervalNode *interval, std::string tid, char read_strand,
                    g2tTree *g2t, uint exon_start, bool used_backwards_overhang);
 
-void process_read_out(BundleData *&bundle, uint read_index, g2tTree *g2t,
+void process_read_out(BundleData *&bundle, 
+                      uint read_index, 
+                      g2tTree *g2t,
                       std::map<tid_t, ReadInfo *> &bam_info,
                       std::vector<uint32_t> group);
 
@@ -55,7 +57,7 @@ void update_read_matches(ReadInfo *read_info,
                          const std::set<std::string> &final_transcripts);
 
 void process_mate_pairs(BundleData *bundle,
-                        std::map<std::string, ReadInfo *> &bam_info);
+                        std::map<tid_t, ReadInfo *> &bam_info);
 
 void convert_reads(BundleData *bundle, BamIO *io);
 

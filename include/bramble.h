@@ -1,13 +1,6 @@
 #ifndef MAIN_H
 #define MAIN_H
 
-#include "GArgs.h"
-#include "GBitVec.h"
-#include "GHashMap.hh"
-#include "GSam.h"
-#include "GStr.h"
-#include "gff.h"
-#include "time.h"
 #include <algorithm>
 #include <iostream>
 #include <map>
@@ -15,31 +8,32 @@
 #include <set>
 #include <unordered_map>
 #include <vector>
+
+#include "GArgs.h"
+#include "GBitVec.h"
+#include "GHashMap.hh"
+#include "GSam.h"
+#include "GStr.h"
+#include "gff.h"
+#include "time.h"
+
 using namespace std;
 
-#define MAX_NODE 1000000
-#define SMALL_EXON                                                             \
-  35 // exons smaller than this have a tendency to be missed by long read data
-
-#define GMEMTRACE 0 // Memory tracing
 #ifndef NOTHREADS   // Use threads
 #define THREADING_ENABLED 1
 #else
 #define THREADING_ENABLED 0
 #endif
 
-#define RC_MIN_EOVL 5
+#define MAX_NODE 1000000
+#define SMALL_EXON                                                             \
+  35 // exons smaller than this have a tendency to be missed by long read data
+#define RUNOFF_DIST 200  // Reads at what distance should be considered part of separate bundles?
 
-constexpr uint32_t longintron =
-    100000; // don't trust introns longer than this unless there is higher
-            // evidence; about 99% of all human annotated introns are shorter
-            // than this
-constexpr uint32_t longintronanchor = 25;
-constexpr float mismatchfrac = 0.02;
+#define LONG_INTRON_ANCHOR 25
+#define MISMATCH_FRAC 0.02
+
 using tid_t = uint32_t;
-
-extern bool verbose;
-extern bool debugMode;
 
 struct IntervalNode {
   uint32_t start, end;
@@ -645,6 +639,8 @@ struct ReadInfo {
   bool valid_read;
   uint32_t read_index;
   uint32_t read_size;
+  uint32_t nh_i;
+  bool wrote_alr; // this read (a mate) was already written to bam
 
   // Mate information
   std::string mate_name;
@@ -654,10 +650,9 @@ struct ReadInfo {
   bool mate_is_reverse;
   std::map<tid_t, MateInfo *> mate_info;
 
-  ReadInfo()
-      : matches(), brec(nullptr), valid_read(false), read_index(0),
-        read_size(0), mate_name(), is_paired(false), is_first_mate(false),
-        is_reverse(false), mate_is_reverse(false), mate_info() {}
+  ReadInfo() : matches(), brec(nullptr), valid_read(false), read_index(0), read_size(0), nh_i(0),
+	             wrote_alr(false), mate_name(), is_paired(false), is_first_mate(false), 
+				       is_reverse(false), mate_is_reverse(false), mate_info() {}
 
   ~ReadInfo() {
     // brec is deleted by CReadAln
@@ -705,127 +700,12 @@ struct GRefData {
 // Bundle status
 enum BundleStatus {
   BUNDLE_STATUS_CLEAR = 0, // Available for loading/prepping
-  BUNDLE_STATUS_LOADING =
-      1, // Being prepared by the main thread (there can be only one)
+  BUNDLE_STATUS_LOADING = 1, // Being prepared by the main thread (there can be only one)
   BUNDLE_STATUS_READY = 2 // Ready to be processed, or being processed
-};
-
-struct CBundle {
-  int len;
-  float cov;
-  float multi;
-  int start_node; // id of start node in bundle of same strand
-  int lastnodeid; // id of last node added to bundle
-  CBundle(int _len = 0, float _cov = 0, float _multi = 0, int _start = -1,
-          int _last = -1)
-      : len(_len), cov(_cov), multi(_multi), start_node(_start),
-        lastnodeid(_last) {}
-};
-
-struct CGraphinfo {
-  int ngraph;
-  int nodeno;
-
-  CGraphinfo(int ng = -1, int nnode = -1) : ngraph(ng), nodeno(nnode) {}
-};
-
-struct CGJunc {
-  int leftnode;
-  int rightnode;
-  double cov;     // ngood
-  double goodcov; // ngood_reads
-  CGJunc(int n1 = 0, int n2 = 0, double _cov = 0, double _goodcov = 0)
-      : leftnode(n1), rightnode(n2), cov(_cov), goodcov(_goodcov) {}
-};
-
-struct CGNode {
-  int id;     // initial id in graphno
-  bool last;  // if this is last node (to be linked to sink later)
-  bool keep;  // if I keep it in the final count (true by default)
-  bool merge; // if this node needs to be merged to its adjacent node
-  bool future;
-  CGNode(int _id = 0, bool _last = false, bool _keep = true,
-         bool _merge = false, bool _future = false)
-      : id(_id), last(_last), keep(_keep), merge(_merge), future(_future) {}
-};
-
-struct GEdge { // guide edge
-  // if val < endval then this is start; otherwise it is end
-  uint val;    // value of the boundary
-  uint endval; // value of the other exon boundary shared with val
-  int strand;
-  bool operator<(const GEdge &o) const {
-    return (val < o.val || (val == o.val && strand < o.strand));
-  }
-  bool operator==(const GEdge &o) const {
-    return (val == o.val && strand == o.strand);
-  }
-  GEdge(uint _val = 0, uint _endval = 0, int _strand = 0)
-      : val(_val), endval(_endval), strand(_strand) {}
-};
-
-struct CGraphnode : public GSeg {
-  int nodeid;
-  float cov;
-  float capacity; // sum of all transcripts abundances exiting and through node
-  float rate;     // conversion rate between in and out transfrags of node
-  // float frag; // number of fragments included in node
-  GVec<int> child;
-  GVec<int> parent;
-  GBitVec childpat;
-  GBitVec parentpat;
-  GVec<int> trf;      // transfrags that pass the node
-  bool hardstart : 1; // verified/strong start
-  bool hardend : 1;   // verified/strong end
-  // CGraphnode(int s=0,int e=0,unsigned int id=MAX_NODE,float nodecov=0,float
-  // cap=0,float r=0,float
-  // f=0):GSeg(s,e),nodeid(id),cov(nodecov),capacity(cap),rate(r),frag(f),child(),parent(),childpat(),parentpat(),trf(){}
-  CGraphnode(int s = 0, int e = 0, unsigned int id = MAX_NODE,
-             float nodecov = 0, float cap = 0, float r = 0)
-      : GSeg(s, e), nodeid(id), cov(nodecov), capacity(cap), rate(r), child(),
-        parent(), childpat(), parentpat(), trf(), hardstart(false),
-        hardend(false) {}
-};
-
-// # 0: strand; 1: start; 2: end; 3: nreads; 4: nreads_good;
-struct CJunction : public GSeg {
-  char strand;      //-1,0,1
-  char guide_match; // exact match of a ref intron?
-  char consleft;  // -1,0,1 -1 is not set up, 0 is non consensus, 1 is consensus
-  char consright; // -1,0,1 -1 is not set up, 0 is non consensus, 1 is consensus
-  double nreads;
-  double nreads_good;
-  double leftsupport;
-  double rightsupport;
-  double nm; // number of reads with a high nm (high mismatch)
-  double mm; // number of reads that support a junction with both anchors bigger
-             // than longintronanchor
-  CJunction(int s = 0, int e = 0, char _strand = 0)
-      : GSeg(s, e), strand(_strand), guide_match(0), consleft(-1),
-        consright(-1), nreads(0), nreads_good(0), leftsupport(0),
-        rightsupport(0), nm(0), mm(0) {}
-  bool operator<(CJunction &b) {
-    if (start < b.start)
-      return true;
-    if (start > b.start)
-      return false;
-    if (end < b.end)
-      return true;
-    if (end > b.end)
-      return false;
-    if (strand > b.strand)
-      return true;
-    return false;
-  }
-  bool operator==(CJunction &b) {
-    return (start == b.start && end == b.end && strand == b.strand);
-  }
 };
 
 // Read Alignment
 struct CReadAln : public GSeg {
-  // DEBUG ONLY:
-  // GStr name;
   char strand; // 1, 0 (unknown), -1 (reverse)
   short int nh;
   uint32_t len;
@@ -842,14 +722,13 @@ struct CReadAln : public GSeg {
   bool mate_found;
 
   GVec<GSeg> segs; //"exons"
-  GPVec<CJunction> juncs;
   GSamRecord *brec; // store BAM record
 
   CReadAln(char _strand = 0, short int _nh = 0, int rstart = 0, int rend = 0)
       : GSeg(rstart, rend), // name(rname),
         strand(_strand), nh(_nh), len(0), read_count(0), unitig(false),
         longread(false), pair_count(), pair_idx(), mate_genomic_pos(0),
-        mate_transcript_id(), mate_found(false), segs(), juncs(false), brec() {}
+        mate_transcript_id(), mate_found(false), segs(), brec() {}
 
   CReadAln(CReadAln &rd) : GSeg(rd.start, rd.end) { // copy contructor
     strand = rd.strand;
@@ -860,34 +739,8 @@ struct CReadAln : public GSeg {
     longread = rd.longread;
     pair_count = rd.pair_count;
     pair_idx = rd.pair_idx;
-    juncs = rd.juncs;
   }
 
-  int overlapSegLen(CReadAln *r) {
-
-    if (r->start > end || start > r->end)
-      return 0;
-
-    int i = 0;
-    int j = 0;
-    int len = 0;
-    while (i < segs.Count()) {
-      if (segs[i].end < r->segs[j].start)
-        i++;
-      else if (r->segs[j].end < segs[i].start)
-        j++;
-      else { // there is overlap
-        len += segs[i].overlapLen(r->segs[j].start, r->segs[j].end);
-        if (segs[i].end < r->segs[j].end)
-          i++;
-        else
-          j++;
-      }
-      if (j == r->segs.Count())
-        break;
-    }
-    return len;
-  }
   ~CReadAln() { delete brec; }
 
   friend std::ostream &operator<<(std::ostream &, const CReadAln &);
@@ -972,499 +825,50 @@ struct AlnGroups {
   ~AlnGroups() { Clear(); }
 };
 
-struct GReadAlnData {
-  GSamRecord *brec;
-  char strand; // -1, 0, 1
-  int nh;
-  int hi;
-  GPVec<CJunction> juncs;
-
-  GReadAlnData(GSamRecord *bamrec = nullptr, char nstrand = 0, int num_hits = 0,
-               int hit_idx = 0)
-      : brec(bamrec), strand(nstrand), nh(num_hits), hi(hit_idx), juncs(true) {}
-
-  ~GReadAlnData() = default;
-};
-
-struct RC_Feature { // exon or intron of a reference transcript
-
-  uint id; // feature id (>0), +1 to the index either in bundle_RC_exons/introns
-  GVec<uint> t_ids; // transcripts owning this feature
-                    //  index in the BundleData::keepguides array + 1
-  int l;
-  int r; // genomic coordinates for the feature
-  char strand;
-  mutable uint rcount; // # read alignments overlapping this feature (>5bp
-                       // overlaps for exons;
-                       //  exact coord. match for introns)
-  mutable uint
-      ucount; // # uniquely mapped reads overlapping/matching this ref feature
-  mutable double mrcount; // multi-map weighted read counts overlapping/matching
-                          // this feature
-
-  mutable double
-      movlcount; // exons only: multi-map weighted sum of overlap lengths
-
-  double avg;
-  double stdev;
-  double mavg;
-  double mstdev;
-
-  struct PCompare {
-    bool operator()(const RC_Feature *p1, const RC_Feature *p2) {
-      return (*p1 < *p2);
-    }
-  };
-
-  RC_Feature(int l0 = 0, int r0 = 0, char s = '.', uint fid = 0, uint tid = 0)
-      : id(fid), t_ids(1), l(l0), r(r0), strand(s), rcount(0), ucount(0),
-        mrcount(0), movlcount(0), avg(0), stdev(0), mavg(0), mstdev(0) {
-
-    if (l > r) {
-      int t = l;
-      l = r;
-      r = t;
-    }
-    if (tid > 0)
-      t_ids.Add(tid);
-  }
-
-  RC_Feature(const RC_Feature &seg)
-      : id(seg.id), t_ids(seg.t_ids), l(seg.l), r(seg.r), strand(seg.strand),
-        rcount(0), ucount(0), mrcount(0), movlcount(0), avg(0), stdev(0),
-        mavg(0), mstdev(0) {}
-
-  RC_Feature(const RC_Feature &seg, uint tid)
-      : id(seg.id), t_ids(1), l(seg.l), r(seg.r), strand(seg.strand), rcount(0),
-        ucount(0), mrcount(0), movlcount(0), avg(0), stdev(0), mavg(0),
-        mstdev(0) {
-    if (l > r) {
-      int t = l;
-      l = r;
-      r = t;
-    }
-    if (tid > 0)
-      t_ids.Add(tid);
-  }
-
-  bool operator<(const RC_Feature &o) const {
-    if (l != o.l)
-      return (l < o.l);
-    if (r != o.r)
-      return (r < o.r);
-    if (strand == '.' || o.strand == '.')
-      return false;
-    if (strand != o.strand)
-      return (strand < o.strand);
-    return false;
-  }
-  bool operator==(const RC_Feature &o) const {
-    // if (id == o.id) return true;
-    return (l == o.l && r == o.r &&
-            (strand == o.strand || strand == '.' || o.strand == '.'));
-  }
-  bool strandCompatible(const RC_Feature &o) const {
-    return (strand == '.' || o.strand == '.' || strand == o.strand);
-  }
-  // WARNING: the overlap checks IGNORE strand!
-  bool overlap(int hl, int hr) const {
-    if (hl > hr) {
-      int t = hl;
-      hl = hr;
-      hr = t;
-    }
-    return (l <= hr && r <= hl);
-  }
-  bool overlap(int hl, int hr, int minovl) const {
-    if (hl > hr) {
-      int t = hl;
-      hl = hr;
-      hr = t;
-    }
-    hl += minovl;
-    hr -= minovl;
-    return (l <= hr && r <= hl);
-  }
-  uint ovlen(int hl, int hr) const {
-    if (hl > hr) {
-      int t = hl;
-      hl = hr;
-      hr = t;
-    }
-    if (l < hl) {
-      if (hl > r)
-        return 0;
-      return (hr > r) ? r - hl + 1 : hr - hl + 1;
-    } else { // hl<=l
-      if (l > hr)
-        return 0;
-      return (hr < r) ? hr - l + 1 : r - l + 1;
-    }
-  }
-};
-
-struct RC_ExonOvl {
-  RC_Feature *feature; // pointer to an item of RC_BundleData::g_exons
-  int mate_ovl;        // = 1 if the mate of this read overlaps the same exon
-  int ovlen;
-  bool operator<(const RC_ExonOvl &o) const {
-    if (mate_ovl != o.mate_ovl)
-      return (mate_ovl > o.mate_ovl);
-    if (ovlen != o.ovlen)
-      return (ovlen > o.ovlen);
-    if (feature->r - feature->l != o.feature->r - o.feature->l)
-      return (feature->r - feature->l > o.feature->r - o.feature->l);
-    if (feature->strand != o.feature->strand)
-      return (feature->strand < o.feature->strand);
-    return (feature->l < o.feature->l);
-  } // operator <
-  bool operator==(const RC_ExonOvl &o) const {
-    return (mate_ovl == o.mate_ovl && ovlen == o.ovlen && feature == o.feature);
-  }
-  RC_ExonOvl(RC_Feature *f = NULL, int olen = 0, int movl = 0)
-      : feature(f), mate_ovl(movl), ovlen(olen) {}
-};
-
-struct RC_TData { // storing RC data for a transcript
-  // only used with -B (full Ballgown data)
-  GffObj *ref_t;
-  uint t_id;
-  int l;
-  int r;
-  char in_bundle; // 1 if used by read bundles (present in keepguides),
-                  // 2 if all introns are covered by at least one read, 3 if it
-                  // is stored to be printed
-  // GRefLocus* locus; //pointer to a locus info
-  int eff_len;
-  double cov;
-  double fpkm;
-  // char strand;
-  GPVec<RC_Feature> t_exons;
-  GPVec<RC_Feature> t_introns;
-
-  void rc_addFeatures(uint &c_e_id, GList<RC_Feature> &fexons,
-                      GPVec<RC_Feature> &edata, uint &c_i_id,
-                      GList<RC_Feature> &fintrons, GPVec<RC_Feature> &idata) {
-    GASSERT(ref_t);
-    GffObj &m = *(ref_t);
-    int ecache_idx = fexons.Count() - 1;
-    int icache_idx = fintrons.Count() - 1;
-
-    for (int i = 0; i < m.exons.Count(); ++i) {
-      addFeature((int)m.exons[i]->start, (int)m.exons[i]->end, t_exons, c_e_id,
-                 fexons, edata, ecache_idx);
-      // if (i==0) e_idx_cache=ecache_idx;
-      if (i > 0) { // store intron
-        // if (i==1) i_idx_cache=icache_idx;
-        addFeature(m.exons[i - 1]->end + 1, m.exons[i]->start - 1, t_introns,
-                   c_i_id, fintrons, idata, icache_idx);
-      } // for each intron
-    } // for each exon
-  }
-  void addFeature(int fl, int fr, GPVec<RC_Feature> &fvec, uint &f_id,
-                  GList<RC_Feature> &fset, GPVec<RC_Feature> &fdata,
-                  int &cache_idx) {
-    // f_id is the largest f_id inserted so far in fset
-    bool add_new = true;
-    RC_Feature *newseg = new RC_Feature(fl, fr, ref_t->strand, 0, this->t_id);
-    // RC_Feature* newfeature=NULL;
-    int fit = cache_idx < 0 ? fset.Count() - 1 : cache_idx;
-    int fp_id = -1;
-    if (fset.Count() > 0) {
-      if (*newseg < *(fset[fit])) {
-        bool eq = false;
-        while (*newseg < *(fset[fit]) || (eq = (*newseg == *(fset[fit])))) {
-          if (eq) {
-            add_new = false;
-            fp_id = fset[fit]->id; // fset[fit]->id;
-            break;
-          }
-          // newseg< fset[fit]
-          --fit;
-          if (fit < 0)
-            break; // newseg should be inserted at 0
-        } // while newseg<fset[fit]
-        if (add_new)
-          ++fit;
-        // newseg < fset[fit+1]
-        // we'll insert newseg at position fit+1
-      } else { // newseg >= *fset[fit]
-        bool eq = false;
-        while (*(fset[fit]) < *newseg || (eq = (*newseg == *(fset[fit])))) {
-          if (eq) {
-            add_new = false;
-            fp_id = fset[fit]->id;
-            break;
-          }
-          ++fit;
-          if (fit == fset.Count()) {
-            // newseg should be appended to the list
-            break;
-          }
-        }
-      }
-    } // check existing set
-    if (add_new) { // did not see this feature before
-      newseg->id = ++f_id;
-      if (fit < 0)
-        fit = fset.Add(newseg);
-      else
-        fset.sortInsert(fit, newseg);
-      if (fit < 0) {
-        GError("Error: feature %d-%d (%c) already in feature set!\n", newseg->l,
-               newseg->r, newseg->strand);
-      }
-      cache_idx = fit;
-      fp_id = fdata.Add(newseg) + 1;
-
-      GASSERT((uint)fdata.Count() == f_id);
-    } else { // feature seen before, update its parent list
-      fdata[fp_id - 1]->t_ids.Add(this->t_id);
-      delete newseg;
-    }
-
-    GASSERT(fdata[fp_id - 1]->id == (uint)fp_id);
-    fvec.Add(fdata[fp_id - 1]);
-  }
-
-  RC_TData(GffObj &s, uint id = 0)
-      : ref_t(&s), t_id(id), l(s.start), r(s.end), in_bundle(0),
-        eff_len(s.covlen), cov(0), fpkm(0), // strand(s.strand),
-        t_exons(false),
-        t_introns(false) { //, e_idx_cache(-1), i_idx_cache(-1) {
-  }
-
-  bool operator<(const RC_TData &o) const {
-    if (l != o.l)
-      return (l < o.l);
-    if (r != o.r)
-      return (r < o.r);
-    if (char c = (ref_t->strand - o.ref_t->strand))
-      return (c < 0);
-    return (strcmp(ref_t->getID(), o.ref_t->getID()) < 0);
-  }
-  bool operator==(const RC_TData &o) const {
-    if (t_id != 0 && o.t_id != 0)
-      return (t_id == o.t_id);
-    return (l == o.l && r == o.r && ref_t->strand == o.ref_t->strand &&
-            strcmp(ref_t->getID(), o.ref_t->getID()) == 0);
-  }
-};
-
-struct RC_BundleData {
-  int init_lmin;
-  int lmin;
-  int rmax;
-  GPVec<RC_TData>
-      g_tdata; // raw counting data for all transcripts in this bundle
-  // RC_TData::t_id-1 = the element index in this array
-  GList<RC_Feature>
-      g_exons; // set of guide exons in this bundle, sorted by start coordinate
-  GList<RC_Feature> g_introns; // set of guide introns in this bundle, sorted by
-                               // start coordinate
-  // RC_FeatIt xcache; //cache the first exon overlapping xcache_pos to speed up
-  // exon-overlap queries (findOvlExons())
-  int xcache;     // exons index of the first exon overlapping xcache_pos
-  int xcache_pos; // left coordinate of last cached exon overlap query
-                  // (findOvlExons())
-
-  // local (bundle) stable order tables of guide features
-  GPVec<RC_TData> *bundle_RC_tdata; // pointer to the global RC tdata table
-  // RC_Feature::id-1 = the index in these arrays:
-  GPVec<RC_Feature> *bundle_RC_exons;   // pointer to local exon RC data
-  GPVec<RC_Feature> *bundle_RC_introns; // pointer to local intron RC data
-  // local exon/intron ids within the bundle
-  uint c_exon_id;
-  uint c_intron_id;
-  //--
-  RC_BundleData(int t_l = 0, int t_r = 0, GPVec<RC_TData> *rc_tdata = NULL,
-                GPVec<RC_Feature> *rc_exons = NULL,
-                GPVec<RC_Feature> *rc_introns = NULL)
-      : init_lmin(0), lmin(t_l), rmax(t_r), g_tdata(false),
-        // features:(sorted, free, unique)
-        g_exons(true, false, true), g_introns(true, false, true), xcache(0),
-        xcache_pos(0), bundle_RC_tdata(rc_tdata), bundle_RC_exons(rc_exons),
-        bundle_RC_introns(rc_introns), c_exon_id(0), c_intron_id(0) {
-
-    bundle_RC_exons = new GPVec<RC_Feature>(true);
-    bundle_RC_introns = new GPVec<RC_Feature>(true);
-  }
-
-  ~RC_BundleData() {
-
-    delete bundle_RC_exons;
-    delete bundle_RC_introns;
-  }
-
-  uint addTranscript(
-      GffObj &t) { // should return the guide index in *guides_RC_tdata
-
-    if (lmin == 0 || lmin > (int)t.start)
-      lmin = t.start;
-    if (rmax == 0 || rmax < (int)t.end)
-      rmax = t.end;
-
-    GASSERT(t.uptr); // we should always have a RC_TData for each guide
-    RC_TData *tdata = (RC_TData *)(t.uptr);
-    g_tdata.Add(tdata);
-    tdata->rc_addFeatures(c_exon_id, g_exons, *bundle_RC_exons, c_intron_id,
-                          g_introns, *bundle_RC_introns);
-    return tdata->t_id;
-  }
-
-  bool findOvlExons(GArray<RC_ExonOvl> &exovls, int hl, int hr,
-                    char strand = '.', int mate_pos = 0,
-                    bool update_cache = true) {
-    // exovls should be clear, unless the caller knows what s/he's doing
-    bool hasOverlaps = false;
-    if (g_exons.Count() == 0)
-      return false;
-    RC_Feature q(hl, hr);
-    int xstart = 0;
-    bool no_cache = (xcache_pos == 0 || xcache_pos > hl);
-    if (no_cache) {
-      if (update_cache) {
-        // xcache=exons.end();
-        xcache = g_exons.Count() - 1;
-        xcache_pos = 0;
-      }
-    } else
-      xstart = xcache; // must have a valid value
-    bool upd_cache(update_cache);
-    int last_checked_exon = g_exons.Count() - 1;
-    for (int p = xstart; p < g_exons.Count(); ++p) {
-      last_checked_exon = p;
-      int l = g_exons[p]->l;
-      int r = g_exons[p]->r;
-      if (l > hr)
-        break;
-      if (hl > r)
-        continue;
-      // exon overlap here
-      int ovlen = 0;
-      if (hl < l) {
-        ovlen = (hr < r ? hr - l + 1 : r - l + 1);
-      } else { // l<=hl
-        ovlen = (hr < r ? hr - hl + 1 : r - hl + 1);
-      }
-      if (upd_cache) {
-        // cache first overlap
-        xcache = p;
-        upd_cache = false;
-      }
-      if (strand != '.' && strand != g_exons[p]->strand)
-        continue; // non-matching strand
-      int mate_ovl = 0;
-      if (mate_pos && mate_pos + 10 > l && mate_pos + 5 < r)
-        mate_ovl = 1; // mate read likely overlaps this exon
-      if (mate_ovl || ovlen >= 5) {
-        // TODO: check this, arbitrary ovl minimum of 5bp
-        hasOverlaps = true;
-        RC_ExonOvl fovl(g_exons[p], ovlen, mate_ovl);
-        exovls.Add(fovl);
-      }
-    }
-    if (update_cache) {
-      if (upd_cache)
-        xcache = last_checked_exon; // there was no overlap found
-      xcache_pos = hl;
-    }
-    return hasOverlaps;
-  }
-
-  RC_Feature *findIntron(int hl, int hr, char strand) {
-    int fidx = 0;
-    RC_Feature *r = NULL;
-    RC_Feature t(hl, hr, strand);
-    if (g_introns.Found(&t, fidx))
-      r = g_introns[fidx];
-    return r;
-  }
-};
-
-void rc_update_exons(RC_BundleData &rc);
-
 // Bundle data structure, holds input data parsed from BAM file
 struct BundleData {
-  BundleStatus status;
+  BundleStatus status; // bundle status
 
   int idx; // index in the main bundles array
-  int start;
-  int end;
+  int start; // bundle start
+  int end; // bundle end
   unsigned long num_reads; // number of reads in this bundle
   double num_fragments;    // aligned read/pairs
 
   GStr refseq;           // reference sequence name
-  char *gseq;            // actual genomic sequence for the bundle
-  GList<CReadAln> reads; // list of reads in bundle
-  GList<CJunction> junction;
-  GPVec<GffObj> guides;
-  RC_BundleData *rc_data;
+  char *gseq;            // genomic sequence for the bundle
+  GList<CReadAln> reads; // all reads in bundle
+  GPVec<GffObj> guides; // all guides in bundle
 
-  BundleData()
-      : status(BundleStatus::BUNDLE_STATUS_CLEAR), idx(0), start(0), end(0),
-        num_reads(0), num_fragments(0), refseq(), gseq(NULL),
-        reads(false, true), // readlist(sorted, free_elements)
-        junction(true, true, true), guides(false), rc_data(NULL) {}
-
-  // This is only called when the bundle is valid and ready to be processed
+BundleData():status(BundleStatus::BUNDLE_STATUS_CLEAR), idx(0), start(0), end(0), 
+			refseq(), gseq(NULL), reads(false, true), guides(false) //rc_data(NULL) { } // sorted, free elements
+			{}
+ 
+  // Called when the bundle is valid and ready to be processed
   void getReady(int curr_start, int curr_end) {
     start = curr_start;
     end = curr_end;
-
-    // Tag all these guides
-    for (int i = 0; i < this->guides.Count(); ++i) {
-      RC_TData *tdata = (RC_TData *)(guides[i]->uptr);
-      tdata->in_bundle = 1;
-    }
     status = BundleStatus::BUNDLE_STATUS_READY;
   }
 
-  // Create new RC_BundleData
-  void rc_init(GffObj *t, GPVec<RC_TData> *rc_tdata,
-               GPVec<RC_Feature> *rc_edata, GPVec<RC_Feature> *rc_idata) {
-
-    if (rc_data == NULL) {
-      rc_data =
-          new RC_BundleData(t->start, t->end, rc_tdata, rc_edata, rc_idata);
-    }
-  }
-
-  void keepGuide(GffObj *t, GPVec<RC_TData> *rc_tdata = NULL,
-                 GPVec<RC_Feature> *rc_edata = NULL,
-                 GPVec<RC_Feature> *rc_idata = NULL) {
-    if (rc_data == NULL) {
-      rc_init(t, rc_tdata, rc_edata, rc_idata);
-    }
+  void keepGuide(GffObj *t) {
     guides.Add(t);
-    t->udata = (int)rc_data->addTranscript(*t);
   }
-
-  bool evalReadAln(GReadAlnData &alndata, char &strand);
 
   void Clear() {
 
     guides.Clear();
     reads.Clear();
-    junction.Clear();
+    // TODO: Think about managing this with a unique_ptr
+    GFREE(gseq);
 
     start = 0;
     end = 0;
     status = BundleStatus::BUNDLE_STATUS_CLEAR;
-    num_reads = 0;
-    num_fragments = 0;
-
-    delete rc_data;
-    GFREE(gseq);
-    rc_data = NULL;
   }
 
   ~BundleData() { Clear(); }
 };
-
-extern GStr tmp_path;
-extern GStr cram_ref;
-extern bool keepTempFiles;
 
 struct BamIO {
 protected:

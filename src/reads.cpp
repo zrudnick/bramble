@@ -7,7 +7,7 @@ extern bool LONG_READS;
 static GStr read_id("",
                     256); // Prevent repeated reallocation for each parsed read
 
-void process_exons(GSamRecord *brec, CReadAln *readaln, GReadAlnData &alndata) {
+void process_exons(GSamRecord *brec, CReadAln *readaln) {
   auto exons = brec->exons;
   for (int i = 0; i < exons.Count(); i++) {
     readaln->len += exons[i].len();
@@ -100,16 +100,12 @@ void process_paired_reads(BundleData &bundle, int bundle_start, int read_start,
 }
 
 void process_read_in(uint bundle_start, uint bundle_end, BundleData &bundle,
-                     GHash<int> &hashread, GReadAlnData &alndata,
-                     GSamRecord *brec) {
+                     GHash<int> &hashread, GSamRecord *brec, char strand, int nh, int hi) {
 
   // Skip secondary alignments
   // if (brec->flags() & BAM_FSECONDARY) return;
 
   // Extract alignment information
-  char strand = alndata.strand;
-  int nh = alndata.nh;
-  int hi = alndata.hi;
   int read_start = brec->start;
 
   // Create new read alignment
@@ -117,7 +113,7 @@ void process_read_in(uint bundle_start, uint bundle_end, BundleData &bundle,
   readaln->longread = (LONG_READS || brec->uval);
 
   // Process exons
-  process_exons(brec, readaln, alndata);
+  process_exons(brec, readaln);
 
   // Add read to bundle
   int n = add_new_read(bundle, readaln, brec);

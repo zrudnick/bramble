@@ -10,6 +10,8 @@
 
 extern bool USE_FASTA;
 uint32_t overhang_threshold = 8;
+// NOTE: a uint8_t cannot hold a value of 1000, only up to 255
+const uint32_t max_mappings_per_read = 1000;
 using tid_t = uint32_t;
 
 /**
@@ -67,7 +69,7 @@ std::unique_ptr<g2tTree> make_g2t_tree(BundleData *bundle) {
 
     for (int j = 0; j < guide->exons.Count(); j++) {
       uint g_start, g_end;
-      if (strand == '+' || strand == 1) {
+      if (strand == '+') {
         g_start = guide->exons[j]->start - bundle->start;
         g_end = guide->exons[j]->end - bundle->start;
       } else {
@@ -122,7 +124,7 @@ std::string extract_sequence(const char *gseq, uint start, uint length,
 
   // Get substring (or reverse complement)
   std::string seq(gseq + start, length);
-  if (strand == '-' || strand == -1) {
+  if (strand == '-') {
     seq = reverse_complement(seq);
   }
   return seq;
@@ -142,7 +144,7 @@ bool check_backward_overhang(IntervalNode *interval, uint exon_start,
   if (overhang_length > overhang_threshold)
     return false; // overhang is too long
 
-  if (read_strand == '+' || read_strand == 1) {
+  if (read_strand == '+') {
     overhang_start = exon_start;
   } else {
     uint relative_end = bundle->end - bundle->start;
@@ -166,7 +168,7 @@ bool check_backward_overhang(IntervalNode *interval, uint exon_start,
           std::min(overhang_length, prev_interval->end - prev_interval->start);
       uint prev_overhang_start;
 
-      if (read_strand == '+' || read_strand == 1) {
+      if (read_strand == '+') {
         prev_overhang_start = prev_interval->end - check_length;
       } else {
         prev_overhang_start = bundle->end - prev_interval->end - bundle->start;
@@ -189,12 +191,16 @@ bool check_backward_overhang(IntervalNode *interval, uint exon_start,
 }
 
 std::set<tid_t> collapse_intervals(std::vector<IntervalNode *> sorted_intervals,
-                                   uint exon_start, bool is_first_exon,
-                                   char read_strand, g2tTree *g2t,
+                                   uint exon_start, 
+                                   bool is_first_exon, 
+                                   bool is_last_exon,
+                                   char read_strand, 
+                                   g2tTree *g2t,
                                    BundleData *bundle,
                                    bool &used_backwards_overhang,
                                    uint &soft_clip,
-                                   IntervalNode *prev_last_interval) {
+                                   IntervalNode *prev_last_interval
+                                   ) {
 
   // 1. Ensure each read exon is fully covered by a series of adjacent guide
   // exons
@@ -236,7 +242,7 @@ std::set<tid_t> collapse_intervals(std::vector<IntervalNode *> sorted_intervals,
     return {};
   }
 
-  // Following intervals: just check for TIDs, remove any we don't see
+  // Following intervals: check for TIDs, remove any we don't see
   for (size_t i = 1; i < sorted_intervals.size(); ++i) {
     const auto &interval = sorted_intervals[i];
 
@@ -283,7 +289,7 @@ bool check_forward_overhang(IntervalNode *interval, uint exon_end,
   if (overhang_length > overhang_threshold)
     return false; // overhang is too long
 
-  if (read_strand == '+' || read_strand == 1) {
+  if (read_strand == '+') {
     overhang_start = interval->end;
   } else {
     uint relative_end = bundle->end - bundle->start;
@@ -365,9 +371,12 @@ uint get_match_pos(IntervalNode *interval, tid_t tid, char read_strand,
  * @param bam_info read_info for all reads in bundle
  * @param read_index index of read in bundle->reads
  */
-void process_read_out(BundleData *&bundle, uint32_t read_index, g2tTree *g2t,
+void process_read_out(BundleData *&bundle, 
+                      uint32_t read_index, 
+                      g2tTree *g2t,
                       std::map<tid_t, ReadInfo *> &bam_info,
-                      std::vector<uint32_t> group) {
+                      std::vector<uint32_t> group
+                      ) {
 
   CReadAln *read = bundle->reads[read_index];
   std::set<std::tuple<tid_t, uint>> matches;
@@ -387,7 +396,11 @@ void process_read_out(BundleData *&bundle, uint32_t read_index, g2tTree *g2t,
     GSeg curr_exon = read_exons[j];
     uint exon_start, exon_end;
 
-    if (read_strand == '+' || read_strand == 1) {
+    std::vector<IntervalNode*> sorted_intervals;
+
+    // TODO: Improve method of inferring splice strand
+    if (read_strand == '+' || read_strand == '.') {
+      if (read_strand == '.') read_strand = '+'; // this should only happen for first read exon
       exon_start = curr_exon.start - bundle->start;
       exon_end = curr_exon.end - bundle->start;
     } else {
@@ -396,9 +409,14 @@ void process_read_out(BundleData *&bundle, uint32_t read_index, g2tTree *g2t,
     }
 
     // Find all guide intervals that contain the read exon
-    auto sorted_intervals =
-        g2t->getIntervals(exon_start, exon_end, read_strand);
+    sorted_intervals = g2t->getIntervals(exon_start, exon_end, read_strand);
 
+     // If uncertain strand and forward didn't work, try reverse
+    if (read_strand == '.' && sorted_intervals.empty()) { // this should only happen for first read exon
+      read_strand = '-';
+      sorted_intervals = g2t->getIntervals(exon_start, exon_end, read_strand);
+    }
+    
     // No overlap at all
     if (sorted_intervals.empty())
       return;
@@ -420,7 +438,7 @@ void process_read_out(BundleData *&bundle, uint32_t read_index, g2tTree *g2t,
     // *^*^*^ *^*^*^ *^*^*^ *^*^*^
 
     auto exon_tids = collapse_intervals(
-        sorted_intervals, exon_start, is_first_exon, read_strand, g2t, bundle,
+        sorted_intervals, exon_start, is_first_exon, is_last_exon, read_strand, g2t, bundle,
         used_backwards_overhang, soft_clip_front, prev_last_interval);
 
     // Exon extends beyond guide interval (USE_FASTA mode)
@@ -431,8 +449,7 @@ void process_read_out(BundleData *&bundle, uint32_t read_index, g2tTree *g2t,
         soft_clip_back = exon_end - last_interval->end;
 
       // Exon extends beyond guide interval (no fasta)
-    } else if (last_interval->end < exon_end &&
-               (exon_end - last_interval->end < 10)) {
+    } else if ((is_last_exon) && last_interval->end < exon_end) {
       soft_clip_back = exon_end - last_interval->end;
       return;
 
@@ -470,7 +487,6 @@ void process_read_out(BundleData *&bundle, uint32_t read_index, g2tTree *g2t,
   }
 
   // If we reach here, read is valid
-  // Set up read_info for this read group
 
   for (auto &i : group) {
     CReadAln *group_read = bundle->reads[i];
@@ -482,7 +498,7 @@ void process_read_out(BundleData *&bundle, uint32_t read_index, g2tTree *g2t,
     read_info->brec = group_read->brec;
     read_info->read_index = i;
     read_info->read_size = group_read->len;
-    bam_info[i] = read_info;
+    read_info->nh_i = matches.size();
 
     // Record mate information
     read_info->mate_name = group_read_name;
@@ -490,6 +506,7 @@ void process_read_out(BundleData *&bundle, uint32_t read_index, g2tTree *g2t,
     read_info->is_first_mate = (group_read->brec->flags() & BAM_FREAD1);
     read_info->is_reverse = (group_read->brec->flags() & BAM_FREVERSE);
     read_info->mate_is_reverse = (group_read->brec->flags() & BAM_FMREVERSE);
+    bam_info[i] = read_info;
   }
   return;
 }
@@ -604,7 +621,7 @@ void process_mate_pairs(BundleData *bundle,
     auto read_info = read_info_it->second;
 
     // Skip reads with too many mappings
-    if (read_info->matches.size() > MAX_MAPPINGS_PER_READ) {
+    if (read_info->matches.size() > max_mappings_per_read) {
       continue;
     }
 
