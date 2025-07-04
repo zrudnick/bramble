@@ -5,14 +5,14 @@
 
 #include "CLI/CLI11.hpp"
 #include "GThreads.h" // for THREADING_ENABLED
-#include "bam.h"
-#include "bramble.h"
 #include "htslib/sam.h"
 #include "quill/Backend.h"
 #include "quill/Frontend.h"
 #include "quill/LogMacros.h"
 #include "quill/Logger.h"
 #include "quill/sinks/ConsoleSink.h"
+#include "bam.h"
+#include "bramble.h"
 #include "reads.h"
 #include "tree.h"
 
@@ -23,7 +23,7 @@
 bramble <in.bam ..> [-G <guide_gff>] [-o <out.bam>] [-p <cpus>] [-S <genome.fa>] \n\
  [--help] [--version] [--verbose] [--long] [--fr] [--rf] \n\
  \n\
-Convert BAM file coordinates from genomic to transcriptomic.\n\
+A program to project spliced genomic alignments onto the transcriptome.\n\
 Options:\n\
  --help     : print this usage message and exit\n\
  --version  : print just the version at stdout and exit\n\
@@ -32,16 +32,16 @@ Options:\n\
  --fr       : assume stranded library fw-firststrand\n\
  --rf       : assume stranded library fw-secondstrand\n\
  -G <file>  : reference annotation to use for guiding the BAM conversion (GTF/GFF)\n\
- -o <file>  : output path/file name for the converted BAM file (default: stdout)\n\
+ -o <file>  : output path/file name for the projected alignments (default: stdout)\n\
  -p <int>   : number of threads (CPUs) to use (default: 1)\n\
  -S <file>  : genome sequence file (FASTA format)\n\
 "
 
-bool VERBOSE = false;    // Verbose, --verbose
-bool LONG_READS = false; // BAM file contains long reads, --long
-bool FR_STRAND = false;  // Read 1 is on forward strand, --fr
-bool RF_STRAND = false;  // Read 1 is on reverse strand, --fr
-bool USE_FASTA = false;  // Use FASTA for reducing soft clips
+bool VERBOSE = false;     // Verbose, --verbose
+bool LONG_READS = false;  // BAM file contains long reads, --long
+bool FR_STRAND = false;   // Read 1 is on forward strand, --fr
+bool RF_STRAND = false;   // Read 1 is on reverse strand, --fr
+bool USE_FASTA = false;   // Use FASTA for reducing soft clips
 
 FILE *f_out = NULL;       // Default: stdout
 uint8_t n_threads = 1;    // Threads, -p
@@ -77,110 +77,11 @@ GConditionVar
 
 GConditionVar have_clear; // Will notify when bundle buf space available
 GMutex queue_mutex;       // Controls bundle_queue and bundles access
-GFastMutex log_mutex; // Only when verbose - to avoid mangling the log output
+GFastMutex log_mutex;     // Only when verbose - to avoid mangling the log output
 GFastMutex reading_mutex;
 #endif
 
 bool no_more_bundles = false;
-
-// Process input parameters
-void process_options(GArgs &args) {
-  // Help
-  if (args.getOpt("help")) {
-    fprintf(stdout, "%s", USAGE);
-    exit(0);
-  }
-
-  // Version
-  if (args.getOpt("version")) {
-    fprintf(stdout, "%s\n", VERSION);
-    exit(0);
-  }
-
-  // FR (Forward-Reverse)
-  // First read is on forward strand, second read is on reverse strand
-  if (args.getOpt("fr")) {
-    FR_STRAND = true;
-  }
-
-  // RF (Reverse-Forward)
-  // First read is on reverse strand, second read is on forward strand
-  if (args.getOpt("rf")) {
-    RF_STRAND = true;
-    if (FR_STRAND) {
-      GError("Error: --fr and --rf options are incompatible.\n");
-    }
-  }
-
-  // Verbose
-  if (args.getOpt("verbose")) {
-    VERBOSE = true;
-    fprintf(stderr, "Running Bramble " VERSION ". Command line:\n");
-    args.printCmdLine(stderr);
-  }
-
-  // Long Reads
-  if (args.getOpt("long")) {
-    LONG_READS = true;
-  }
-
-  // Number of Threads, -p
-  GStr s = args.getOpt('p');
-  if (!s.is_empty()) {
-    n_threads = s.asInt();
-    if (n_threads <= 0)
-      n_threads = 1;
-  }
-
-  // Reference Annotation, -G
-  s = args.getOpt('G');
-  if (!s.is_empty()) {
-    guide_gff = s;
-    if (!fileExists(guide_gff.chars()) > 1) {
-      GError("Error: reference annotation file (%s) not found.\n",
-             guide_gff.chars());
-    }
-  }
-
-  // Genome sequence file, -S
-  s = args.getOpt('S');
-  if (!s.is_empty()) {
-    gfasta = new GFastaDb(s.chars());
-    USE_FASTA = true;
-  }
-
-  // Output path, -o
-  s = args.getOpt('o');
-  if (!s.is_empty()) {
-    bam_path_out = s;
-    bam_file_out = bam_path_out;
-    GMessage("Output file: %s\n", bam_file_out);
-  } else {
-    GMessage("%s\nError: no output file name provided!\n", USAGE);
-    exit(1);
-  }
-
-  // Validate input files
-  int n_bam = args.startNonOpt();
-  if (n_bam < 1) {
-    GMessage("%s\nError: no input file provided!\n", USAGE);
-    exit(1);
-  }
-
-  if (guide_gff == NULL) {
-    GMessage("%s\nError: no input file provided!\n", USAGE);
-    exit(1);
-  }
-
-  // Process input alignment files
-  const char *ifn = NULL;
-  int i = 0;
-  while ((ifn = args.nextNonOpt()) != NULL) {
-    if (i == 0)
-      bam_file_in = ifn; // currently only uses first BAM file
-    i++;
-  }
-}
 
 // Check if there are more bundles
 bool has_more_bundles() {
@@ -329,17 +230,13 @@ int wait_for_data(BundleData *bundles) {
 }
 
 int main(int argc, char *argv[]) {
-  /*
-  GArgs args(argc, argv, "help;version;fr;rf;verbose;long;p:G:S:o:");
-  args.printError(USAGE, true);
-  process_options(args);
-  */
 
   quill::Backend::start();
   // Get a logger
-  quill::Logger *logger = quill::Frontend::create_or_get_logger(
-      "root",
-      quill::Frontend::create_or_get_sink<quill::ConsoleSink>("sink_id_1"));
+  // This segfaults on my system, not sure why
+  // quill::Logger *logger = quill::Frontend::create_or_get_logger(
+  //     "root",
+  //     quill::Frontend::create_or_get_sink<quill::ConsoleSink>("sink_id_1"));
 
   CLI::App app{
       "A program to project spliced genomic alignments onto the transcriptome",
@@ -370,7 +267,7 @@ int main(int argc, char *argv[]) {
 
   CLI11_PARSE(app, argc, argv);
 
-  LOG_INFO(logger, "command line parsed --- running bramble");
+  // LOG_INFO(logger, "command line parsed --- running bramble");
   // bam_file_in = new char[input_bam.size() + 1];
   // std::strcpy(bam_file_in, input_bam.c_str());
   bam_file_in = input_bam.c_str();
@@ -379,11 +276,6 @@ int main(int argc, char *argv[]) {
 
   const char *ERR_BAM_SORT =
       "\nError: the input alignment file is not sorted!\n";
-
-  // Table indexes for raw counts data
-  //GPVec<RC_TData> guides_RC_tdata( true); // Raw count data for all guide transcripts
-  //GPVec<RC_Feature> guides_RC_exons(true); // Raw count data for all guide exons
-  //GPVec<RC_Feature> guides_RC_introns( true); // Raw count data for all guide introns
 
   // ^**^^^*^**^^^*^**^^^*^**^^^*
   // Read in reference annotation
@@ -461,10 +353,6 @@ int main(int argc, char *argv[]) {
       fprintf(header_file, "@SQ\tSN:%s\tLN:%d\n", id, transcript_len);
     }
 
-    // Always keep a RC_TData pointer around, with additional info about guides
-    //RC_TData *tdata = new RC_TData(*guide, ++curr_tid);
-    //guide->uptr = tdata;
-    //guides_RC_tdata.Add(tdata);
     GRefData &grefdata = refguides[guide->gseq_id];
     grefdata.add(&gffreader, guide); // transcripts already sorted by location
   }
@@ -519,9 +407,9 @@ int main(int argc, char *argv[]) {
 
   GThread *threads = new GThread[n_threads]; // threads for processing bundles
   GPVec<BundleData> *bundle_queue =
-      new GPVec<BundleData>(false); // queue for holding loaded bundles
+      new GPVec<BundleData>(false);          // queue for holding loaded bundles
   BundleData *bundles =
-      new BundleData[n_threads + 1]; // redef with more bundles
+      new BundleData[n_threads + 1];         // redef with more bundles
 
   clear_data_pool.setCapacity(n_threads + 1);
 
@@ -807,12 +695,10 @@ int main(int argc, char *argv[]) {
 
           // Add all overlapping and transitively overlapping guides
           for (int i = first_transitive_overlap; i <= guide_idx; ++i) {
-            // bundle->keepGuide((*guides)[i], &guides_RC_tdata, &guides_RC_exons, &guides_RC_introns);
             bundle->keepGuide((*guides)[i]);
           }
         } else {
           // Directly overlapping guide
-          //bundle->keepGuide((*guides)[guide_idx], &guides_RC_tdata, &guides_RC_exons, &guides_RC_introns);
           bundle->keepGuide((*guides)[guide_idx]);
         }
         ++guide_idx;
@@ -840,7 +726,6 @@ int main(int argc, char *argv[]) {
           ++last_guide_idx;
           auto *guide = (*guides)[last_guide_idx];
           if (guide->end >= curr_bundle_start) {
-            //bundle->keepGuide(guide, &guides_RC_tdata, &guides_RC_exons, &guides_RC_introns);
             bundle->keepGuide(guide);
             if (curr_bundle_end < guide->end) {
               curr_bundle_end = guide->end;
@@ -878,7 +763,7 @@ int main(int argc, char *argv[]) {
   delete gfasta;
 
   f_out = stdout;
-  fprintf(f_out, "# ");
+  // fprintf(f_out, "# ");
   // args.printCmdLine(f_out);
   fprintf(f_out, "# Bramble version %s\n", VERSION);
 

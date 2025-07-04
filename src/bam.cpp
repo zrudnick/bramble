@@ -107,10 +107,10 @@ void update_cigar(bam1_t* b, uint32_t* cigar, uint32_t n_cigar) {
 }
 
 // Set mate information for a read
-MateInfo* set_mate_info(BamIO* io, const std::string& transcript_name, tid_t transcript_id, bam1_t* b, int tid, 
-    ReadInfo* read_info, g2tTree* g2t) {
+MateInfo* set_mate_info(BamIO* io, tid_t tid, bam1_t* b, 
+                        ReadInfo* read_info, g2tTree* g2t) {
     
-    auto mate_info = read_info->mate_info[transcript_id];
+    auto mate_info = read_info->mate_info[tid];
     if (!mate_info || !mate_info->valid_pair) {
         // No mate information available or invalid pair
         b->core.mtid = -1;
@@ -125,7 +125,8 @@ MateInfo* set_mate_info(BamIO* io, const std::string& transcript_name, tid_t tra
     
     if (mate_info->same_transcript) {
         // Both mates map to same transcript - use "=" for mate reference
-        b->core.mtid = tid;  // Same as current read's tid
+        //b->core.mtid = tid;  // Same as current read's tid
+        b->core.mtid = tid;
         b->core.mpos = mate_info->match_pos;
         b->core.flag |= BAM_FPROPER_PAIR;
         
@@ -145,8 +146,9 @@ MateInfo* set_mate_info(BamIO* io, const std::string& transcript_name, tid_t tra
         // Mates map to different transcripts
 
         // Get mate's transcript ID in BAM header
-        auto& mate_transcript_name = g2t->get_tid_name(mate_info->transcript_id);
-        int mate_tid = io->get_tid(mate_transcript_name.c_str());
+        //auto& mate_transcript_name = g2t->getTidName(mate_info->transcript_id);
+        //int mate_tid = io->get_tid(mate_transcript_name.c_str());
+        int32_t mate_tid = mate_info->transcript_id;
         if (mate_tid < 0) {
             // Mate transcript not found in header - treat as unmapped mate
             // This shouldn't happen
@@ -180,7 +182,7 @@ void set_nh_tag(bam1_t* b, uint nh_i) {
 }
 
 // Write bundle reads to BAM file
-void write_to_bam(BamIO* io, std::map<tid_t, ReadInfo*>& bam_info, g2tTree* g2t) {
+void write_to_bam(BamIO* io, std::map<read_id_t, ReadInfo*>& bam_info, g2tTree* g2t) {
     GSamRecord new_brec;
 
     for (const auto& pair : bam_info) {
@@ -205,9 +207,11 @@ void write_to_bam(BamIO* io, std::map<tid_t, ReadInfo*>& bam_info, g2tTree* g2t)
         bam1_t* b = new_brec.get_b();
 
         for (const auto& match : read_info->matches) {
-            tid_t transcript_id = std::get<0>(match);
-            auto& transcript_name = g2t->get_tid_name(transcript_id);
-            int tid = io->get_tid(transcript_name.c_str());
+            //tid_t transcript_id = std::get<0>(match);
+            //auto& transcript_name = g2t->getTidName(transcript_id);
+            //int tid = io->get_tid(transcript_name.c_str()); // could make tid from the get-go be io->get_tid
+
+            int32_t tid = std::get<0>(match);
             uint match_pos = std::get<1>(match);
                 
             // Set new coordinates
@@ -217,7 +221,8 @@ void write_to_bam(BamIO* io, std::map<tid_t, ReadInfo*>& bam_info, g2tTree* g2t)
             // TODO: choose matches to be secondary
 
             // Set mate information if available
-            auto mate_info = set_mate_info(io, transcript_name, transcript_id, b, tid, read_info, g2t);
+            // auto mate_info = set_mate_info(io, transcript_id, b, tid, read_info, g2t);
+            auto mate_info = set_mate_info(io, tid, b, read_info, g2t);
 
             // Write the read match to the BAM
             io->write(&new_brec);

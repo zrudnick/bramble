@@ -2,7 +2,7 @@
 
 
 For the `meson` build system. Currently, system dependencies are required for 
-`zlib`, `bz2`, and `lzma`, though these could be build as dependencies later
+`zlib`, `bz2`, and `lzma`, though these could be built as dependencies later
 if wanted (an attempt will be made using wrapdb to build `zlib` and `bz2` if
 not found on the system).
 

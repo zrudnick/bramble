@@ -34,13 +34,71 @@ using namespace std;
 #define MISMATCH_FRAC 0.02
 
 using tid_t = uint32_t;
+using read_id_t = uint32_t;
+
+struct BamIO {
+protected:
+  GSamReader *reader = nullptr;
+  GSamWriter *writer = nullptr;
+  GSamRecord *current_record = nullptr;
+  GStr input_bam;
+  GStr output_bam;
+  GStr header_sam;
+
+public:
+  BamIO(const GStr &in_bam, const GStr &out_bam, const GStr &sam_header)
+      : input_bam(in_bam), output_bam(out_bam), header_sam(sam_header) {}
+
+  void start() {
+    reader = new GSamReader(input_bam.chars());
+    writer = new GSamWriter(output_bam.chars(), header_sam.chars());
+
+    GSamRecord *next_rec = reader->next();
+    if (next_rec) {
+      current_record = next_rec;
+    }
+  }
+
+  GSamRecord *next() {
+    GSamRecord *result = current_record;
+
+    current_record = reader->next(); // null at EOF
+
+    return result;
+  }
+
+  void write(GSamRecord *rec) {
+    if (writer != nullptr && rec != nullptr) {
+      writer->write(rec);
+    }
+  }
+
+  int32_t get_tid(const char *transcript_id) {
+    return writer->get_tid(transcript_id);
+  }
+
+  void stop() {
+
+    if (reader != nullptr) {
+      delete reader;
+      reader = nullptr;
+    }
+    if (writer != nullptr) {
+      delete writer;
+      writer = nullptr;
+    }
+    if (current_record != nullptr) {
+      delete current_record;
+      current_record = nullptr;
+    }
+  }
+};
 
 struct IntervalNode {
   uint32_t start, end;
   uint32_t max_end; // Maximum end value in subtree (interval tree augmentation)
   uint32_t height;
   std::set<tid_t> tids;
-  // does this need to be an ordered map?
   std::unordered_map<tid_t, uint32_t> tid_cum_len;
 
   IntervalNode *left;
@@ -61,6 +119,7 @@ class IntervalTree {
 private:
   IntervalNode *root;
   std::set<tid_t> all_tids;
+  //std::unordered_map<tid_t, std::vector<IntervalNode*>> tid_chains;
 
   int getHeight(IntervalNode *node) { return node ? node->height : 0; }
 
@@ -215,7 +274,7 @@ public:
   ~IntervalTree() { destroyTree(root); }
 
   void insert(uint32_t start, uint32_t end,
-              const tid_t &tid) { // const std::string &tid) {
+              const tid_t &tid) {
     // Insert tid to set of all TIDs
     all_tids.insert(tid);
 
@@ -226,7 +285,6 @@ public:
     if (overlapping.empty()) {
       auto newNode = new IntervalNode(start, end);
       newNode->tids.insert(tid);
-      // newNode->height = 1;
       insertNode(newNode);
       return;
     }
@@ -314,7 +372,6 @@ public:
     // Batch insert new nodes
     for (auto *node : new_nodes) {
       node->tids.insert(tid);
-      // node->height = 1;
       insertNode(node);
     }
   }
@@ -380,7 +437,6 @@ private:
     // Create new node for second half
     auto newNode = new IntervalNode(split_point, node->end);
     newNode->tids = tids;
-    // newNode->height = 1;
 
     node->end = split_point; // update original node to represent first half
     insertNode(newNode);     // insert the new node into tree
@@ -413,6 +469,8 @@ private:
     // Get all nodes with this TID in genomic order
     auto tidNodes = getTidNodes(tid);
 
+    // Note: around 15s faster to sort here than use tid_chains
+
     // Sort by genomic position
     std::sort(tidNodes.begin(), tidNodes.end(),
               [](IntervalNode *a, IntervalNode *b) {
@@ -420,6 +478,9 @@ private:
                   return a->start < b->start;
                 return a->end < b->end;
               });
+
+    // Add to tid_chains
+    //tid_chains[tid] = tidNodes;
 
     // Build bidirectional chain
     for (size_t i = 0; i < tidNodes.size(); ++i) {
@@ -430,49 +491,9 @@ private:
     }
   }
 
-public:
-  // For debugging (print_tree)
-  std::vector<IntervalNode *> getOrderedIntervals() {
-    std::vector<IntervalNode *> result;
-    inorderTraversal(root, result);
-    return result;
-  }
-
-  // Find all intervals that overlap with the given range
-  std::vector<IntervalNode *> findOverlapping(uint32_t start, uint32_t end) {
-    std::vector<IntervalNode *> result;
-    findOverlappingHelper(root, start, end, result);
-    std::sort(
-        result.begin(), result.end(),
-        [](IntervalNode *a, IntervalNode *b) { return a->start < b->start; });
-    return result;
-  }
-
-  // Get next node in chain for a specific TID
-  IntervalNode *
-  getNextNodeForTid(IntervalNode *node,
-                    const tid_t &tid) { // const std::string &tid) {
-    auto it = node->tid_next_nodes.find(tid);
-    return (it != node->tid_next_nodes.end()) ? it->second : nullptr;
-  }
-
-  // Get previous node in chain for a specific TID
-  IntervalNode *
-  getPrevNodeForTid(IntervalNode *node,
-                    const tid_t &tid) { // const std::string &tid) {
-    auto it = node->tid_prev_nodes.find(tid);
-    return (it != node->tid_prev_nodes.end()) ? it->second : nullptr;
-  }
-
-  // Build all TID chains after tree construction is complete
-  void buildAllTidChains() {
-    for (const auto &tid : all_tids) {
-      buildTidChain(tid);
-    }
-  }
-
   // Precompute cumulative lengths so that match positions can be calculated
   void precomputeCumulativeLengths(const tid_t &tid) { // std::string &tid) {
+    //auto tidChain = tid_chains[tid];
     auto tidChain = getTidNodes(tid);
 
     // Need to sort by genomic position
@@ -502,6 +523,53 @@ public:
     }
   }
 
+public:
+  // For debugging (print_tree)
+  std::vector<IntervalNode *> getOrderedIntervals() {
+    std::vector<IntervalNode *> result;
+    inorderTraversal(root, result);
+    return result;
+  }
+
+  // Find all intervals that overlap with the given range
+  std::vector<IntervalNode *> findOverlapping(uint32_t start, uint32_t end) {
+    std::vector<IntervalNode *> result;
+    findOverlappingHelper(root, start, end, result);
+    std::sort(
+        result.begin(), result.end(),
+        [](IntervalNode *a, IntervalNode *b) { return a->start < b->start; });
+    return result;
+  }
+
+  // Get next node in chain for a specific TID
+  IntervalNode *
+  getNextNodeForTid(IntervalNode *node,
+                    const tid_t &tid) { // const std::string &tid) {
+    // if (tid_chains.find(tid) == tid_chains.end()) {
+    //   buildTidChain(tid);
+    // }
+    auto it = node->tid_next_nodes.find(tid);
+    return (it != node->tid_next_nodes.end()) ? it->second : nullptr;
+  }
+
+  // Get previous node in chain for a specific TID
+  IntervalNode *
+  getPrevNodeForTid(IntervalNode *node,
+                    const tid_t &tid) { // const std::string &tid) {
+    // if (tid_chains.find(tid) == tid_chains.end()) {
+    //   buildTidChain(tid);
+    // }
+    auto it = node->tid_prev_nodes.find(tid);
+    return (it != node->tid_prev_nodes.end()) ? it->second : nullptr;
+  }
+
+  // Build all TID chains after tree construction is complete
+  void buildAllTidChains() {
+    for (const auto &tid : all_tids) {
+      buildTidChain(tid);
+    }
+  }
+
   // Precompute for all TIDs in the tree
   void precomputeAllCumulativeLengths() {
     for (const auto &tid : all_tids) {
@@ -522,6 +590,7 @@ struct g2tTree {
   std::unordered_map<std::string, tid_t> name_id_map;
   std::vector<std::string> tid_names;
   const std::string invalid_name{"INVALID TID"};
+
   IntervalTree *fw_tree; // tree for forward strand guides
   IntervalTree *rc_tree; // tree for reverse strand guides
 
@@ -546,22 +615,33 @@ private:
   }
 
 public:
-  // if tid_name is already part of the tree, then return the existing
+  // If tid_name is already part of the tree, then return the existing
   // tid for it, otherwise give it the next available tid and return that.
-  tid_t insert_tid_string(const std::string &tid_name) {
-    tid_t next_tid = static_cast<tid_t>(name_id_map.size());
+  tid_t insertTidString(const char *&tid_name, BamIO* io) {
+    //tid_t next_tid = static_cast<tid_t>(name_id_map.size());
+    tid_t tid = io->get_tid(tid_name);
+
+    // auto lookup = name_id_map.find(tid_name);
+    // if (lookup == name_id_map.end()) {
+    //   name_id_map.insert({tid_name, next_tid});
+    //   tid_names.push_back(tid_name);
+    //   return next_tid;
+
+    // } else {
+    //   return lookup->second;
+    // }
+
     auto lookup = name_id_map.find(tid_name);
     if (lookup == name_id_map.end()) {
-      name_id_map.insert({tid_name, next_tid});
+      name_id_map.insert({tid_name, tid});
       tid_names.push_back(tid_name);
-      return next_tid;
-    } else {
-      return lookup->second;
     }
+
+    return tid;
   }
 
   // get the string name given an id
-  const std::string &get_tid_name(tid_t id) {
+  const std::string &getTidName(tid_t id) {
     return (id < tid_names.size()) ? tid_names[id] : invalid_name;
   }
 
@@ -575,7 +655,6 @@ public:
   }
 
   // Call this after loading all transcript data
-  // TODO: only build when first see TID in read
   void buildAllTidChains() {
     fw_tree->buildAllTidChains();
     rc_tree->buildAllTidChains();
@@ -868,64 +947,6 @@ BundleData():status(BundleStatus::BUNDLE_STATUS_CLEAR), idx(0), start(0), end(0)
   }
 
   ~BundleData() { Clear(); }
-};
-
-struct BamIO {
-protected:
-  GSamReader *reader = nullptr;
-  GSamWriter *writer = nullptr;
-  GSamRecord *current_record = nullptr;
-  GStr input_bam;
-  GStr output_bam;
-  GStr header_sam;
-
-public:
-  BamIO(const GStr &in_bam, const GStr &out_bam, const GStr &sam_header)
-      : input_bam(in_bam), output_bam(out_bam), header_sam(sam_header) {}
-
-  void start() {
-    reader = new GSamReader(input_bam.chars());
-    writer = new GSamWriter(output_bam.chars(), header_sam.chars());
-
-    GSamRecord *next_rec = reader->next();
-    if (next_rec) {
-      current_record = next_rec;
-    }
-  }
-
-  GSamRecord *next() {
-    GSamRecord *result = current_record;
-
-    current_record = reader->next(); // null at EOF
-
-    return result;
-  }
-
-  void write(GSamRecord *rec) {
-    if (writer != nullptr && rec != nullptr) {
-      writer->write(rec);
-    }
-  }
-
-  int32_t get_tid(const char *transcript_id) {
-    return writer->get_tid(transcript_id);
-  }
-
-  void stop() {
-
-    if (reader != nullptr) {
-      delete reader;
-      reader = nullptr;
-    }
-    if (writer != nullptr) {
-      delete writer;
-      writer = nullptr;
-    }
-    if (current_record != nullptr) {
-      delete current_record;
-      current_record = nullptr;
-    }
-  }
 };
 
 struct WorkerArgs {

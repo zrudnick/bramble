@@ -11,8 +11,10 @@
 extern bool USE_FASTA;
 uint32_t overhang_threshold = 8;
 // NOTE: a uint8_t cannot hold a value of 1000, only up to 255
+// oops :(
 const uint32_t max_mappings_per_read = 1000;
 using tid_t = uint32_t;
+using read_id_t = uint32_t; // read index in bundle
 
 /**
  * Prints g2t tree with nodes sorted by genome coordinate
@@ -26,7 +28,7 @@ void print_tree(g2tTree *g2t) {
   for (auto &interval : intervals) {
     printf("(%u, %u)", interval->start, interval->end);
     for (auto &tid : interval->tids) {
-      printf(" %d ", tid); // tid.c_str());
+      printf(" %d ", tid);
       printf(" %d ", interval->tid_cum_len[tid]);
     }
     printf("-> ");
@@ -38,7 +40,7 @@ void print_tree(g2tTree *g2t) {
   for (auto &interval : intervals) {
     printf("(%u, %u)", interval->start, interval->end);
     for (auto &tid : interval->tids) {
-      printf(" %d ", tid); // tid.c_str());
+      printf(" %d ", tid);
       printf(" %d ", interval->tid_cum_len[tid]);
     }
     printf("-> ");
@@ -52,7 +54,7 @@ void print_tree(g2tTree *g2t) {
  * @param bundle current bundle of reads
  * @return complete g2t tree for bundle
  */
-std::unique_ptr<g2tTree> make_g2t_tree(BundleData *bundle) {
+std::unique_ptr<g2tTree> make_g2t_tree(BundleData *bundle, BamIO *io) {
   GPVec<GffObj> guides = bundle->guides;
 
   if (guides.Count() == 0)
@@ -64,8 +66,8 @@ std::unique_ptr<g2tTree> make_g2t_tree(BundleData *bundle) {
   for (int i = 0; i < guides.Count(); i++) {
     GffObj *guide = guides[i];
     char strand = guide->strand;
-    std::string tid_string = guide->getID();
-    tid_t tid = g2t->insert_tid_string(tid_string);
+    const char *tid_string = guide->getID(); // we don't strictly need this
+    tid_t tid = g2t->insertTidString(tid_string, io);
 
     for (int j = 0; j < guide->exons.Count(); j++) {
       uint g_start, g_end;
@@ -133,11 +135,9 @@ std::string extract_sequence(const char *gseq, uint start, uint length,
 // Function to check backward overhang (left extension)
 bool check_backward_overhang(IntervalNode *interval, uint exon_start,
                              char read_strand,
-                             // std::set<std::string>& exon_tids,
                              std::set<tid_t> &exon_tids, g2tTree *g2t,
                              BundleData *bundle) {
 
-  // std::set<std::string> tmp_exon_tids;
   std::set<tid_t> tmp_exon_tids;
   uint overhang_start;
   uint overhang_length = interval->start - exon_start;
@@ -183,7 +183,6 @@ bool check_backward_overhang(IntervalNode *interval, uint exon_start,
     }
   }
   std::swap(exon_tids, tmp_exon_tids);
-  // exon_tids = tmp_exon_tids;
   tmp_exon_tids.clear();
 
   // Return true if we found matching transcripts
@@ -193,7 +192,6 @@ bool check_backward_overhang(IntervalNode *interval, uint exon_start,
 std::set<tid_t> collapse_intervals(std::vector<IntervalNode *> sorted_intervals,
                                    uint exon_start, 
                                    bool is_first_exon, 
-                                   bool is_last_exon,
                                    char read_strand, 
                                    g2tTree *g2t,
                                    BundleData *bundle,
@@ -204,7 +202,6 @@ std::set<tid_t> collapse_intervals(std::vector<IntervalNode *> sorted_intervals,
 
   // 1. Ensure each read exon is fully covered by a series of adjacent guide
   // exons
-  // std::set<std::string> exon_tids;
   std::set<tid_t> exon_tids;
 
   auto first_interval = sorted_intervals[0];
@@ -278,11 +275,9 @@ std::set<tid_t> collapse_intervals(std::vector<IntervalNode *> sorted_intervals,
  */
 bool check_forward_overhang(IntervalNode *interval, uint exon_end,
                             char read_strand,
-                            // std::set<std::string>& exon_tids,
                             std::set<tid_t> &exon_tids, g2tTree *g2t,
                             BundleData *bundle) {
 
-  // std::set<std::string> tmp_exon_tids;
   std::set<tid_t> tmp_exon_tids;
   uint overhang_start;
   uint overhang_length = exon_end - interval->end;
@@ -328,7 +323,7 @@ bool check_forward_overhang(IntervalNode *interval, uint exon_end,
       }
     }
   }
-  // exon_tids = tmp_exon_tids;
+  
   std::swap(exon_tids, tmp_exon_tids);
   tmp_exon_tids.clear();
 
@@ -372,9 +367,9 @@ uint get_match_pos(IntervalNode *interval, tid_t tid, char read_strand,
  * @param read_index index of read in bundle->reads
  */
 void process_read_out(BundleData *&bundle, 
-                      uint32_t read_index, 
+                      uint read_index, 
                       g2tTree *g2t,
-                      std::map<tid_t, ReadInfo *> &bam_info,
+                      std::map<read_id_t, ReadInfo *> &bam_info,
                       std::vector<uint32_t> group
                       ) {
 
@@ -438,7 +433,7 @@ void process_read_out(BundleData *&bundle,
     // *^*^*^ *^*^*^ *^*^*^ *^*^*^
 
     auto exon_tids = collapse_intervals(
-        sorted_intervals, exon_start, is_first_exon, is_last_exon, read_strand, g2t, bundle,
+        sorted_intervals, exon_start, is_first_exon, read_strand, g2t, bundle,
         used_backwards_overhang, soft_clip_front, prev_last_interval);
 
     // Exon extends beyond guide interval (USE_FASTA mode)
@@ -488,7 +483,7 @@ void process_read_out(BundleData *&bundle,
 
   // If we reach here, read is valid
 
-  for (auto &i : group) {
+  for (read_id_t &i : group) {
     CReadAln *group_read = bundle->reads[i];
     std::string group_read_name = group_read->brec->name();
 
@@ -530,7 +525,7 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
                    const std::set<tid_t> &mate_transcripts,
                    const std::map<tid_t, uint> &read_positions,
                    const std::map<tid_t, uint> &mate_positions,
-                   std::map<tid_t, ReadInfo *> &bam_info, uint read_index,
+                   std::map<read_id_t, ReadInfo *> &bam_info, uint read_index,
                    uint mate_index, uint read_size, uint mate_size) {
 
   for (const tid_t &tid : final_transcripts) {
@@ -576,6 +571,7 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
  */
 void update_read_matches(ReadInfo *read_info,
                          const std::set<tid_t> &final_transcripts) {
+
   std::set<std::tuple<tid_t, uint>> new_matches;
 
   for (const auto &match : read_info->matches) {
@@ -595,15 +591,15 @@ void update_read_matches(ReadInfo *read_info,
  * @param bam_info read_info for all reads in bundle
  * @param mate_map map between read_id and mate_info
  */
-void process_mate_pairs(BundleData *bundle,
-                        std::map<tid_t, ReadInfo *> &bam_info) {
+void process_mate_pairs(BundleData *bundle, 
+                        std::map<read_id_t, ReadInfo *> &bam_info) {
 
   GList<CReadAln> &reads = bundle->reads;
   const int MAX_MAPPINGS_PER_READ = 200;
 
   // Pre-compute read transcript sets to avoid repeated extraction
-  std::vector<std::set<tid_t>> read_transcript_cache(reads.Count());
-  std::vector<std::map<tid_t, uint>> read_position_cache(reads.Count());
+  std::vector<std::set<read_id_t>> read_transcript_cache(reads.Count());
+  std::vector<std::map<read_id_t, uint>> read_position_cache(reads.Count());
   std::vector<bool> read_valid(reads.Count(), false);
 
   // *^*^*^ *^*^*^ *^*^*^ *^*^*^
@@ -641,7 +637,7 @@ void process_mate_pairs(BundleData *bundle,
   // *^*^*^ *^*^*^ *^*^*^ *^*^*^
 
   // Track processed pairs to avoid duplicates
-  std::set<std::pair<int32_t, int32_t>> processed_pairs;
+  std::set<std::pair<read_id_t, read_id_t>> processed_pairs;
 
   for (int i = 0; i < reads.Count(); i++) {
     if (!read_valid[i])
@@ -664,7 +660,7 @@ void process_mate_pairs(BundleData *bundle,
       }
 
       // Avoid processing the same pair twice (both directions)
-      std::pair<int32_t, int32_t> pair_key =
+      std::pair<read_id_t, read_id_t> pair_key =
           std::make_pair(std::min(i, mate_index), std::max(i, mate_index));
       if (processed_pairs.find(pair_key) != processed_pairs.end()) {
         continue;
@@ -734,7 +730,7 @@ void process_mate_pairs(BundleData *bundle,
  */
 void convert_reads(BundleData *bundle, BamIO *io) {
   // Use bundle guides to build g2t tree
-  std::unique_ptr<g2tTree> g2t = make_g2t_tree(bundle);
+  std::unique_ptr<g2tTree> g2t = make_g2t_tree(bundle, io);
   if (g2t == nullptr)
     return;
 
@@ -747,7 +743,7 @@ void convert_reads(BundleData *bundle, BamIO *io) {
   }
 
   // Create bam_info to store info for every read
-  std::map<tid_t, ReadInfo *> bam_info;
+  std::map<read_id_t, ReadInfo *> bam_info;
 
   // First pass: process reads
   auto groups = aln_groups->groups;

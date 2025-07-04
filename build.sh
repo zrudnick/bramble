@@ -3,3 +3,4 @@
 meson setup build
 cd build
 ninja
+cd ..
