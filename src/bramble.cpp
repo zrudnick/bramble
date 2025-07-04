@@ -439,8 +439,8 @@ int main(int argc, char *argv[]) {
     // Sanity check: make sure there are no exonless "genes" or other
     if (guide->exons.Count() == 0) {
       if (VERBOSE)
-        GMessage("Warning: exonless GFF %s feature with ID %s found, added "
-                 "implicit exon %d-%d.\n",
+        LOG_WARNING(logger, "Warning: exonless GFF {} feature with ID {} found, added "
+                 "implicit exon {}-{}.\n",
                  guide->getFeatureName(), guide->getID(), guide->start,
                  guide->end);
       guide->addExon(guide->start, guide->end); // should never happen!
@@ -469,8 +469,8 @@ int main(int argc, char *argv[]) {
     grefdata.add(&gffreader, guide); // transcripts already sorted by location
   }
 
-  GffNames *guide_seq_names = GffObj::names; // might have been populated already by gff data
-  gffnames_ref(guide_seq_names); // initialize the names collection if not guided
+  std::shared_ptr<GffNames> guide_seq_names = GffObj::names; // might have been populated already by gff data
+  //gffnames_ref(guide_seq_names); // initialize the names collection if not guided
 
   fprintf(header_file, "@CO\tGenerated from GTF: %s\n", guide_gff.chars());
   fclose(header_file);
@@ -661,8 +661,8 @@ int main(int argc, char *argv[]) {
           }
 
           if (fasta_seq == NULL) {
-            GError("Error: could not retrieve sequence data for %s!\n",
-                   bundle->refseq.chars());
+            LOG_ERROR(logger, "Error: could not retrieve sequence data for {}!\n",
+                      bundle->refseq.chars());
           }
 
           bundle->gseq =
@@ -707,8 +707,9 @@ int main(int argc, char *argv[]) {
 
       // Clear bundle (no more alignments)
       else {
-        if (THREADING_ENABLED)
+        if (THREADING_ENABLED) {
           data_mutex.lock();
+        }
 
         bundle->Clear();
 
@@ -723,7 +724,7 @@ int main(int argc, char *argv[]) {
 
         // Add guides from chromosome
         total_guides = 0;
-        guides = NULL;
+        guides = nullptr;
         first_possible_overlap = 0;
         last_guide_idx = -1;
 
@@ -735,14 +736,14 @@ int main(int argc, char *argv[]) {
             guides = &(refguides[ref_id].rnas);
             total_guides = guides->Count();
           } else {
-            GMessage("Warning: No guides for ref_id=%d (%s), but ref present "
+            LOG_WARNING(logger, "Warning: No guides for ref_id={} ({}), but ref present "
                      "in guide index.\n",
                      ref_id, ref_name);
           }
         } else {
           if (VERBOSE) {
-            GMessage("Warning: ref_id=%d (%s) not found in guide annotations "
-                     "(refguides.Count() = %d)\n",
+            LOG_WARNING(logger, "Warning: ref_id={} ({}) not found in guide annotations "
+                     "(refguides.Count() = {})\n",
                      ref_id, ref_name, refguides.Count());
           }
         }
@@ -760,7 +761,7 @@ int main(int argc, char *argv[]) {
       if (THREADING_ENABLED) {
         int new_bidx = wait_for_data(bundles);
         if (new_bidx < 0) {
-          GError("Error: wait_for_data() returned invalid bundle index(%d)!\n",
+          LOG_ERROR(logger, "Error: wait_for_data() returned invalid bundle index({})!\n",
                  new_bidx);
           break; // should never happen!
         }
@@ -775,7 +776,7 @@ int main(int argc, char *argv[]) {
       // Move to the first guide that could possibly overlap the read
       first_possible_overlap = last_guide_idx + 1;
       while (first_possible_overlap < total_guides &&
-             (int)(*guides)[first_possible_overlap]->end < read_start_pos) {
+             static_cast<int>((*guides)[first_possible_overlap]->end) < read_start_pos) {
         first_possible_overlap++; // Skip non-overlapping guides
       }
 
@@ -783,7 +784,7 @@ int main(int argc, char *argv[]) {
 
       // Scan forward to find all guides overlapping the current read
       while (guide_idx < total_guides &&
-             (int)(*guides)[guide_idx]->start <= curr_bundle_end) {
+             static_cast<int>((*guides)[guide_idx]->start) <= curr_bundle_end) {
 
         // Expand the current bundle range to include overlapping guides
         curr_bundle_start =
@@ -862,10 +863,11 @@ int main(int argc, char *argv[]) {
 
   // Delete thread and bundle arrays
   if (THREADING_ENABLED) {
-    for (int t = 0; t < n_threads; t++)
+    for (int t = 0; t < n_threads; t++) {
       threads[t].join();
+    }
     if (VERBOSE) {
-      GMessage(" All threads finished.\n");
+      LOG_INFO(logger, " All threads finished.\n");
     }
     delete[] threads;
     delete[] bundles;
@@ -876,11 +878,11 @@ int main(int argc, char *argv[]) {
   delete io;
   delete worker_args;
   delete gfasta;
-
+  
   f_out = stdout;
   fprintf(f_out, "# ");
   // args.printCmdLine(f_out);
   fprintf(f_out, "# Bramble version %s\n", VERSION);
 
-  gffnames_unref(guide_seq_names); // deallocate names collection
+  //gffnames_unref(guide_seq_names); // deallocate names collection
 }

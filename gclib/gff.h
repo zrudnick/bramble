@@ -30,7 +30,7 @@ extern const uint GFF_MAX_INTRON;
 //extern bool gff_show_warnings;
 
 #define GFF_LINELEN 4096
-#define ERR_NULL_GFNAMES "Error: GffObj::%s requires a non-null GffNames* names!\n"
+#define ERR_NULL_GFNAMES "Error: GffObj::%s requires a non-null std::shared_ptr<GffNames>& names!\n"
 
 
 enum GffExonType {
@@ -495,8 +495,8 @@ class GffNames {
     }
 };
 
-void gffnames_ref(GffNames* &n);
-void gffnames_unref(GffNames* &n);
+//void gffnames_ref(std::shared_ptr<GffNames>& &n);
+//void gffnames_unref(std::shared_ptr<GffNames>& &n);
 
 enum GffPrintMode {
   pgtfAny, //print record as read, if GTF
@@ -517,7 +517,7 @@ enum GffPrintMode {
 class GffAttrs:public GList<GffAttr> {
   public:
     GffAttrs():GList<GffAttr>(false,true,true) { }
-    void add_if_new(GffNames* names, const char* attrname, const char* attrval) {
+    void add_if_new(std::shared_ptr<GffNames>& names, const char* attrname, const char* attrval) {
         //adding a new value without checking for cds status
         int nid=names->attrs.getId(attrname);
         if (nid>=0) { //attribute name found in the dictionary
@@ -530,7 +530,7 @@ class GffAttrs:public GList<GffAttr> {
         this->Add(new GffAttr(nid, attrval));
     }
 
-    void add_if_new(GffNames* names, const char* attrname, const char* attrval, bool is_cds) {
+    void add_if_new(std::shared_ptr<GffNames>& names, const char* attrname, const char* attrval, bool is_cds) {
         int nid=names->attrs.getId(attrname);
         if (nid>=0) { //attribute name found in the dictionary
            for (int i=0;i<Count();i++)
@@ -542,7 +542,7 @@ class GffAttrs:public GList<GffAttr> {
         this->Add(new GffAttr(nid, attrval, is_cds));
     }
 
-    void add_or_update(GffNames* names, const char* attrname, const char* val) {
+    void add_or_update(std::shared_ptr<GffNames>& names, const char* attrname, const char* val) {
     //adding a new value without checking for cds status
         int aid=names->attrs.getId(attrname);
         if (aid>=0) {
@@ -562,7 +562,7 @@ class GffAttrs:public GList<GffAttr> {
         this->Add(new GffAttr(aid, val));
     }
 
-    void add_or_update(GffNames* names, const char* attrname, const char* val, bool is_cds) {
+    void add_or_update(std::shared_ptr<GffNames>& names, const char* attrname, const char* val, bool is_cds) {
       int aid=names->attrs.getId(attrname);
       if (aid>=0) {
          //attribute found in the dictionary
@@ -588,7 +588,7 @@ class GffAttrs:public GList<GffAttr> {
         return -1;
     }
 
-    int haveId(const char* attrname, GffNames* names, bool is_cds=false) {
+    int haveId(const char* attrname, std::shared_ptr<GffNames>& names, bool is_cds=false) {
     	int aid=names->attrs.getId(attrname);
     	if (aid>=0) {
             for (int i=0;i<Count();i++)
@@ -598,7 +598,7 @@ class GffAttrs:public GList<GffAttr> {
     	return -1;
     }
 
-    char* getAttr(GffNames* names, const char* attrname) {
+    char* getAttr(std::shared_ptr<GffNames>& names, const char* attrname) {
       int aid=names->attrs.getId(attrname);
       if (aid>=0)
         for (int i=0;i<Count();i++)
@@ -606,7 +606,7 @@ class GffAttrs:public GList<GffAttr> {
       return NULL;
     }
 
-    char* getAttr(GffNames* names, const char* attrname, bool is_cds) {
+    char* getAttr(std::shared_ptr<GffNames>& names, const char* attrname, bool is_cds) {
       int aid=names->attrs.getId(attrname);
       if (aid>=0)
         for (int i=0;i<Count();i++)
@@ -651,7 +651,7 @@ class GffExon : public GSeg {
 	             // '.' = undefined (UTR), '0','1','2' for CDS exons
   void* uptr; //for associating extended user data to this exon
 
-  char* getAttr(GffNames* names, const char* atrname) {
+  char* getAttr(std::shared_ptr<GffNames>& names, const char* atrname) {
     if (attrs==NULL || names==NULL || atrname==NULL) return NULL;
     return attrs->getAttr(names, atrname);
   }
@@ -730,7 +730,7 @@ class GffObj:public GSeg {
    friend class GffReader;
    friend class GffExon;
 public:
-  static GffNames* names; // dictionary storage that holds the various attribute names etc.
+  static std::shared_ptr<GffNames> names; // dictionary storage that holds the various attribute names etc.
   int track_id; // index of track name in names->tracks
   int gseq_id; // index of genomic sequence name in names->gseqs
   int ftype_id; // index of this record's feature name in names->feats, or the special gff_fid_mRNA value
@@ -832,7 +832,7 @@ public:
        ftype_id=-1;
        subftype_id=-1;
        if (anid!=NULL) gffID=Gstrdup(anid);
-       gffnames_ref(names);
+       //gffnames_ref(names);
        CDstart=0; // hasCDS <=> CDstart>0
        CDend=0;
        CDphase=0;
@@ -850,7 +850,7 @@ public:
        GFREE(geneID);
        delete cdss;
        clearAttrs();
-       gffnames_unref(names);
+       //gffnames_unref(names);
        }
    //--------------
    GffObj* finalize(GffReader* gfr);
@@ -1216,7 +1216,7 @@ class GffReader {
 #endif
  public:
   GPVec<GSeqStat> gseqtable; //table with all genomic sequences, but only current GXF gseq ID indices will have non-NULL
-  //GffNames* names; //just a pointer to the global static Gff names repository
+  //std::shared_ptr<GffNames>& names; //just a pointer to the global static Gff names repository
   GfList gflst; //keeps track of all GffObj records being read (when readAll() is used)
   GffObj* newGffRec(GffLine* gffline, GffObj* parent=NULL, GffExon* pexon=NULL,
 		       GPVec<GffObj>* glst=NULL, bool replace_parent=false);
@@ -1232,7 +1232,7 @@ class GffReader {
 		  gflst(), gseqStats(1, false) {
       GMALLOC(linebuf, GFF_LINELEN);
       buflen=GFF_LINELEN-1;
-      gffnames_ref(GffObj::names);
+      //gffnames_ref(GffObj::names);
       //gff_warns=gff_show_warnings;
       transcripts_Only=t_only;
       sortByLoc=sort;
@@ -1293,7 +1293,7 @@ class GffReader {
 			  gffline(NULL), bedline(NULL), discarded_ids(true),
 			  phash(true), gseqtable(1,true), gflst(), gseqStats(1,false) {
       //gff_warns=gff_show_warnings;
-      gffnames_ref(GffObj::names);
+      //gffnames_ref(GffObj::names);
       noExonAttrs=true;
       transcripts_Only=t_only;
       sortByLoc=sort;
@@ -1309,14 +1309,14 @@ class GffReader {
       gffline=NULL;
       fpos=0;
       if (fh && fh!=stdin) fclose(fh);
-      gflst.freeUnused();
+      //gflst.freeUnused();
       gflst.Clear();
       discarded_ids.Clear();
       phash.Clear();
       GFREE(fname);
       GFREE(linebuf);
       //GFREE(lastReadNext);
-      gffnames_unref(GffObj::names);
+      //gffnames_unref(GffObj::names);
   }
 
 
