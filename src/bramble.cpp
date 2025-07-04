@@ -406,8 +406,7 @@ int main(int argc, char *argv[]) {
            guide_gff.chars());
 
   // GffReader: transcripts only, sort by location
-  GffReader gffreader(f, true,
-                      true); // loading only recognizable transcript features
+  GffReader gffreader(f, true, true); // loading only recognizable transcript features
   gffreader.setRefAlphaSorted(); // alphabetical sorting of RefSeq IDs
   gffreader.showWarnings(VERBOSE);
 
@@ -470,10 +469,8 @@ int main(int argc, char *argv[]) {
     grefdata.add(&gffreader, guide); // transcripts already sorted by location
   }
 
-  GffNames *guide_seq_names =
-      GffObj::names; // might have been populated already by gff data
-  //gffnames_ref(
-  //   guide_seq_names); // initialize the names collection if not guided
+  GffNames *guide_seq_names = GffObj::names; // might have been populated already by gff data
+  gffnames_ref(guide_seq_names); // initialize the names collection if not guided
 
   fprintf(header_file, "@CO\tGenerated from GTF: %s\n", guide_gff.chars());
   fclose(header_file);
@@ -885,5 +882,5 @@ int main(int argc, char *argv[]) {
   // args.printCmdLine(f_out);
   fprintf(f_out, "# Bramble version %s\n", VERSION);
 
-  //gffnames_unref(guide_seq_names); // deallocate names collection
+  gffnames_unref(guide_seq_names); // deallocate names collection
 }

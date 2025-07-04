@@ -96,4 +96,5 @@ endif
 executable('bramble', gclib_srcs + main_srcs + gclib_target,
   include_directories: inc_dirs,
   dependencies: [htslib_dep, quill_dep, gclib_dep] + libs,
+  #link_args : ['-fsanitize=address']
 )
