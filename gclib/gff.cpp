@@ -1,6 +1,9 @@
 #include "gff.h"
+#include <memory> 
 
-GffNames* GffObj::names=NULL;
+//GffNames* GffObj::names=NULL;
+std::shared_ptr<GffNames> GffObj::names = std::make_shared<GffNames>();
+
 //global set of feature names, attribute names etc.
 // -- common for all GffObjs in current application!
 
@@ -20,6 +23,7 @@ const GffScore GFFSCORE_NONE;
 //const uint gfo_flag_LEVEL_MSK        = 0x00FF0000;
 //const byte gfo_flagShift_LEVEL           = 16;
 
+/*
 void gffnames_ref(GffNames* &n) {
   if (n==NULL) n=new GffNames();
   n->numrefs++;
@@ -30,6 +34,7 @@ void gffnames_unref(GffNames* &n) {
   n->numrefs--;
   if (n->numrefs==0) { delete n; n=NULL; }
 }
+*/
 
 const byte CLASSCODE_OVL_RANK = 14; //rank value just above 'o' class code
 //rank value < this means exon overlap
@@ -1121,7 +1126,7 @@ GffObj::GffObj(GffReader& gfrd, BEDLine& bedline):GSeg(0,0),
 	//ftype_id=-1;
 	//subftype_id=-1;
 	strand='.';
-	gffnames_ref(names);
+	//gffnames_ref(names);
 	//qlen=0;qstart=0;qend=0;
 	covlen=0;
 	geneID=NULL;
@@ -1172,7 +1177,7 @@ GffObj::GffObj(GffReader &gfrd, GffLine& gffline):
   //ftype_id=-1;
   subftype_id=-1;
   strand='.';
-  gffnames_ref(names);
+  //gffnames_ref(names);
   //qlen=0;qstart=0;qend=0;
   covlen=0;
   ftype_id=gffline.ftype_id;
