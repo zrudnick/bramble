@@ -10,6 +10,7 @@
 #include "GList.hh"
 #include "GHashMap.hh"
 #include "GBitVec.h"
+#include <memory>
 
 #ifdef CUFFLINKS
 #include <boost/crc.hpp>  // for boost::crc_32_type

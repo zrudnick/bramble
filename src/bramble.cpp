@@ -234,9 +234,9 @@ int main(int argc, char *argv[]) {
   quill::Backend::start();
   // Get a logger
   // This segfaults on my system, not sure why
-  // quill::Logger *logger = quill::Frontend::create_or_get_logger(
-  //     "root",
-  //     quill::Frontend::create_or_get_sink<quill::ConsoleSink>("sink_id_1"));
+  quill::Logger *logger = quill::Frontend::create_or_get_logger(
+      "root",
+      quill::Frontend::create_or_get_sink<quill::ConsoleSink>("sink_id_1"));
 
   CLI::App app{
       "A program to project spliced genomic alignments onto the transcriptome",
@@ -357,7 +357,8 @@ int main(int argc, char *argv[]) {
     grefdata.add(&gffreader, guide); // transcripts already sorted by location
   }
 
-  std::shared_ptr<GffNames> guide_seq_names = GffObj::names; // might have been populated already by gff data
+  //std::shared_ptr<GffNames> guide_seq_names = GffObj::names; // might have been populated already by gff data
+  auto guide_seq_names = std::shared_ptr<GffNames>(GffObj::names);
   //gffnames_ref(guide_seq_names); // initialize the names collection if not guided
 
   fprintf(header_file, "@CO\tGenerated from GTF: %s\n", guide_gff.chars());
