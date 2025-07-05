@@ -1,7 +1,7 @@
 # MacOS --- arghh
 .DS_Store
 /test
-tx.header.sam
+tx_header.sam
 .cache
 
 # meson 
