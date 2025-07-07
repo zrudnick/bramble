@@ -35,6 +35,7 @@ using namespace std;
 
 using tid_t = uint32_t;
 using read_id_t = uint32_t;
+using bam_id_t = uint32_t;
 
 struct BamIO {
 protected:
@@ -701,17 +702,6 @@ public:
   }
 };
 
-struct MateInfo {
-  uint32_t mate_index;
-  tid_t transcript_id;
-  uint32_t match_pos;
-  uint32_t mate_size;
-  bool same_transcript; // true if both mates map to same transcript
-  bool valid_pair;      // true if this mate pair should be output
-
-  MateInfo() : same_transcript(false), valid_pair(false) {}
-};
-
 struct ReadInfo {
   std::set<std::tuple<tid_t, uint32_t>> matches;
   GSamRecord *brec;
@@ -719,27 +709,41 @@ struct ReadInfo {
   uint32_t read_index;
   uint32_t read_size;
   uint32_t nh_i;
-  bool wrote_alr; // this read (a mate) was already written to bam
-
-  // Mate information
-  std::string mate_name;
-  bool is_paired;
-  bool is_first_mate;
+   bool is_paired;
+  bool has_introns;
   bool is_reverse;
-  bool mate_is_reverse;
-  std::map<tid_t, MateInfo *> mate_info;
 
   ReadInfo() : matches(), brec(nullptr), valid_read(false), read_index(0), read_size(0), nh_i(0),
-	             wrote_alr(false), mate_name(), is_paired(false), is_first_mate(false), 
-				       is_reverse(false), mate_is_reverse(false), mate_info() {}
+				       is_paired(false), has_introns(false), is_reverse(false) {}
 
   ~ReadInfo() {
     // brec is deleted by CReadAln
-    for (auto &pair : mate_info) {
-      auto info = std::get<1>(pair);
-      delete info;
-    }
   }
+};
+
+struct BamInfo {
+  bool same_transcript; // true if both mates map to same transcript
+  bool valid_pair;      // true if mate information should be output
+  
+  // Read 1 information
+  read_id_t read_index;
+  tid_t tid;
+  uint32_t pos;
+  uint32_t nh;
+  uint32_t read_size;
+  GSamRecord *brec;
+  bool has_introns;
+  bool is_reverse;
+
+  // Read 2 information
+  read_id_t mate_index;
+  tid_t mate_tid;
+  uint32_t mate_pos;
+  uint32_t mate_nh;
+  uint32_t mate_size;
+  GSamRecord *mate_brec;
+  bool mate_has_introns;
+  bool mate_is_reverse;
 };
 
 // Collect all refguide transcripts for a single genomic sequence

@@ -10,11 +10,10 @@
 
 extern bool USE_FASTA;
 uint32_t overhang_threshold = 8;
-// NOTE: a uint8_t cannot hold a value of 1000, only up to 255
-// oops :(
 const uint32_t max_mappings_per_read = 1000;
 using tid_t = uint32_t;
 using read_id_t = uint32_t; // read index in bundle
+using bam_id_t = uint32_t;  // id in bam_info
 
 /**
  * Prints g2t tree with nodes sorted by genome coordinate
@@ -369,7 +368,7 @@ uint get_match_pos(IntervalNode *interval, tid_t tid, char read_strand,
 void process_read_out(BundleData *&bundle, 
                       uint read_index, 
                       g2tTree *g2t,
-                      std::map<read_id_t, ReadInfo *> &bam_info,
+                      std::map<read_id_t, ReadInfo *> &read_info,
                       std::vector<uint32_t> group
                       ) {
 
@@ -482,32 +481,27 @@ void process_read_out(BundleData *&bundle,
   }
 
   // If we reach here, read is valid
-
   for (read_id_t &i : group) {
     CReadAln *group_read = bundle->reads[i];
-    std::string group_read_name = group_read->brec->name();
 
-    ReadInfo *read_info = new ReadInfo();
-    read_info->valid_read = true;
-    read_info->matches = matches;
-    read_info->brec = group_read->brec;
-    read_info->read_index = i;
-    read_info->read_size = group_read->len;
-    read_info->nh_i = matches.size();
+    ReadInfo *this_read = new ReadInfo();
+    this_read->valid_read = true;
+    this_read->matches = matches;
+    this_read->brec = group_read->brec;
+    this_read->read_index = i;
+    this_read->read_size = group_read->len;
+    this_read->nh_i = matches.size();
 
     // Record mate information
-    read_info->mate_name = group_read_name;
-    read_info->is_paired = (group_read->brec->flags() & BAM_FPAIRED);
-    read_info->is_first_mate = (group_read->brec->flags() & BAM_FREAD1);
-    read_info->is_reverse = (group_read->brec->flags() & BAM_FREVERSE);
-    read_info->mate_is_reverse = (group_read->brec->flags() & BAM_FMREVERSE);
-    bam_info[i] = read_info;
+    this_read->is_paired = (group_read->brec->flags() & BAM_FPAIRED);
+    this_read->is_reverse = (group_read->brec->flags() & BAM_FREVERSE);
+    read_info[i] = this_read;
   }
   return;
 }
 
 /**
- * Create mate_info entries
+ * Create bam_info entries
  *
  * @param final_transcripts tids to keep for this read
  * @param read_transcripts tids found for read
@@ -525,42 +519,77 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
                    const std::set<tid_t> &mate_transcripts,
                    const std::map<tid_t, uint> &read_positions,
                    const std::map<tid_t, uint> &mate_positions,
-                   std::map<read_id_t, ReadInfo *> &bam_info, uint read_index,
-                   uint mate_index, uint read_size, uint mate_size) {
+                   std::map<read_id_t, ReadInfo *> &read_info, 
+                   std::map<bam_id_t, BamInfo *> &bam_info, 
+                   uint read_index, uint mate_index, uint mate_case) {
 
-  for (const tid_t &tid : final_transcripts) {
-    bool same_transcript =
-        (read_transcripts.find(tid) != read_transcripts.end() &&
-         mate_transcripts.find(tid) != mate_transcripts.end());
+  auto this_read = read_info[read_index];
+  auto mate_read = read_info[mate_index];
 
-    // Create mate info for current read (only if it maps to this transcript)
-    if (read_transcripts.find(tid) != read_transcripts.end()) {
-      auto read_info = bam_info[mate_index];
-      auto mate_info = new MateInfo();
-      mate_info->mate_index = read_index;
-      mate_info->mate_size = read_size;
-      mate_info->transcript_id = tid;
-      mate_info->match_pos = read_positions.at(tid);
-      mate_info->same_transcript = same_transcript;
-      mate_info->valid_pair = true;
+  if (mate_case == 1) {
 
-      read_info->mate_info[tid] = mate_info;
+    for (const tid_t &tid : final_transcripts) {
+
+      // Add this read pair + transcript to bam_info
+      bam_id_t n = bam_info.size();
+      auto this_pair = new BamInfo();
+      this_pair->same_transcript = true; // true if both mates map to same transcript
+      this_pair->valid_pair = true;
+      
+      // Read 1 information
+      this_pair->read_index = read_index;
+      this_pair->tid = tid;
+      this_pair->pos = read_positions.at(tid);
+      this_pair->nh = this_read->nh_i;
+      this_pair->read_size = this_read->read_size;
+      this_pair->brec = this_read->brec;
+      this_pair->is_reverse = this_read->is_reverse;
+
+      // Read 2 information
+      this_pair->mate_index = mate_index;
+      this_pair->mate_tid = tid;
+      this_pair->mate_pos = mate_positions.at(tid);
+      this_pair->mate_nh = mate_read->nh_i;
+      this_pair->mate_size = mate_read->read_size;
+      this_pair->mate_brec = mate_read->brec;
+      this_pair->mate_is_reverse = mate_read->is_reverse;
+
+      bam_info[n] = this_pair;
     }
 
-    // Create mate info for mate read (only if it maps to this transcript)
-    if (mate_transcripts.find(tid) != mate_transcripts.end()) {
-      auto read_info = bam_info[read_index];
-      auto mate_info = new MateInfo();
-      mate_info->mate_index = mate_index;
-      mate_info->mate_size = mate_size;
-      mate_info->transcript_id = tid;
-      mate_info->match_pos = mate_positions.at(tid);
-      mate_info->same_transcript = same_transcript;
-      mate_info->valid_pair = true;
+  } else if (mate_case == 2) {
 
-      read_info->mate_info[tid] = mate_info;
+    // Add this read pair + transcript to bam_info
+    bam_id_t n = bam_info.size();
+    auto this_pair = new BamInfo();
+    this_pair->valid_pair = true;
+
+    for (const tid_t &tid : read_transcripts) {
+      // Read 1 information
+      this_pair->read_index = read_index;
+      this_pair->tid = tid;
+      this_pair->pos = read_positions.at(tid);
+      this_pair->nh = this_read->nh_i;
+      this_pair->read_size = this_read->read_size;
+      this_pair->brec = this_read->brec;
+      this_pair->is_reverse = this_read->is_reverse;
     }
+
+    for (const tid_t &tid : mate_transcripts) {
+      // Read 2 information
+      this_pair->mate_index = mate_index;
+      this_pair->mate_tid = tid;
+      this_pair->mate_pos = mate_positions.at(tid);
+      this_pair->mate_nh = mate_read->nh_i;
+      this_pair->mate_size = mate_read->read_size;
+      this_pair->mate_brec = mate_read->brec;
+      this_pair->mate_is_reverse = mate_read->is_reverse;
+    }
+
+    bam_info[n] = this_pair;
   }
+  // could add more cases here if they exist
+
 }
 
 /**
@@ -592,7 +621,8 @@ void update_read_matches(ReadInfo *read_info,
  * @param mate_map map between read_id and mate_info
  */
 void process_mate_pairs(BundleData *bundle, 
-                        std::map<read_id_t, ReadInfo *> &bam_info) {
+                        std::map<read_id_t, ReadInfo *> &read_info,
+                        std::map<bam_id_t, BamInfo *> &bam_info) {
 
   GList<CReadAln> &reads = bundle->reads;
   const int MAX_MAPPINGS_PER_READ = 200;
@@ -608,23 +638,23 @@ void process_mate_pairs(BundleData *bundle,
 
   for (int i = 0; i < reads.Count(); i++) {
 
-    auto read_info_it = bam_info.find(i);
-    if (read_info_it == bam_info.end() || !read_info_it->second->valid_read ||
+    auto read_info_it = read_info.find(i);
+    if (read_info_it == read_info.end() || !read_info_it->second->valid_read ||
         !read_info_it->second->is_paired) {
       continue;
     }
 
-    auto read_info = read_info_it->second;
+    auto this_read = read_info_it->second;
 
     // Skip reads with too many mappings
-    if (read_info->matches.size() > max_mappings_per_read) {
+    if (this_read->matches.size() > max_mappings_per_read) {
       continue;
     }
 
     read_valid[i] = true;
 
     // Cache transcript sets
-    for (const auto &match : read_info->matches) {
+    for (const auto &match : this_read->matches) {
       tid_t tid = std::get<0>(match);
       uint pos = std::get<1>(match);
       read_transcript_cache[i].insert(tid);
@@ -645,7 +675,7 @@ void process_mate_pairs(BundleData *bundle,
 
     CReadAln *read = reads[i];
     std::string read_name = read->brec->name();
-    auto read_info = bam_info[i];
+    auto this_read = read_info[i];
 
     // Process all known mate relationships for this read
     for (int j = 0; j < read->pair_idx.Count(); j++) {
@@ -655,7 +685,7 @@ void process_mate_pairs(BundleData *bundle,
       if (mate_index < 0 || mate_index >= reads.Count() ||
           !read_valid[mate_index]) {
         read_valid[i] = false;
-        read_info->valid_read = false;
+        this_read->valid_read = false;
         continue;
       }
 
@@ -667,12 +697,9 @@ void process_mate_pairs(BundleData *bundle,
       }
       processed_pairs.insert(pair_key);
 
-      CReadAln *mate_read = reads[mate_index];
-      std::string mate_name = mate_read->brec->name();
-      auto mate_read_info = bam_info[mate_index];
-
-      uint read_size = read_info->read_size;
-      uint mate_size = mate_read_info->read_size;
+      CReadAln *mate = reads[mate_index];
+      std::string mate_name = mate->brec->name();
+      auto mate_read = read_info[mate_index];
 
       // Use cached transcript sets for fast intersection
       const auto &read_transcripts = read_transcript_cache[i];
@@ -694,31 +721,56 @@ void process_mate_pairs(BundleData *bundle,
       // Mate pair cases
       // *^*^*^ *^*^*^ *^*^*^ *^*^*^
 
+      uint mate_case;
+
       if (!common_transcripts.empty()) {
         // Case 1: Mates share some transcripts - keep only shared ones
         final_transcripts = std::move(common_transcripts);
+        mate_case = 1;
 
       } else if (read_transcripts.size() == 1 && mate_transcripts.size() == 1) {
         // Case 2: Each mate maps to exactly one transcript, but different ones
         // - allow it
         final_transcripts.insert(*read_transcripts.begin());
         final_transcripts.insert(*mate_transcripts.begin());
+        mate_case = 2;
+
+      } else if (read_transcripts.size() == 1 && mate_transcripts.size() == 0) {
+        // Case 3: Read 1 mapped to 1 transcript, Read 2 mapped to none
+        continue;
+
+      } else if (mate_transcripts.size() == 1 && read_transcripts.size() == 0) {
+        // Case 4: Read 2 mapped to 1 transcript, Read 1 mapped to none
+        continue;
 
       } else {
-        // Case 3: No common transcripts and at least one mate maps to multiple
+        // Case 5: No common transcripts and at least one mate maps to multiple
         // - skip this pair
         continue;
       }
 
       // Update both reads' matches
-      update_read_matches(read_info, final_transcripts);
-      update_read_matches(mate_read_info, final_transcripts);
+      update_read_matches(this_read, final_transcripts);
+      update_read_matches(mate_read, final_transcripts);
 
       // Add mate information for each valid transcript
       add_mate_info(final_transcripts, read_transcripts, mate_transcripts,
-                    read_positions, mate_positions, bam_info, i, mate_index,
-                    read_size, mate_size);
+                    read_positions, mate_positions, read_info, bam_info, 
+                    i, mate_index, mate_case);
     }
+  }
+}
+
+void free_read_data(AlnGroups* aln_groups, std::map<read_id_t, ReadInfo *> &read_info,
+                    std::map<bam_id_t, BamInfo *> &bam_info) {
+  delete aln_groups;
+  for (const auto &pair : read_info) {
+    auto info = std::get<1>(pair);
+    delete info;
+  }
+  for (const auto &pair : bam_info) {
+    auto info = std::get<1>(pair);
+    delete info;
   }
 }
 
@@ -742,8 +794,11 @@ void convert_reads(BundleData *bundle, BamIO *io) {
     aln_groups->Add(reads[n], n);
   }
 
-  // Create bam_info to store info for every read
-  std::map<read_id_t, ReadInfo *> bam_info;
+  // Create read_info to store info for every read
+  std::map<read_id_t, ReadInfo *> read_info;
+
+  // Create bam_info to store info for every output line
+  std::map<bam_id_t, BamInfo *> bam_info;
 
   // First pass: process reads
   auto groups = aln_groups->groups;
@@ -751,19 +806,15 @@ void convert_reads(BundleData *bundle, BamIO *io) {
     uint n = groups[i][0]; // index of first read in group
 
     // Process the first read from this group
-    process_read_out(bundle, n, g2t.get(), bam_info, groups[i]);
+    process_read_out(bundle, n, g2t.get(), read_info, groups[i]);
   }
 
   // Second pass: process mate pairs
-  process_mate_pairs(bundle, bam_info);
+  process_mate_pairs(bundle, read_info, bam_info);
 
   // Third pass: write to BAM
   write_to_bam(io, bam_info, g2t.get());
 
   // Free allocated structures
-  delete aln_groups;
-  for (const auto &pair : bam_info) {
-    auto info = std::get<1>(pair);
-    delete info;
-  }
+  free_read_data(aln_groups, read_info, bam_info);
 }

@@ -234,9 +234,9 @@ int main(int argc, char *argv[]) {
   quill::Backend::start();
   // Get a logger
   // This segfaults on my system, not sure why
-  quill::Logger *logger = quill::Frontend::create_or_get_logger(
-      "root",
-      quill::Frontend::create_or_get_sink<quill::ConsoleSink>("sink_id_1"));
+  // quill::Logger *logger = quill::Frontend::create_or_get_logger(
+  //     "root",
+  //     quill::Frontend::create_or_get_sink<quill::ConsoleSink>("sink_id_1"));
 
   CLI::App app{
       "A program to project spliced genomic alignments onto the transcriptome",
@@ -331,10 +331,10 @@ int main(int argc, char *argv[]) {
     // Sanity check: make sure there are no exonless "genes" or other
     if (guide->exons.Count() == 0) {
       if (VERBOSE)
-        LOG_WARNING(logger, "Warning: exonless GFF {} feature with ID {} found, added "
-                 "implicit exon {}-{}.\n",
-                 guide->getFeatureName(), guide->getID(), guide->start,
-                 guide->end);
+        // LOG_WARNING(logger, "Warning: exonless GFF {} feature with ID {} found, added "
+        //          "implicit exon {}-{}.\n",
+        //          guide->getFeatureName(), guide->getID(), guide->start,
+        //          guide->end);
       guide->addExon(guide->start, guide->end); // should never happen!
     }
 
@@ -550,8 +550,8 @@ int main(int argc, char *argv[]) {
           }
 
           if (fasta_seq == NULL) {
-            LOG_ERROR(logger, "Error: could not retrieve sequence data for {}!\n",
-                      bundle->refseq.chars());
+            // LOG_ERROR(logger, "Error: could not retrieve sequence data for {}!\n",
+            //           bundle->refseq.chars());
           }
 
           bundle->gseq =
@@ -625,15 +625,15 @@ int main(int argc, char *argv[]) {
             guides = &(refguides[ref_id].rnas);
             total_guides = guides->Count();
           } else {
-            LOG_WARNING(logger, "Warning: No guides for ref_id={} ({}), but ref present "
-                     "in guide index.\n",
-                     ref_id, ref_name);
+            // LOG_WARNING(logger, "Warning: No guides for ref_id={} ({}), but ref present "
+            //          "in guide index.\n",
+            //          ref_id, ref_name);
           }
         } else {
           if (VERBOSE) {
-            LOG_WARNING(logger, "Warning: ref_id={} ({}) not found in guide annotations "
-                     "(refguides.Count() = {})\n",
-                     ref_id, ref_name, refguides.Count());
+            // LOG_WARNING(logger, "Warning: ref_id={} ({}) not found in guide annotations "
+            //          "(refguides.Count() = {})\n",
+            //          ref_id, ref_name, refguides.Count());
           }
         }
 
@@ -650,8 +650,8 @@ int main(int argc, char *argv[]) {
       if (THREADING_ENABLED) {
         int new_bidx = wait_for_data(bundles);
         if (new_bidx < 0) {
-          LOG_ERROR(logger, "Error: wait_for_data() returned invalid bundle index({})!\n",
-                 new_bidx);
+          // LOG_ERROR(logger, "Error: wait_for_data() returned invalid bundle index({})!\n",
+          //        new_bidx);
           break; // should never happen!
         }
         bundle = &(bundles[new_bidx]);
@@ -753,7 +753,7 @@ int main(int argc, char *argv[]) {
       threads[t].join();
     }
     if (VERBOSE) {
-      LOG_INFO(logger, " All threads finished.\n");
+      // LOG_INFO(logger, " All threads finished.\n");
     }
     delete[] threads;
     delete[] bundles;

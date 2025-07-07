@@ -14,7 +14,7 @@
 
 void print_tree(g2tTree *g2t);
 
-g2tTree *make_g2t_tree(BundleData *bundle);
+std::unique_ptr<g2tTree> make_g2t_tree(BundleData *bundle, BamIO *io);
 
 std::string reverse_complement(const std::string &seq);
 
@@ -45,19 +45,24 @@ void process_read_out(BundleData *&bundle,
                       std::map<read_id_t, ReadInfo *> &bam_info,
                       std::vector<uint32_t> group);
 
-void add_mate_info(const std::set<std::string> &final_transcripts,
-                   const std::set<std::string> &read_transcripts,
-                   const std::set<std::string> &mate_transcripts,
-                   const std::map<std::string, uint> &read_positions,
-                   const std::map<std::string, uint> &mate_positions,
-                   std::map<read_id_t, ReadInfo *> &bam_info, uint read_index,
-                   uint mate_index, uint read_size, uint mate_size);
+void add_mate_info(const std::set<tid_t> &final_transcripts,
+                   const std::set<tid_t> &read_transcripts,
+                   const std::set<tid_t> &mate_transcripts,
+                   const std::map<tid_t, uint> &read_positions,
+                   const std::map<tid_t, uint> &mate_positions,
+                   std::map<read_id_t, ReadInfo *> &read_info, 
+                   std::map<bam_id_t, BamInfo *> &bam_info, uint read_index,
+                   uint mate_index, uint mate_case);
 
 void update_read_matches(ReadInfo *read_info,
                          const std::set<tid_t> &final_transcripts);
 
-void process_mate_pairs(BundleData *bundle,
-                        std::map<read_id_t, ReadInfo *> &bam_info);
+void process_mate_pairs(BundleData *bundle, 
+                        std::map<read_id_t, ReadInfo *> &read_info,
+                        std::map<bam_id_t, BamInfo *> &bam_info);
+
+void free_read_data(AlnGroups* aln_groups, std::map<read_id_t, ReadInfo *> &read_info,
+                    std::map<bam_id_t, BamInfo *> &bam_info);
 
 void convert_reads(BundleData *bundle, BamIO *io);
 
