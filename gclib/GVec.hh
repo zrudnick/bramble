@@ -8,6 +8,7 @@ Sortable collection of pointers to objects
 
 #include "GBase.h"
 #include <algorithm>
+#include <iostream>
 
 #define GVEC_INDEX_ERR "GVec error: invalid index: %d\n"
  #if defined(NDEBUG) || defined(NODEBUG) || defined(_NDEBUG) || defined(NO_DEBUG)
@@ -174,6 +175,7 @@ template <class OBJ> class GPVec {
   public:
     static void DefaultFreeProc(pointer item) {
       delete (OBJ*)item;
+      item = NULL;
     }
     virtual ~GPVec();
     GPVec(int init_capacity=2, bool free_elements=true); //also the default constructor

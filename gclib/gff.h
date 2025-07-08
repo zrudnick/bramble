@@ -833,7 +833,6 @@ public:
        ftype_id=-1;
        subftype_id=-1;
        if (anid!=NULL) gffID=Gstrdup(anid);
-       //gffnames_ref(names);
        CDstart=0; // hasCDS <=> CDstart>0
        CDend=0;
        CDphase=0;
@@ -851,8 +850,7 @@ public:
        GFREE(geneID);
        delete cdss;
        clearAttrs();
-       //gffnames_unref(names);
-       }
+   }
    //--------------
    GffObj* finalize(GffReader* gfr);
                //complete parsing: must be called in order to merge adjacent/close proximity subfeatures
@@ -1119,18 +1117,19 @@ class GfList: public GList<GffObj> {
      Clear();
    }
    void freeUnused() {
-     for (int i=0;i<fCount;i++) {
-       if (fList[i]->isUsed()) continue;
-       /*//inform the children?
-       for (int c=0;c<fList[i]->children.Count();c++) {
-          fList[i]->children[c]->parent=NULL;
-       }
-       */
-       delete fList[i];
-       fList[i]=NULL;
-       }
-     Clear();
-     }
+      for (int i=0;i<fCount;i++) {
+         if (fList[i]->isUsed()) continue;
+         /*
+          //inform the children?
+          for (int c=0;c<fList[i]->children.Count();c++) {
+            fList[i]->children[c]->parent=NULL;
+          }
+         */
+         delete fList[i];
+         fList[i]=NULL;
+      }
+      Clear();
+   }
 };
 
 class CNonExon { //utility class used in subfeature promotion
@@ -1310,7 +1309,7 @@ class GffReader {
       gffline=NULL;
       fpos=0;
       if (fh && fh!=stdin) fclose(fh);
-      //gflst.freeUnused();
+      gflst.freeUnused();
       gflst.Clear();
       discarded_ids.Clear();
       phash.Clear();
