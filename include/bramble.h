@@ -752,7 +752,7 @@ struct GRefData {
   int gseq_id;
   const char *gseq_name;
   GRefData(int gid = -1)
-      : rnas(false, true, false), gseq_id(gid), gseq_name(NULL) {
+      : rnas(false, false, false), gseq_id(gid), gseq_name(NULL) {
     gseq_id = gid;
     if (gseq_id >= 0)
       gseq_name = GffObj::names->gseqs.getName(gseq_id);
