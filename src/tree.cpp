@@ -206,17 +206,21 @@ std::set<tid_t> collapse_intervals(std::vector<IntervalNode *> sorted_intervals,
   auto first_interval = sorted_intervals[0];
   uint prev_end = first_interval->end;
 
-  // Process first interval
+  // PROCESS FIRST INTERVAL: LATER EXONS
+
   if (!is_first_exon) {
     // Copy TIDs from interval
     // --> skip any with exons between current and previous interval
     for (const auto &tid : first_interval->tids) {
       auto tid_last_interval =
           g2t->getPrevNode(first_interval, tid, read_strand);
-      if (tid_last_interval == prev_last_interval) {
+      if ((tid_last_interval == prev_last_interval) 
+          && (first_interval->start <= exon_start)){
         exon_tids.insert(tid);
       }
     }
+
+  // PROCESS FIRST INTERVAL: FIRST EXON
 
     // Start is within bounds --> copy all TIDs from interval
   } else if (first_interval->start <= exon_start) {
@@ -237,6 +241,8 @@ std::set<tid_t> collapse_intervals(std::vector<IntervalNode *> sorted_intervals,
     soft_clip = first_interval->start - exon_start;
     return {};
   }
+
+  // PROCESS FOLLOWING INTERVALS
 
   // Following intervals: check for TIDs, remove any we don't see
   for (size_t i = 1; i < sorted_intervals.size(); ++i) {
@@ -442,14 +448,19 @@ void process_read_out(BundleData *&bundle,
                                   exon_tids, g2t, bundle))
         soft_clip_back = exon_end - last_interval->end;
 
-      // Exon extends beyond guide interval (no fasta)
+      // Last exon, Exon extends beyond guide interval (no fasta)
     } else if ((is_last_exon) && last_interval->end < exon_end) {
       soft_clip_back = exon_end - last_interval->end;
       return;
 
-      // Intervals don't support any TIDs
-    } else if (exon_tids.empty())
+    // First/middle exon, exon end extends beyond guide interval
+    } else if (last_interval->end < exon_end) {
       return;
+
+    // Intervals don't support any TIDs
+    } else if (exon_tids.empty()) {
+      return;
+    }
 
     // *^*^*^ *^*^*^ *^*^*^ *^*^*^
     // Next, update match TIDs and positions for read
@@ -748,6 +759,10 @@ void process_mate_pairs(BundleData *bundle,
         // - skip this pair
         continue;
       }
+
+      // ALLOW: if pair is not mapped, then don't discard (even for multiple transcripts)
+      // DISALLOW: if pair is mapped but to outside bundle, discard
+      // we will test both ways with simulated data to see if that should really be disallowed
 
       // Update both reads' matches
       update_read_matches(this_read, final_transcripts);

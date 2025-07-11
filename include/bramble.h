@@ -588,7 +588,7 @@ public:
 // g2t tree using interval tree
 struct g2tTree {
   // map from transcript names to transcript IDs
-  std::unordered_map<std::string, tid_t> name_id_map;
+  std::unordered_map<tid_t, std::string> name_id_map;
   std::vector<std::string> tid_names;
   const std::string invalid_name{"INVALID TID"};
 
@@ -632,9 +632,9 @@ public:
     //   return lookup->second;
     // }
 
-    auto lookup = name_id_map.find(tid_name);
+    auto lookup = name_id_map.find(tid);
     if (lookup == name_id_map.end()) {
-      name_id_map.insert({tid_name, tid});
+      name_id_map.insert({tid, tid_name});
       tid_names.push_back(tid_name);
     }
 
@@ -643,7 +643,7 @@ public:
 
   // get the string name given an id
   const std::string &getTidName(tid_t id) {
-    return (id < tid_names.size()) ? tid_names[id] : invalid_name;
+    return name_id_map.find(id) != name_id_map.end() ? name_id_map[id] : invalid_name;
   }
 
   // Add guide exon with TID and transcript start

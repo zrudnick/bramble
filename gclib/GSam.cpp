@@ -218,25 +218,25 @@ switch (cop) {
 		  case BAM_CEQUAL:    // =
 		  case BAM_CDIFF:     // X
 		  case BAM_CMATCH:    // M
-			exonStarted=true;
+			  exonStarted=true;
 		    l+=_cigLen(cigar[i]);
-			if(intron) { // op comes after intron --> update juncsdel
-				GSeg deljunc(prevdel,0);
-				juncsdel.Add(deljunc);
-			}
+        if(intron) { // op comes after intron --> update juncsdel
+          GSeg deljunc(prevdel,0);
+          juncsdel.Add(deljunc);
+        }
 		    intron=false;
 		    ins=false;
 		    del=0;
 		    break;
 		  case BAM_CDEL:
-			del=_cigLen(cigar[i]);
-			l+=del;
-			if (intron) { // deletion after intron --> update juncsdel
-				GSeg deljunc(prevdel,del);
-				juncsdel.Add(deljunc);
-			}
-			ins=false;
-			break;
+        del=_cigLen(cigar[i]);
+        l+=del;
+        if (intron) { // deletion after intron --> update juncsdel
+          GSeg deljunc(prevdel,del);
+          juncsdel.Add(deljunc);
+        }
+        ins=false;
+        break;
 		  case BAM_CINS:      // I
 		    //rpos+=cl; //gpos not advanced
 		    //take care of cases where there is an ins within an intron
