@@ -106,6 +106,19 @@ void update_cigar(bam1_t* b, uint32_t* cigar, uint32_t n_cigar) {
 
 // Set mate information for a read
 void set_mate_info(bam1_t* b, BamInfo* this_pair, bool first_read) {
+
+  // Handle unpaired reads
+  if (!this_pair->is_paired) {
+    // Clear all paired-end related flags
+    b->core.flag &= ~(BAM_FPAIRED | BAM_FPROPER_PAIR | BAM_FMREVERSE);
+    
+    // Set mate reference to unmapped
+    b->core.mtid = -1;  // -1 indicates unmapped mate
+    b->core.mpos = -1;  // -1 indicates unmapped mate position
+    b->core.isize = 0;  // No insert size for unpaired reads
+    
+    return;
+  }
     
   // Get match tid and position
   int32_t tid;
@@ -210,6 +223,7 @@ void write_to_bam(BamIO* io, std::map<bam_id_t, BamInfo*>& bam_info, g2tTree* g2
     set_mate_info(b, this_pair, true);
 
     io->write(&new_brec);
+    if (!this_pair->is_paired) continue;  // skip mate processing if unpaired
 
     // 2. Process second mate
     if (seen.find(this_pair->mate_index) == seen.end()) {

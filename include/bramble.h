@@ -724,6 +724,7 @@ struct ReadInfo {
 struct BamInfo {
   bool same_transcript; // true if both mates map to same transcript
   bool valid_pair;      // true if mate information should be output
+  bool is_paired;       // true if from paired reads
   
   // Read 1 information
   read_id_t read_index;

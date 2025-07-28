@@ -535,6 +535,35 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
                    uint read_index, uint mate_index, uint mate_case) {
 
   auto this_read = read_info[read_index];
+
+  // UNPAIRED CASE
+
+  if (mate_case == 0) {
+    //GMessage("hi\n");
+    // Add this read + transcripts to bam_info
+    bam_id_t n = bam_info.size();
+    auto this_pair = new BamInfo();
+    this_pair->valid_pair = true;
+    this_pair->is_paired = false;
+
+    for (const tid_t &tid : read_transcripts) {
+      // Read 1 information
+      this_pair->read_index = read_index;
+      this_pair->tid = tid;
+      this_pair->pos = read_positions.at(tid);
+      this_pair->nh = this_read->nh_i;
+      this_pair->read_size = this_read->read_size;
+      this_pair->brec = this_read->brec;
+      this_pair->is_reverse = this_read->is_reverse;
+
+      bam_info[n] = this_pair;
+    }
+
+    return;
+  }
+
+  // MATE PAIR CASES
+
   auto mate_read = read_info[mate_index];
 
   if (mate_case == 1) {
@@ -546,6 +575,7 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
       auto this_pair = new BamInfo();
       this_pair->same_transcript = true; // true if both mates map to same transcript
       this_pair->valid_pair = true;
+      this_pair->is_paired = true;
       
       // Read 1 information
       this_pair->read_index = read_index;
@@ -574,6 +604,7 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
     bam_id_t n = bam_info.size();
     auto this_pair = new BamInfo();
     this_pair->valid_pair = true;
+    this_pair->is_paired = true;
 
     for (const tid_t &tid : read_transcripts) {
       // Read 1 information
@@ -650,8 +681,7 @@ void process_mate_pairs(BundleData *bundle,
   for (int i = 0; i < reads.Count(); i++) {
 
     auto read_info_it = read_info.find(i);
-    if (read_info_it == read_info.end() || !read_info_it->second->valid_read ||
-        !read_info_it->second->is_paired) {
+    if (read_info_it == read_info.end() || !read_info_it->second->valid_read) {
       continue;
     }
 
@@ -687,6 +717,19 @@ void process_mate_pairs(BundleData *bundle,
     CReadAln *read = reads[i];
     std::string read_name = read->brec->name();
     auto this_read = read_info[i];
+
+    uint mate_case;
+
+    if (read->pair_idx.Count() == 0) {
+      mate_case = 0;
+      const auto &read_transcripts = read_transcript_cache[i];
+      const auto &read_positions = read_position_cache[i];
+
+      add_mate_info({}, read_transcripts, {},
+                    read_positions, {}, read_info, bam_info, 
+                    i, -1, mate_case);
+      continue; // Skip to next read
+    }
 
     // Process all known mate relationships for this read
     for (int j = 0; j < read->pair_idx.Count(); j++) {
@@ -731,8 +774,6 @@ void process_mate_pairs(BundleData *bundle,
       // *^*^*^ *^*^*^ *^*^*^ *^*^*^
       // Mate pair cases
       // *^*^*^ *^*^*^ *^*^*^ *^*^*^
-
-      uint mate_case;
 
       if (!common_transcripts.empty()) {
         // Case 1: Mates share some transcripts - keep only shared ones
