@@ -1,13 +1,48 @@
 // bam.cpp
 
 #include <set>
+#include <unordered_set>
 #include <string>
 #include <vector>
 #include <algorithm>
 #include <memory>
+#include <cstdlib>
 
 #include "bramble.h"
 #include "htslib/sam.h"
+
+struct CigarMem {
+  uint32_t* ptr = nullptr;
+  size_t len = 0;
+
+  ~CigarMem() {
+    if (len > 0) {
+      if (ptr != nullptr) {
+        free(ptr);
+        ptr = nullptr;
+      }
+    }
+  }
+  void clear() { 
+    if (len > 0) {
+      memset(reinterpret_cast<char*>(ptr), 0, sizeof(uint32_t) * len);
+    }
+  }
+
+  uint32_t* get_mem(uint32_t size) {
+    if (len == 0) {
+      uint32_t claim = size > 0 ? size : 1;
+      ptr = reinterpret_cast<uint32_t*>(malloc(sizeof(uint32_t) * size));
+      if (ptr == nullptr) { std::exit(EXIT_FAILURE); }
+      len = claim;
+    } else if (len < size) { 
+      ptr = reinterpret_cast<uint32_t*>(realloc(ptr, sizeof(uint32_t) * size));
+      if (ptr == nullptr) { std::exit(EXIT_FAILURE); }
+      len = size;
+    } 
+    return ptr;
+  }
+};
 
 // Check if CIGAR string contains introns
 bool has_introns(uint32_t* cigar, uint32_t n_cigar) {
@@ -20,8 +55,8 @@ bool has_introns(uint32_t* cigar, uint32_t n_cigar) {
 }
 
 uint32_t* get_new_cigar_array(uint32_t* cigar, uint32_t n_cigar, 
-                              uint32_t* new_n_cigar) {
-  uint32_t* new_cigar = (uint32_t*)malloc(n_cigar * sizeof(uint32_t));    // max new_n_cigar = n_cigar
+                              uint32_t* new_n_cigar, CigarMem& mem) {
+  uint32_t* new_cigar = mem.get_mem(n_cigar); // (uint32_t*)malloc(n_cigar * sizeof(uint32_t));    // max new_n_cigar = n_cigar
   uint32_t j = 0;
   
   for (uint32_t i = 0; i < n_cigar; ++i) {
@@ -85,10 +120,10 @@ uint8_t* copy_cigar_memory(bam1_t* b, uint32_t new_n_cigar,
 }
 
 // Update CIGAR to remove introns
-void update_cigar(bam1_t* b, uint32_t* cigar, uint32_t n_cigar) {
+void update_cigar(bam1_t* b, uint32_t* cigar, uint32_t n_cigar, CigarMem& mem) {
   // Create new CIGAR array without N operations
   uint32_t new_n_cigar;
-  uint32_t* new_cigar = get_new_cigar_array(cigar, n_cigar, &new_n_cigar);
+  uint32_t* new_cigar = get_new_cigar_array(cigar, n_cigar, &new_n_cigar, mem);
 
   // Calculate new data layout sizes
   int l_qname = b->core.l_qname;
@@ -101,7 +136,7 @@ void update_cigar(bam1_t* b, uint32_t* cigar, uint32_t n_cigar) {
   copy_cigar_memory(b, new_n_cigar, n_cigar, new_m_data, new_cigar, l_qname, l_qseq, l_aux);
   b->core.n_cigar = new_n_cigar;
 
-  free(new_cigar);
+  //free(new_cigar);
 }
 
 // Set mate information for a read
@@ -176,11 +211,14 @@ void set_nh_tag(bam1_t* b, uint nh_i) {
   bam_aux_append(b, "NH", 'i', sizeof(int32_t), (uint8_t*)&nh_i);
 }
 
+
+
 // Write bundle reads to BAM file
 void write_to_bam(BamIO* io, std::map<bam_id_t, BamInfo*>& bam_info, g2tTree* g2t) {
   GSamRecord new_brec;
-  std::set<read_id_t> seen;
+  std::unordered_set<read_id_t> seen;
 
+  CigarMem cigar_mem; 
   // Each pair now contains info for both mates
   // So they are printed at the same time
   for (const auto& pair : bam_info) {
@@ -201,7 +239,7 @@ void write_to_bam(BamIO* io, std::map<bam_id_t, BamInfo*>& bam_info, g2tTree* g2
 
       // Remove any introns
       if (has_introns(cigar, n_cigar)) {
-        update_cigar(read_b, cigar, n_cigar); // TODO: is there a way to speed this up?
+        update_cigar(read_b, cigar, n_cigar, cigar_mem); // TODO: is there a way to speed this up?
       }
 
       // Set the NH (number of hits) tag
@@ -235,7 +273,7 @@ void write_to_bam(BamIO* io, std::map<bam_id_t, BamInfo*>& bam_info, g2tTree* g2
 
       // Remove any introns
       if (has_introns(cigar, n_cigar)) {
-        update_cigar(read_b, cigar, n_cigar);
+        update_cigar(read_b, cigar, n_cigar, cigar_mem);
       }
   
       // Set the NH (number of hits) tag

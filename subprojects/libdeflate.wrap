@@ -1,0 +1,9 @@
+[wrap-file]
+directory = libdeflate-1.24
+source_url = https://github.com/ebiggers/libdeflate/archive/v1.24.tar.gz
+source_filename = v1.24.tar.gz
+source_hash = ad8d3723d0065c4723ab738be9723f2ff1cb0f1571e8bfcf0301ff9661f475e8
+patch_directory = libdeflate
+
+[provide]
+libdeflate = libdeflate_dep

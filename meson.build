@@ -22,7 +22,7 @@ zlib_dep = dependency('zlib', fallback: ['zlib', 'zlib_dep'])
 bz2_dep = dependency('bzip2', fallback: ['bzip2', 'bzip2_dep'])
 lzma_dep = dependency('liblzma', required: true)
 curl_dep = dependency('libcurl', required: true)
-libdeflate_dep = dependency('libdeflate', required: true)
+libdeflate_dep = dependency('libdeflate', fallback: ['libdeflate', 'libdeflate_dep'], required: true)
 
 libs = [libdeflate_dep, curl_dep, zlib_dep, bz2_dep, lzma_dep, cc.find_library('m', required: false)]
 

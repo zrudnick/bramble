@@ -548,6 +548,10 @@ class GSamWriter {
       	   GError("Error: unrecognized output file type!\n");
       }
       bam_file = hts_open(fname, mode.s);
+
+      // TODO: This shouldn't be hardcoded
+      hts_set_threads(bam_file, 4);
+
       if (bam_file==NULL)
          GError("Error: could not create output file %s\n", fname);
       if (sam_hdr_write(bam_file, hdr)<0)
