@@ -12,7 +12,7 @@
 
 #include "bramble.h"
 
-void print_tree(g2tTree *g2t);
+void print_tree(g2tTree* g2t);
 
 std::unique_ptr<g2tTree> make_g2t_tree(BundleData *bundle, BamIO *io);
 

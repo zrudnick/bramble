@@ -19,12 +19,6 @@
 
 using namespace std;
 
-#ifndef NOTHREADS   // Use threads
-#define THREADING_ENABLED 1
-#else
-#define THREADING_ENABLED 0
-#endif
-
 #define MAX_NODE 1000000
 #define SMALL_EXON                                                             \
   35 // exons smaller than this have a tendency to be missed by long read data
@@ -277,6 +271,8 @@ public:
 
   void insert(uint32_t start, uint32_t end,
               const tid_t &tid) {
+    
+    //GMessage("start = %d\t end = %d\t tid = %d\n", start, end, tid);
     // Insert tid to set of all TIDs
     all_tids.insert(tid);
 
@@ -354,10 +350,10 @@ public:
     }
 
     // There's a gap between ranges
-    for (size_t i = 0; i < merged_ranges.size() - 1; i++) {
+    for (size_t i = 0; i + 1 < merged_ranges.size(); i++) {
       if (merged_ranges[i].second < merged_ranges[i + 1].first) {
         new_nodes.push_back(new IntervalNode(merged_ranges[i].second,
-                                             merged_ranges[i + 1].first));
+                                            merged_ranges[i + 1].first));
       }
     }
 
@@ -713,9 +709,12 @@ struct ReadInfo {
    bool is_paired;
   bool has_introns;
   bool is_reverse;
+  uint32_t soft_clip_front;
+  uint32_t soft_clip_back;
 
-  ReadInfo() : matches(), brec(nullptr), valid_read(false), read_index(0), read_size(0), nh_i(0),
-				       is_paired(false), has_introns(false), is_reverse(false) {}
+  ReadInfo() : matches(), brec(nullptr), valid_read(false), read_index(0), 
+               read_size(0), nh_i(0), is_paired(false), has_introns(false), 
+               is_reverse(false), soft_clip_front(0), soft_clip_back(0) {}
 
   ~ReadInfo() {
     // brec is deleted by CReadAln
@@ -736,6 +735,9 @@ struct BamInfo {
   GSamRecord *brec;
   bool has_introns;
   bool is_reverse;
+  uint32_t soft_clip_front;
+  uint32_t soft_clip_back;
+  bool discard_read;
 
   // Read 2 information
   read_id_t mate_index;
@@ -746,6 +748,15 @@ struct BamInfo {
   GSamRecord *mate_brec;
   bool mate_has_introns;
   bool mate_is_reverse;
+  uint32_t mate_soft_clip_front;
+  uint32_t mate_soft_clip_back;
+  bool mate_discard_read;
+
+  BamInfo() : discard_read(false), mate_discard_read(false) {}
+
+  ~BamInfo() {
+    // idk who deletes this but its somebody
+  }
 };
 
 // Collect all refguide transcripts for a single genomic sequence

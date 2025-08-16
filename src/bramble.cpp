@@ -4,7 +4,9 @@
 #include <numeric>
 
 #include "CLI/CLI11.hpp"
-#include "GThreads.h" // for THREADING_ENABLED
+#ifndef NOTHREADS
+#include "GThreads.h"
+#endif
 #include "htslib/sam.h"
 #include "quill/Backend.h"
 #include "quill/Frontend.h"
@@ -56,8 +58,6 @@ const char *out_dir;      // Output folder
 // Threading: single producer, multiple consumers
 // Main thread/program is always loading the producer
 
-// THREADING_ENABLED defined in bramble.h
-
 GMutex data_mutex; // Manage availability of data records ready to be loaded by
                    // main thread
 GVec<int> clear_data_pool; // Indices of data bundles cleared for loading by
@@ -85,66 +85,67 @@ bool no_more_bundles = false;
 
 // Check if there are more bundles
 bool has_more_bundles() {
-  if (THREADING_ENABLED)
+#ifndef NOTHREADS
     GLockGuard<GFastMutex> lock(reading_mutex);
+#endif
   return !no_more_bundles;
 }
 
 // Wait for threads and set bundle status
 void wait_for_bundles() {
 
-  if (THREADING_ENABLED) {
-    reading_mutex.lock();
-    no_more_bundles = true;
-    reading_mutex.unlock();
+#ifndef NOTHREADS
+  reading_mutex.lock();
+  no_more_bundles = true;
+  reading_mutex.unlock();
 
-    queue_mutex.lock();
-    bundle_work &= ~(int)0x01; // clear bit 0;
-    queue_mutex.unlock();
+  queue_mutex.lock();
+  bundle_work &= ~(int)0x01; // clear bit 0;
+  queue_mutex.unlock();
 
-    bool are_threads_waiting = true;
-    while (are_threads_waiting) {
+  bool are_threads_waiting = true;
+  while (are_threads_waiting) {
+
+    wait_mutex.lock();
+    are_threads_waiting = (threads_waiting > 0);
+    wait_mutex.unlock();
+
+    if (are_threads_waiting) {
+      have_bundles.notify_all();
+      current_thread::sleep_for(1);
 
       wait_mutex.lock();
       are_threads_waiting = (threads_waiting > 0);
       wait_mutex.unlock();
 
-      if (are_threads_waiting) {
-        have_bundles.notify_all();
-        current_thread::sleep_for(1);
-
-        wait_mutex.lock();
-        are_threads_waiting = (threads_waiting > 0);
-        wait_mutex.unlock();
-
-        current_thread::sleep_for(1);
-      }
+      current_thread::sleep_for(1);
     }
   }
-
-  else {
-    no_more_bundles = true;
-  }
+#else
+  no_more_bundles = true;
+#endif
 }
 
 // Process current bundle
 void process_bundle(BundleData *bundle, BamIO *io) {
 
   if (VERBOSE) {
-    if (THREADING_ENABLED)
-      GLockGuard<GFastMutex> lock(log_mutex);
-    		GMessage(">bundle %s:%d-%d [%lu alignments (%d distinct), %d guides] begins processing...\n",
-				bundle->refseq.chars(), bundle->start, bundle->end, 
-				bundle->reads.Count(), bundle->guides.Count());
-
+  #ifndef NOTHREADS
+    GLockGuard<GFastMutex> lock(log_mutex);
+  #endif
+    GMessage(">bundle %s:%d-%d [%lu alignments (%d distinct), %d guides] begins processing...\n",
+		        bundle->refseq.chars(), bundle->start, bundle->end, 
+		        bundle->reads.Count(), bundle->guides.Count());
+  
 	}
 
-  // This is where reads are added to new BAM file
+  
   convert_reads(bundle, io);
 
   if (VERBOSE) {
-    if (THREADING_ENABLED)
-      GLockGuard<GFastMutex> lock(log_mutex);
+    #ifndef NOTHREADS
+    GLockGuard<GFastMutex> lock(log_mutex);
+    #endif
     GMessage("^bundle %s:%d-%d done (%d processed potential transcripts).\n",
              bundle->refseq.chars(), bundle->start, bundle->end);
   }
@@ -231,7 +232,7 @@ int wait_for_data(BundleData *bundles) {
 
 int main(int argc, char *argv[]) {
 
-  quill::Backend::start();
+  //quill::Backend::start();
   // Get a logger
   // This segfaults on my system, not sure why
   // quill::Logger *logger = quill::Frontend::create_or_get_logger(
@@ -389,7 +390,7 @@ int main(int argc, char *argv[]) {
   GStr last_ref_name;
   int last_ref_id = -1; // last seen ref_id
 
-#ifndef NOTHREADS // THREADING_ENABLED
+#ifndef NOTHREADS
 #define DEF_TSTACK_SIZE 8388608
   size_t def_stack_size = DEF_TSTACK_SIZE;
 
@@ -424,7 +425,7 @@ int main(int argc, char *argv[]) {
   }
   BundleData *bundle = &(bundles[n_threads]);
 
-#else // !THREADING_ENABLED
+#else
 
   // Just put everything into the same bundle
   BundleData bundles[1];
@@ -446,7 +447,9 @@ int main(int argc, char *argv[]) {
     bool new_bundle = false;
     bool new_chromosome = false;
 
+
     if ((brec = io->next()) != NULL) {
+      
       if (brec->isUnmapped())
         continue;
 
@@ -558,7 +561,7 @@ int main(int argc, char *argv[]) {
               fasta_seq->copyRange(bundle->start, bundle->end, false, true);
         }
 
-#ifndef NOTHREADS // THREADING_ENABLED
+#ifndef NOTHREADS
 
         // Push this in the bundle queue where it'll be picked up by the threads
         int queue_count = 0;
@@ -587,7 +590,7 @@ int main(int argc, char *argv[]) {
         }
         queue_mutex.unlock();
 
-#else // !THREADING_ENABLED
+#else // NOTHREADS = true
 
         // Just process single bundle
         process_bundle(bundle, io);
@@ -596,16 +599,16 @@ int main(int argc, char *argv[]) {
 
       // Clear bundle (no more alignments)
       else {
-        if (THREADING_ENABLED) {
+        #ifndef NOTHREADS
           data_mutex.lock();
-        }
+        #endif
 
         bundle->Clear();
 
-        if (THREADING_ENABLED) {
+        #ifndef NOTHREADS
           clear_data_pool.Push(bundle->idx);
           data_mutex.unlock();
-        }
+        #endif
       }
 
       // If there is a new chromosome
@@ -647,7 +650,7 @@ int main(int argc, char *argv[]) {
         break;
       }
 
-      if (THREADING_ENABLED) {
+      #ifndef NOTHREADS
         int new_bidx = wait_for_data(bundles);
         if (new_bidx < 0) {
           // LOG_ERROR(logger, "Error: wait_for_data() returned invalid bundle index({})!\n",
@@ -655,7 +658,7 @@ int main(int argc, char *argv[]) {
           break; // should never happen!
         }
         bundle = &(bundles[new_bidx]);
-      }
+      #endif
 
       curr_bundle_start = read_start_pos;
       curr_bundle_end = brec->end;
@@ -748,7 +751,7 @@ int main(int argc, char *argv[]) {
   //^**^^^*^**^^^*^**^^^*^**^^^*
 
   // Delete thread and bundle arrays
-  if (THREADING_ENABLED) {
+  #ifndef NOTHREADS
     for (int t = 0; t < n_threads; t++) {
       threads[t].join();
     }
@@ -758,7 +761,7 @@ int main(int argc, char *argv[]) {
     delete[] threads;
     delete[] bundles;
     delete bundle_queue;
-  }
+  #endif
 
   io->stop(); // close BAM reader & writer
   delete io;
@@ -766,9 +769,5 @@ int main(int argc, char *argv[]) {
   delete gfasta;
   
   f_out = stdout;
-  // fprintf(f_out, "# ");
-  // args.printCmdLine(f_out);
   fprintf(f_out, "# Bramble version %s\n", VERSION);
-
-  //gffnames_unref(guide_seq_names); // deallocate names collection
 }

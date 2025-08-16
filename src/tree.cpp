@@ -21,13 +21,13 @@ using bam_id_t = uint32_t;  // id in bam_info
  *
  * @param g2t g2t tree for bundle
  */
-void print_tree(g2tTree *g2t) {
+void print_tree(g2tTree* g2t) {
   auto intervals = g2t->fw_tree->getOrderedIntervals();
   printf("FW Tree:\n");
   for (auto &interval : intervals) {
     printf("(%u, %u)", interval->start, interval->end);
     for (auto &tid : interval->tids) {
-      printf(" %d ", tid);
+      printf(" %s ", g2t->getTidName(tid).c_str());
       printf(" %d ", interval->tid_cum_len[tid]);
     }
     printf("-> ");
@@ -39,7 +39,7 @@ void print_tree(g2tTree *g2t) {
   for (auto &interval : intervals) {
     printf("(%u, %u)", interval->start, interval->end);
     for (auto &tid : interval->tids) {
-      printf(" %d ", tid);
+      printf(" %s ", g2t->getTidName(tid).c_str());
       printf(" %d ", interval->tid_cum_len[tid]);
     }
     printf("-> ");
@@ -85,7 +85,7 @@ std::unique_ptr<g2tTree> make_g2t_tree(BundleData *bundle, BamIO *io) {
   g2t->buildAllTidChains();
   g2t->precomputeAllCumulativeLengths();
 
-  // print_tree(g2t);
+  //print_tree(g2t.get());
   return g2t;
 }
 
@@ -239,7 +239,7 @@ std::set<tid_t> collapse_intervals(std::vector<IntervalNode *> sorted_intervals,
     // Soft clip backwards
   } else {
     soft_clip = first_interval->start - exon_start;
-    return {};
+    //return {};
   }
 
   // PROCESS FOLLOWING INTERVALS
@@ -384,111 +384,142 @@ void process_read_out(BundleData *&bundle,
 
   GVec<GSeg> read_exons = read->segs;
   std::string read_name = read->brec->name();
-  char read_strand = read->strand;
 
   IntervalNode *first_interval = nullptr;
   IntervalNode *last_interval = nullptr;
   IntervalNode *prev_last_interval = nullptr;
 
   uint exon_count = read_exons.Count();
+  uint32_t soft_clip_front = 0; // number bases to soft clip at front
+  uint32_t soft_clip_back = 0;  // number bases to soft clip at back
 
-  for (uint j = 0; j < exon_count; j++) {
-    GSeg curr_exon = read_exons[j];
-    uint exon_start, exon_end;
+  // Determine which strands to check
+  std::vector<int8_t> strands_to_check;
+  if (read->strand == '+') {
+    strands_to_check = {1}; // forward strand only
+  } else if (read->strand == '-') {
+    strands_to_check = {-1}; // reverse strand only  
+  } else {
+    strands_to_check = {1, -1}; // unstranded: try forward first, then reverse
+  }
 
-    std::vector<IntervalNode*> sorted_intervals;
+  for (int strand : strands_to_check) {
+    matches.clear(); // Reset matches for each strand attempt
+    bool strand_failed = false;
 
-    // TODO: Improve method of inferring splice strand
-    if (read_strand == '+' || read_strand == '.') {
-      if (read_strand == '.') read_strand = '+'; // this should only happen for first read exon
-      exon_start = curr_exon.start - bundle->start;
-      exon_end = curr_exon.end - bundle->start;
-    } else {
-      exon_start = bundle->end - curr_exon.end;
-      exon_end = bundle->end - curr_exon.start;
+    for (uint j = 0; j < exon_count; j++) {
+      GSeg curr_exon = read_exons[j];
+      uint exon_start, exon_end;
+
+      std::vector<IntervalNode*> sorted_intervals;
+
+      char read_strand = (strand == 1) ? '+' : '-';
+      
+      if (read_strand == '+') {
+        exon_start = curr_exon.start - bundle->start;
+        exon_end = curr_exon.end - bundle->start;
+      } else { // read_strand == '-'
+        exon_start = bundle->end - curr_exon.end;
+        exon_end = bundle->end - curr_exon.start;
+      }
+
+      // Find all guide intervals that contain the read exon
+      sorted_intervals = g2t->getIntervals(exon_start, exon_end, read_strand);
+      
+      // No overlap at all
+      if (sorted_intervals.empty()) {
+        strand_failed = true;
+        break;
+      }
+        
+      // NOTE: This must come *after* the empty check!!
+      prev_last_interval = last_interval;
+      first_interval = sorted_intervals[0];
+      last_interval = sorted_intervals[sorted_intervals.size() - 1];
+
+      bool is_first_exon = (j == 0) ? true : false;
+      bool is_last_exon = (j == exon_count - 1) ? true : false;
+
+      bool used_backwards_overhang = false;
+
+      // *^*^*^ *^*^*^ *^*^*^ *^*^*^
+      // First, check the intervals for this read exon
+      // *^*^*^ *^*^*^ *^*^*^ *^*^*^
+
+      auto exon_tids = collapse_intervals(
+          sorted_intervals, exon_start, is_first_exon, read_strand, g2t, bundle,
+          used_backwards_overhang, soft_clip_front, prev_last_interval);
+
+      // Exon extends beyond guide interval (USE_FASTA mode)
+      if (USE_FASTA && (is_last_exon) && (last_interval->end < exon_end)) {
+        // Update valid transcripts to only those with matching extensions
+        if (!check_forward_overhang(last_interval, exon_end, read_strand,
+                                    exon_tids, g2t, bundle))
+          soft_clip_back = exon_end - last_interval->end;
+
+        // Last exon, Exon extends beyond guide interval (no fasta)
+      } else if ((is_last_exon) && (last_interval->end < exon_end)) {
+        if (exon_end - last_interval->end < 20)
+          soft_clip_back = exon_end - last_interval->end;
+        else {
+          strand_failed = true;
+          break;
+        }
+
+      // First/middle exon, exon end extends beyond guide interval
+      } else if (last_interval->end < exon_end) {
+        strand_failed = true;
+        break;
+
+      // Intervals don't support any TIDs
+      } else if (exon_tids.empty()) {
+        strand_failed = true;
+        break;
+      }
+
+      // *^*^*^ *^*^*^ *^*^*^ *^*^*^
+      // Next, update match TIDs and positions for read
+      // *^*^*^ *^*^*^ *^*^*^ *^*^*^
+
+      if (is_first_exon) {
+        // Initialize matches with TIDs and positions
+        for (const auto &tid : exon_tids) {
+          uint match_pos = get_match_pos(first_interval, tid, read_strand, g2t,
+                                        exon_start, used_backwards_overhang);
+          matches.insert(std::make_tuple(tid, match_pos));
+        }
+        exon_tids.clear();
+
+      } else {
+        auto it_match = matches.begin();
+        while (it_match != matches.end()) {
+          if (exon_tids.count(std::get<0>(*it_match))) {
+            ++it_match;
+          } else {
+            it_match = matches.erase(it_match);
+          }
+        }
+        exon_tids.clear();
+
+        if (matches.empty())
+          strand_failed = true;
+          break;
+      }
     }
 
-    // Find all guide intervals that contain the read exon
-    sorted_intervals = g2t->getIntervals(exon_start, exon_end, read_strand);
-
-     // If uncertain strand and forward didn't work, try reverse
-    if (read_strand == '.' && sorted_intervals.empty()) { // this should only happen for first read exon
-      read_strand = '-';
-      sorted_intervals = g2t->getIntervals(exon_start, exon_end, read_strand);
+    // If this strand worked, break
+    if (!strand_failed && !matches.empty()) {
+      break;
     }
     
-    // No overlap at all
-    if (sorted_intervals.empty())
-      return;
-
-    // NOTE: This must come *after* the empty check!!
-    prev_last_interval = last_interval;
-    first_interval = sorted_intervals[0];
-    last_interval = sorted_intervals[sorted_intervals.size() - 1];
-
-    bool is_first_exon = (j == 0) ? true : false;
-    bool is_last_exon = (j == exon_count - 1) ? true : false;
-
-    bool used_backwards_overhang = false;
-    uint soft_clip_front; // number bases to soft clip at front
-    uint soft_clip_back;  // number bases to soft clip at back
-
-    // *^*^*^ *^*^*^ *^*^*^ *^*^*^
-    // First, check the intervals for this read exon
-    // *^*^*^ *^*^*^ *^*^*^ *^*^*^
-
-    auto exon_tids = collapse_intervals(
-        sorted_intervals, exon_start, is_first_exon, read_strand, g2t, bundle,
-        used_backwards_overhang, soft_clip_front, prev_last_interval);
-
-    // Exon extends beyond guide interval (USE_FASTA mode)
-    if (USE_FASTA && (is_last_exon) && (last_interval->end < exon_end)) {
-      // Update valid transcripts to only those with matching extensions
-      if (!check_forward_overhang(last_interval, exon_end, read_strand,
-                                  exon_tids, g2t, bundle))
-        soft_clip_back = exon_end - last_interval->end;
-
-      // Last exon, Exon extends beyond guide interval (no fasta)
-    } else if ((is_last_exon) && last_interval->end < exon_end) {
-      soft_clip_back = exon_end - last_interval->end;
-      return;
-
-    // First/middle exon, exon end extends beyond guide interval
-    } else if (last_interval->end < exon_end) {
-      return;
-
-    // Intervals don't support any TIDs
-    } else if (exon_tids.empty()) {
+    // If this was a stranded read and it failed, return early
+    if (read->strand != '.') {
       return;
     }
+  }
 
-    // *^*^*^ *^*^*^ *^*^*^ *^*^*^
-    // Next, update match TIDs and positions for read
-    // *^*^*^ *^*^*^ *^*^*^ *^*^*^
-
-    if (is_first_exon) {
-      // Initialize matches with TIDs and positions
-      for (const auto &tid : exon_tids) {
-        uint match_pos = get_match_pos(first_interval, tid, read_strand, g2t,
-                                       exon_start, used_backwards_overhang);
-        matches.insert(std::make_tuple(tid, match_pos));
-      }
-      exon_tids.clear();
-
-    } else {
-      auto it_match = matches.begin();
-      while (it_match != matches.end()) {
-        if (exon_tids.count(std::get<0>(*it_match))) {
-          ++it_match;
-        } else {
-          it_match = matches.erase(it_match);
-        }
-      }
-      exon_tids.clear();
-
-      if (matches.empty())
-        return;
-    }
+  if (matches.empty()) {
+    return;
   }
 
   // If we reach here, read is valid
@@ -502,6 +533,8 @@ void process_read_out(BundleData *&bundle,
     this_read->read_index = i;
     this_read->read_size = group_read->len;
     this_read->nh_i = matches.size();
+    this_read->soft_clip_front = soft_clip_front;
+    this_read->soft_clip_back = soft_clip_back;
 
     // Record mate information
     this_read->is_paired = (group_read->brec->flags() & BAM_FPAIRED);
@@ -539,14 +572,15 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
   // UNPAIRED CASE
 
   if (mate_case == 0) {
-    //GMessage("hi\n");
-    // Add this read + transcripts to bam_info
-    bam_id_t n = bam_info.size();
-    auto this_pair = new BamInfo();
-    this_pair->valid_pair = true;
-    this_pair->is_paired = false;
 
     for (const tid_t &tid : read_transcripts) {
+
+      // Add this read + transcripts to bam_info
+      bam_id_t n = bam_info.size();
+      auto this_pair = new BamInfo();
+      this_pair->valid_pair = true;
+      this_pair->is_paired = false;
+      
       // Read 1 information
       this_pair->read_index = read_index;
       this_pair->tid = tid;
@@ -555,6 +589,10 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
       this_pair->read_size = this_read->read_size;
       this_pair->brec = this_read->brec;
       this_pair->is_reverse = this_read->is_reverse;
+      this_pair->soft_clip_front = this_read->soft_clip_front;
+      this_pair->soft_clip_back = this_read->soft_clip_back;
+
+      //GMessage("rid = %d\t tid = %d\n", read_index, tid);
 
       bam_info[n] = this_pair;
     }
@@ -585,6 +623,8 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
       this_pair->read_size = this_read->read_size;
       this_pair->brec = this_read->brec;
       this_pair->is_reverse = this_read->is_reverse;
+      this_pair->soft_clip_front = this_read->soft_clip_front;
+      this_pair->soft_clip_back = this_read->soft_clip_back;
 
       // Read 2 information
       this_pair->mate_index = mate_index;
@@ -594,6 +634,8 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
       this_pair->mate_size = mate_read->read_size;
       this_pair->mate_brec = mate_read->brec;
       this_pair->mate_is_reverse = mate_read->is_reverse;
+      this_pair->mate_soft_clip_front = mate_read->soft_clip_front;
+      this_pair->mate_soft_clip_back = mate_read->soft_clip_back;
 
       bam_info[n] = this_pair;
     }
@@ -615,6 +657,8 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
       this_pair->read_size = this_read->read_size;
       this_pair->brec = this_read->brec;
       this_pair->is_reverse = this_read->is_reverse;
+      this_pair->soft_clip_front = this_read->soft_clip_front;
+      this_pair->soft_clip_back = this_read->soft_clip_back;
     }
 
     for (const tid_t &tid : mate_transcripts) {
@@ -626,6 +670,8 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
       this_pair->mate_size = mate_read->read_size;
       this_pair->mate_brec = mate_read->brec;
       this_pair->mate_is_reverse = mate_read->is_reverse;
+      this_pair->mate_soft_clip_front = mate_read->soft_clip_front;
+      this_pair->mate_soft_clip_back = mate_read->soft_clip_back;
     }
 
     bam_info[n] = this_pair;
@@ -667,7 +713,6 @@ void process_mate_pairs(BundleData *bundle,
                         std::map<bam_id_t, BamInfo *> &bam_info) {
 
   GList<CReadAln> &reads = bundle->reads;
-  const int MAX_MAPPINGS_PER_READ = 200;
 
   // Pre-compute read transcript sets to avoid repeated extraction
   std::vector<std::set<read_id_t>> read_transcript_cache(reads.Count());
