@@ -914,7 +914,7 @@ void convert_reads(BundleData *bundle, BamIO *io) {
   process_mate_pairs(bundle, read_info, bam_info);
 
   // Third pass: write to BAM
-  write_to_bam(io, bam_info, g2t.get());
+  write_to_bam(io, bam_info);
 
   // Free allocated structures
   free_read_data(aln_groups, read_info, bam_info);

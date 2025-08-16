@@ -16,19 +16,9 @@
 #include "GThreads.h"
 #endif
 
-GFastMutex bam_io_mutex;  // Protect BAM I/O operations
+GFastMutex bam_io_mutex;  // Protects writes to BAM output
 
-// Check if CIGAR string contains introns
-bool has_introns(uint32_t* cigar, uint32_t n_cigar) {
-    for (uint32_t i = 0; i < n_cigar; i++) {
-        if ((cigar[i] & BAM_CIGAR_MASK) == BAM_CREF_SKIP) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// Helper function to add or merge a CIGAR operation
+// Add or merge a CIGAR operation
 static uint32_t add_or_merge_op(uint32_t* new_cigar, uint32_t j, uint8_t op, uint32_t len) {
   // CIGAR array is not empty
   if (j > 0) {
@@ -45,15 +35,8 @@ static uint32_t add_or_merge_op(uint32_t* new_cigar, uint32_t j, uint8_t op, uin
   return j + 1;
 }
 
-void print_op(uint8_t op) {
-  if (op == BAM_CMATCH) GMessage("M");
-  if (op == BAM_CREF_SKIP) GMessage("N");
-  if (op == BAM_CDEL) GMessage("D");
-  if (op == BAM_CINS) GMessage("I");
-  if (op == BAM_CSOFT_CLIP) GMessage("S");
-}
-
-uint32_t* get_new_cigar_array(uint32_t* cigar, uint32_t n_cigar, 
+// Get new CIGAR array (if there is a new soft clip to add)
+uint32_t* get_new_cigar_array_soft_clips(uint32_t* cigar, uint32_t n_cigar, 
                               uint32_t* new_n_cigar, CigarMem& mem,
                               uint32_t soft_clip_front, uint32_t soft_clip_back,
                               bool &discard) {
@@ -67,14 +50,14 @@ uint32_t* get_new_cigar_array(uint32_t* cigar, uint32_t n_cigar,
   // Check for existing front soft clip
   uint32_t start_i = 0;
   if ((cigar[0] & BAM_CIGAR_MASK) == BAM_CSOFT_CLIP) {
-      total_soft_clip_front += (cigar[0] >> BAM_CIGAR_SHIFT); // # existing soft clip
+      total_soft_clip_front += (cigar[0] >> BAM_CIGAR_SHIFT); // # existing soft clip at front
       start_i = 1;
   }
   
   // Check for existing back soft clip
   uint32_t end_i = n_cigar;
   if ((cigar[n_cigar-1] & BAM_CIGAR_MASK) == BAM_CSOFT_CLIP) {
-    total_soft_clip_back += (cigar[n_cigar-1] >> BAM_CIGAR_SHIFT); // # existing soft clip
+    total_soft_clip_back += (cigar[n_cigar-1] >> BAM_CIGAR_SHIFT); // # existing soft clip at back
     end_i = n_cigar - 1;
   }
 
@@ -108,9 +91,6 @@ uint32_t* get_new_cigar_array(uint32_t* cigar, uint32_t n_cigar,
   uint32_t to_subtract_front = soft_clip_front;
   uint32_t to_subtract_back = soft_clip_back;
 
-  uint32_t total_len = total_soft_clip_front;
-
-  uint count = 0;
   while (i < end_i) {
     
     // Get current op in CIGAR
@@ -218,115 +198,89 @@ uint32_t* get_new_cigar_array(uint32_t* cigar, uint32_t n_cigar,
   return new_cigar;
 }
 
-// uint32_t* get_new_cigar_array(uint32_t* cigar, uint32_t n_cigar, 
-//                               uint32_t* new_n_cigar, CigarMem& mem,
-//                               uint32_t soft_clip_front, uint32_t soft_clip_back) {
-//   uint32_t* new_cigar = mem.get_mem(n_cigar); // (uint32_t*)malloc(n_cigar * sizeof(uint32_t));    // max new_n_cigar = n_cigar
-//   uint32_t j = 0;
+// Get new CIGAR array (no new soft clips)
+uint32_t* get_new_cigar_array(uint32_t* cigar, uint32_t n_cigar, 
+                              uint32_t* new_n_cigar, CigarMem& mem) {
   
-//   for (uint32_t i = 0; i < n_cigar; ++i) {
-//     uint8_t op = cigar[i] & BAM_CIGAR_MASK;
-//     uint32_t len = cigar[i] >> BAM_CIGAR_SHIFT;
+  uint32_t* new_cigar = mem.get_mem(n_cigar); 
+  uint32_t j = 0;
+  
+  for (uint32_t i = 0; i < n_cigar; ++i) {
+    uint8_t op = cigar[i] & BAM_CIGAR_MASK;
+    uint32_t len = cigar[i] >> BAM_CIGAR_SHIFT;
     
-//     if (op != BAM_CREF_SKIP) {  // Skip N operations
-//       // Check if we can merge with the previous operation
-//       if (j > 0) {
-//         uint8_t prev_op = new_cigar[j-1] & BAM_CIGAR_MASK;
-//         uint32_t prev_len = new_cigar[j-1] >> BAM_CIGAR_SHIFT;
+    if (op != BAM_CREF_SKIP) {  // Skip N operations
+      // Check if we can merge with the previous operation
+      if (j > 0) {
+        uint8_t prev_op = new_cigar[j-1] & BAM_CIGAR_MASK;
+        uint32_t prev_len = new_cigar[j-1] >> BAM_CIGAR_SHIFT;
         
-//         // Merge with previous operation of same type
-//         if (prev_op == op) {
-//           new_cigar[j-1] = ((prev_len + len) << BAM_CIGAR_SHIFT) | op;
+        // Merge with previous operation of same type
+        if (prev_op == op) {
+          new_cigar[j-1] = ((prev_len + len) << BAM_CIGAR_SHIFT) | op;
 
-//         // Different operation type, add new entry
-//         } else {
-//           new_cigar[j] = (len << BAM_CIGAR_SHIFT) | op;
-//           j++;
-//         }
+        // Different operation type, add new entry
+        } else {
+          new_cigar[j] = (len << BAM_CIGAR_SHIFT) | op;
+          j++;
+        }
       
-//       // First operation, just add it
-//       } else {
-//         new_cigar[j] = (len << BAM_CIGAR_SHIFT) | op;
-//         j++;
-//       }
-//     }
-//     // N operations are skipped (not copied)
-//   }
+      // First operation, just add it
+      } else {
+        new_cigar[j] = (len << BAM_CIGAR_SHIFT) | op;
+        j++;
+      }
+    }
+    // N operations are skipped (not copied)
+  }
 
-//   *new_n_cigar = j;
-//   return new_cigar;
-// }
+  *new_n_cigar = j;
+  return new_cigar;
+}
 
-// // Copy CIGAR memory for intron removal
-// uint8_t* copy_cigar_memory(bam1_t* b, uint32_t new_n_cigar, 
-//                            uint32_t n_cigar, uint32_t new_m_data, 
-//                            uint32_t* new_cigar, int l_qname, 
-//                            int l_qseq, int l_aux) {
-    
-//   // Reallocate BAM data
-//   if (new_m_data > b->m_data) {
-//       b->m_data = new_m_data;
-//       b->data = (uint8_t*)realloc(b->data, b->m_data);
-//   }
-//   uint8_t* data = b->data;
-
-//   // Copy new cigar replacing old cigar
-//   memcpy(data + l_qname, new_cigar, new_n_cigar << 2);
-
-//   int seq_offset = l_qname + (n_cigar << 2);
-//   int new_seq_offset = l_qname + (new_n_cigar << 2);
-//   int seq_size = (l_qseq + 1) >> 1;
-//   int qual_size = l_qseq;
-
-//   memmove(data + new_seq_offset, data + seq_offset, seq_size + qual_size + l_aux);
-//   b->l_data = new_m_data;
-
-//   return data;
-// }
-
+// Copy CIGAR memory for intron removal
 uint8_t* copy_cigar_memory(bam1_t* b, uint32_t new_n_cigar, 
-                           uint32_t old_n_cigar, uint32_t new_m_data, 
+                           uint32_t n_cigar, uint32_t new_m_data, 
                            uint32_t* new_cigar, int l_qname, 
                            int l_qseq, int l_aux) {
     
-  // Calculate where sequence data currently is (using OLD cigar count)
-  int old_seq_offset = l_qname + (old_n_cigar << 2);
-  int seq_size = (l_qseq + 1) >> 1;
-  int qual_size = l_qseq;
-  
-  // Store sequence and quality data before we overwrite anything
-  uint8_t* tmp_seq_qual = (uint8_t*)malloc(seq_size + qual_size + l_aux);
-  memcpy(tmp_seq_qual, b->data + old_seq_offset, seq_size + qual_size + l_aux);
-  
-  // Reallocate BAM data if needed
+  // Reallocate BAM data
   if (new_m_data > b->m_data) {
       b->m_data = new_m_data;
       b->data = (uint8_t*)realloc(b->data, b->m_data);
   }
-  
-  // Copy new cigar
-  memcpy(b->data + l_qname, new_cigar, new_n_cigar << 2);
-  
-  // Copy sequence/quality data to new position (using new cigar count)
+  uint8_t* data = b->data;
+
+  // Copy new cigar replacing old cigar
+  memcpy(data + l_qname, new_cigar, new_n_cigar << 2);
+
+  int seq_offset = l_qname + (n_cigar << 2);
   int new_seq_offset = l_qname + (new_n_cigar << 2);
-  memcpy(b->data + new_seq_offset, tmp_seq_qual, seq_size + qual_size + l_aux);
-  
+  int seq_size = (l_qseq + 1) >> 1;
+  int qual_size = l_qseq;
+
+  memmove(data + new_seq_offset, data + seq_offset, seq_size + qual_size + l_aux);
   b->l_data = new_m_data;
-  free(tmp_seq_qual);
-  
-  return b->data;
+
+  return data;
 }
 
 // Update CIGAR to remove introns
 bool update_cigar(bam1_t* b, uint32_t* cigar, uint32_t n_cigar, CigarMem& mem, 
                   uint32_t soft_clip_front, uint32_t soft_clip_back) {
+  
   // Create new CIGAR array without N operations
   uint32_t new_n_cigar;
 
-  bool discard = false;
-  uint32_t* new_cigar = get_new_cigar_array(cigar, n_cigar, &new_n_cigar, mem, 
-    soft_clip_front, soft_clip_back, discard);
-  if (discard) return false;
+  uint32_t* new_cigar;
+  if (soft_clip_front || soft_clip_back) {
+    bool discard = false;
+    new_cigar = get_new_cigar_array_soft_clips(cigar, n_cigar, &new_n_cigar, mem, 
+                          soft_clip_front, soft_clip_back, discard);
+    if (discard) return false;
+  } else {
+    new_cigar = get_new_cigar_array(cigar, n_cigar, &new_n_cigar, mem);
+  }
 
   // Calculate new data layout sizes
   int l_qname = b->core.l_qname;
@@ -415,13 +369,13 @@ void set_nh_tag(bam1_t* b, uint nh_i) {
 }
 
 // Write bundle reads to BAM file
-void write_to_bam(BamIO* io, std::map<bam_id_t, BamInfo*>& bam_info, g2tTree* g2t) {
+void write_to_bam(BamIO* io, std::map<bam_id_t, BamInfo*>& bam_info) {
   GSamRecord new_brec;
   std::unordered_set<read_id_t> seen;
 
   CigarMem cigar_mem; 
-  // Each pair now contains info for both mates
-  // So they are printed at the same time
+
+  // Print information for both mates (paired reads) or single read
   for (const auto& pair : bam_info) {
     auto this_pair = std::get<1>(pair);
     if (!this_pair || !this_pair->valid_pair) continue;
@@ -437,11 +391,10 @@ void write_to_bam(BamIO* io, std::map<bam_id_t, BamInfo*>& bam_info, g2tTree* g2
       read_b = this_pair->brec->get_b();
       cigar = bam_get_cigar(read_b);
       n_cigar = read_b->core.n_cigar;
-
-      // Remove any introns
-      //if (has_introns(cigar, n_cigar)) {
+      
       uint32_t soft_clip_front = this_pair->soft_clip_front;
       uint32_t soft_clip_back = this_pair->soft_clip_back;
+
       if (update_cigar(read_b, cigar, n_cigar, cigar_mem, soft_clip_front, soft_clip_back)) {
         // Set the NH (number of hits) tag
         nh_i = this_pair->nh;
@@ -449,7 +402,6 @@ void write_to_bam(BamIO* io, std::map<bam_id_t, BamInfo*>& bam_info, g2tTree* g2
       } else {
         this_pair->discard_read = true;
       }
-      //}
 
       seen.insert(this_pair->read_index);
     }
@@ -482,18 +434,17 @@ void write_to_bam(BamIO* io, std::map<bam_id_t, BamInfo*>& bam_info, g2tTree* g2
       cigar = bam_get_cigar(read_b);
       n_cigar = read_b->core.n_cigar;
 
-      // Remove any introns
-      //if (has_introns(cigar, n_cigar)) {
       uint32_t soft_clip_front = this_pair->mate_soft_clip_front;
       uint32_t soft_clip_back = this_pair->mate_soft_clip_back;
+
       if (update_cigar(read_b, cigar, n_cigar, cigar_mem, soft_clip_front, soft_clip_back)) {
+
         // Set the NH (number of hits) tag
         nh_i = this_pair->mate_nh;
         set_nh_tag(read_b, nh_i);
       } else {
         this_pair->mate_discard_read = true;
       }
-      //}
 
       seen.insert(this_pair->mate_index);
     }
