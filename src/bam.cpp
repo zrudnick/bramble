@@ -303,6 +303,9 @@ void set_mate_info(bam1_t* b, BamInfo* this_pair, bool first_read) {
   if (!this_pair->is_paired) {
     // Clear all paired-end related flags
     b->core.flag &= ~(BAM_FPAIRED | BAM_FPROPER_PAIR | BAM_FMREVERSE);
+
+    // Set strand flag
+    if (this_pair->is_reverse) b->core.flag |= BAM_FREVERSE;
     
     // Set mate reference to unmapped
     b->core.mtid = -1;  // -1 indicates unmapped mate
@@ -325,6 +328,12 @@ void set_mate_info(bam1_t* b, BamInfo* this_pair, bool first_read) {
   
   // Set basic paired flags
   b->core.flag |= BAM_FPAIRED;
+  if (this_pair->is_reverse) b->core.flag |= BAM_FREVERSE;
+  if (first_read && this_pair->mate_is_reverse) {
+    b->core.flag |= BAM_FMREVERSE;
+  } else if (!first_read && this_pair->is_reverse) {
+    b->core.flag |= BAM_FMREVERSE;
+  }
   
   // Mates map to same transcript
   if (this_pair->same_transcript) {
@@ -336,36 +345,34 @@ void set_mate_info(bam1_t* b, BamInfo* this_pair, bool first_read) {
     // Calculate insert size for same transcript
     int32_t isize = 0;
     if (first_read) {
-      // This read comes first
       isize = ((b->core.mpos + this_pair->mate_size) - b->core.pos);
     } else {
-      // Mate comes first
       isize = -((b->core.pos + this_pair->mate_size) - b->core.mpos); // negative for second read in pair
     }
     b->core.isize = isize;
       
   // Mates map to different transcripts
   } else {
-    // Set mate reference and position for different transcript
     b->core.mtid = tid;
     b->core.mpos = pos;
     b->core.isize = 0;
     b->core.flag |= BAM_FPROPER_PAIR;
   }
   
-  // Set mate strand information
-  if (first_read && this_pair->mate_is_reverse) {
-    b->core.flag |= BAM_FMREVERSE;
-  } else if (!first_read && this_pair->is_reverse) {
-    b->core.flag |= BAM_FMREVERSE;
-  }
 }
 
 // Add new NH tag (after removing current one)
-void set_nh_tag(bam1_t* b, uint nh_i) {
+void set_nh_tag(bam1_t* b, int32_t nh_i) {
   uint8_t* nh = bam_aux_get(b, "NH");
   if (nh) bam_aux_del(b, nh);
-  bam_aux_append(b, "NH", 'i', sizeof(int32_t), (uint8_t*)&nh_i);
+  bam_aux_append(b, "NH", 'i', 4, (uint8_t*)&nh_i);
+}
+
+void set_xs_tag(bam1_t* b, char xs_a) {
+  uint8_t* xs = bam_aux_get(b, "XS");
+  if (xs) bam_aux_del(b, xs);
+  uint8_t new_xs = (uint8_t) xs_a;
+  bam_aux_append(b, "XS", 'A', 1, &new_xs);
 }
 
 // Write bundle reads to BAM file
@@ -383,7 +390,8 @@ void write_to_bam(BamIO* io, std::map<bam_id_t, BamInfo*>& bam_info) {
     bam1_t* read_b;
     uint32_t* cigar;
     uint32_t n_cigar;
-    uint32_t nh_i;
+    int32_t nh_i;
+    char xs_a;
 
     // 1. Process first mate
     if (seen.find(this_pair->read_index) == seen.end()) {
@@ -396,9 +404,11 @@ void write_to_bam(BamIO* io, std::map<bam_id_t, BamInfo*>& bam_info) {
       uint32_t soft_clip_back = this_pair->soft_clip_back;
 
       if (update_cigar(read_b, cigar, n_cigar, cigar_mem, soft_clip_front, soft_clip_back)) {
-        // Set the NH (number of hits) tag
+        // Set the NH and XS tags
         nh_i = this_pair->nh;
+        xs_a = this_pair->strand;
         set_nh_tag(read_b, nh_i);
+        set_xs_tag(read_b, xs_a);
       } else {
         this_pair->discard_read = true;
       }
@@ -439,9 +449,11 @@ void write_to_bam(BamIO* io, std::map<bam_id_t, BamInfo*>& bam_info) {
 
       if (update_cigar(read_b, cigar, n_cigar, cigar_mem, soft_clip_front, soft_clip_back)) {
 
-        // Set the NH (number of hits) tag
+        // Set the NH and XS tags
         nh_i = this_pair->mate_nh;
+        xs_a = this_pair->mate_strand;
         set_nh_tag(read_b, nh_i);
+        set_xs_tag(read_b, xs_a);
       } else {
         this_pair->mate_discard_read = true;
       }

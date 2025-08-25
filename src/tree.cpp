@@ -394,16 +394,18 @@ void process_read_out(BundleData *&bundle,
   uint32_t soft_clip_back = 0;  // number bases to soft clip at back
 
   // Determine which strands to check
-  std::vector<int8_t> strands_to_check;
+  std::vector<char> strands_to_check;
   if (read->strand == '+') {
-    strands_to_check = {1}; // forward strand only
+    strands_to_check = {'+'}; // forward strand only
   } else if (read->strand == '-') {
-    strands_to_check = {-1}; // reverse strand only  
+    strands_to_check = {'-'}; // reverse strand only  
   } else {
-    strands_to_check = {1, -1}; // unstranded: try forward first, then reverse
+    strands_to_check = {'+', '-'}; // unstranded: try forward first, then reverse
   }
 
-  for (int strand : strands_to_check) {
+  char correct_strand = '.';
+
+  for (char strand : strands_to_check) {
     matches.clear(); // Reset matches for each strand attempt
     bool strand_failed = false;
 
@@ -413,7 +415,7 @@ void process_read_out(BundleData *&bundle,
 
       std::vector<IntervalNode*> sorted_intervals;
 
-      char read_strand = (strand == 1) ? '+' : '-';
+      char read_strand = (strand == '+') ? '+' : '-';
       
       if (read_strand == '+') {
         exon_start = curr_exon.start - bundle->start;
@@ -501,14 +503,16 @@ void process_read_out(BundleData *&bundle,
         }
         exon_tids.clear();
 
-        if (matches.empty())
+        if (matches.empty()) {
           strand_failed = true;
           break;
+        }
       }
     }
 
     // If this strand worked, break
     if (!strand_failed && !matches.empty()) {
+      correct_strand = strand;
       break;
     }
     
@@ -535,10 +539,11 @@ void process_read_out(BundleData *&bundle,
     this_read->nh_i = matches.size();
     this_read->soft_clip_front = soft_clip_front;
     this_read->soft_clip_back = soft_clip_back;
+    this_read->strand = correct_strand;
 
     // Record mate information
     this_read->is_paired = (group_read->brec->flags() & BAM_FPAIRED);
-    this_read->is_reverse = (group_read->brec->flags() & BAM_FREVERSE);
+    this_read->is_reverse = (correct_strand == '-');
     read_info[i] = this_read;
   }
   return;
@@ -591,8 +596,7 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
       this_pair->is_reverse = this_read->is_reverse;
       this_pair->soft_clip_front = this_read->soft_clip_front;
       this_pair->soft_clip_back = this_read->soft_clip_back;
-
-      //GMessage("rid = %d\t tid = %d\n", read_index, tid);
+      this_pair->strand = this_read->strand;
 
       bam_info[n] = this_pair;
     }
@@ -625,6 +629,7 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
       this_pair->is_reverse = this_read->is_reverse;
       this_pair->soft_clip_front = this_read->soft_clip_front;
       this_pair->soft_clip_back = this_read->soft_clip_back;
+      this_pair->strand = this_read->strand;
 
       // Read 2 information
       this_pair->mate_index = mate_index;
@@ -636,6 +641,7 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
       this_pair->mate_is_reverse = mate_read->is_reverse;
       this_pair->mate_soft_clip_front = mate_read->soft_clip_front;
       this_pair->mate_soft_clip_back = mate_read->soft_clip_back;
+      this_pair->mate_strand = mate_read ->strand;
 
       bam_info[n] = this_pair;
     }
@@ -659,6 +665,7 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
       this_pair->is_reverse = this_read->is_reverse;
       this_pair->soft_clip_front = this_read->soft_clip_front;
       this_pair->soft_clip_back = this_read->soft_clip_back;
+      this_pair->strand = this_read->strand;
     }
 
     for (const tid_t &tid : mate_transcripts) {
@@ -672,6 +679,7 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
       this_pair->mate_is_reverse = mate_read->is_reverse;
       this_pair->mate_soft_clip_front = mate_read->soft_clip_front;
       this_pair->mate_soft_clip_back = mate_read->soft_clip_back;
+      this_pair->mate_strand = mate_read->strand;
     }
 
     bam_info[n] = this_pair;

@@ -767,6 +767,15 @@ int main(int argc, char *argv[]) {
   delete io;
   delete worker_args;
   delete gfasta;
+
+  // there's a leak from GffObj and owned GffExons
+  // they need to be freed somehow
+  // this is my first guess as to how
+  // no i dont think this helped
+  // for (int i = 0; i < gffreader.gflst.Count(); i++) {
+  //   GffObj *guide = gffreader.gflst[i];
+  //   free(guide);
+  // }
   
   f_out = stdout;
   fprintf(f_out, "# Bramble version %s\n", VERSION);

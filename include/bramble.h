@@ -711,10 +711,11 @@ struct ReadInfo {
   bool is_reverse;
   uint32_t soft_clip_front;
   uint32_t soft_clip_back;
+  char strand;
 
   ReadInfo() : matches(), brec(nullptr), valid_read(false), read_index(0), 
                read_size(0), nh_i(0), is_paired(false), has_introns(false), 
-               is_reverse(false), soft_clip_front(0), soft_clip_back(0) {}
+               is_reverse(false), soft_clip_front(0), soft_clip_back(0), strand('.') {}
 
   ~ReadInfo() {
     // brec is deleted by CReadAln
@@ -730,7 +731,7 @@ struct BamInfo {
   read_id_t read_index;
   tid_t tid;
   uint32_t pos;
-  uint32_t nh;
+  int32_t nh;
   uint32_t read_size;
   GSamRecord *brec;
   bool has_introns;
@@ -738,12 +739,13 @@ struct BamInfo {
   uint32_t soft_clip_front;
   uint32_t soft_clip_back;
   bool discard_read;
+  char strand;
 
   // Read 2 information
   read_id_t mate_index;
   tid_t mate_tid;
   uint32_t mate_pos;
-  uint32_t mate_nh;
+  int32_t mate_nh;
   uint32_t mate_size;
   GSamRecord *mate_brec;
   bool mate_has_introns;
@@ -751,8 +753,9 @@ struct BamInfo {
   uint32_t mate_soft_clip_front;
   uint32_t mate_soft_clip_back;
   bool mate_discard_read;
+  char mate_strand;
 
-  BamInfo() : discard_read(false), mate_discard_read(false) {}
+  BamInfo() : discard_read(false), strand('.'), mate_discard_read(false), mate_strand('.') {}
 
   ~BamInfo() {
     // idk who deletes this but its somebody
