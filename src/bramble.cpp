@@ -1,5 +1,4 @@
 // Bramble v1.0.0
-// Main file
 
 #include <numeric>
 
@@ -13,10 +12,9 @@
 #include "quill/LogMacros.h"
 #include "quill/Logger.h"
 #include "quill/sinks/ConsoleSink.h"
-#include "bam.h"
 #include "bramble.h"
 #include "reads.h"
-#include "tree.h"
+#include "evaluate.h"
 
 #define VERSION "1.0.0"
 
@@ -45,10 +43,6 @@ bool FR_STRAND = true;   // Read 1 is on forward strand, --fr
 bool RF_STRAND = false;   // Read 1 is on reverse strand, --fr
 bool USE_FASTA = false;   // Use FASTA for reducing soft clips
 bool SOFT_CLIPS = true;   // Add soft clips
-
-int incorrect_start;
-int incorrect_end;
-int too_long_overhang;
 
 FILE *f_out = NULL;       // Default: stdout
 uint8_t n_threads = 1;    // Threads, -p
@@ -325,7 +319,6 @@ int main(int argc, char *argv[]) {
   refguides.setCount(n_refguides); // maximum reference guide ID
 
   // Process each transcript for guide loading and header generation
-  uint curr_tid = 0;
   int last_refid = -1;
   for (int i = 0; i < gffreader->gflst.Count(); i++) {
     GffObj *guide = gffreader->gflst[i];
@@ -379,9 +372,6 @@ int main(int argc, char *argv[]) {
   // ^**^^^*^**^^^*^**^^^*^**^^^*
 
   GMessage("long reads = %d\n", LONG_READS);
-  incorrect_start = 0;
-  incorrect_end = 0;
-  too_long_overhang = 0;
 
   BamIO *io = new BamIO(bam_file_in, bam_file_out, header_path);
   io->start();
@@ -753,10 +743,6 @@ int main(int argc, char *argv[]) {
 
     process_read_in(curr_bundle_start, curr_bundle_end, *bundle, hashread, brec, splice_strand, nh, hi);
   }
-
-  GMessage("# incorrect start = %d\n", incorrect_start);
-  GMessage("# incorrect end = %d\n", incorrect_end);
-  GMessage("# too_long_overhang = %d\n", too_long_overhang);
 
   //^**^^^*^**^^^*^**^^^*^**^^^*
   // Finish and clean up

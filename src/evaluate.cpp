@@ -6,8 +6,11 @@
 #include <vector>
 #include <unordered_set>
 
-#include "bam.h"
 #include "bramble.h"
+#include "g2t.h"
+#include "evaluate.h"
+#include "bam.h"
+#include "types.h"
 
 #ifndef NOTHREADS
 #include "GThreads.h"
@@ -22,12 +25,8 @@ const uint32_t overhang_threshold = 8;
 const uint32_t max_mappings_per_read = 1000;
 const uint32_t max_softclip = 20;
 const uint32_t max_lr_gap = 50; //20
-using tid_t = uint32_t;
-using pos_t = uint32_t;
-using read_id_t = uint32_t; // read index in bundle
-using bam_id_t = uint32_t;  // id in bam_info
 
-int curr_longest_overhang = 0;
+namespace bramble {
 
 /**
  * Prints g2t tree with nodes sorted by genome coordinate
@@ -905,3 +904,5 @@ void convert_reads(BundleData *bundle, BamIO *io) {
   // Free allocated structures
   free_read_data(read_info, bam_info);
 }
+
+} // namespace bramble

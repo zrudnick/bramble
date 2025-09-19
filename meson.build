@@ -59,7 +59,7 @@ gclib_srcs = files(
   'gclib/GFaSeqGet.cpp', 'gclib/gff.cpp', 'gclib/GThreads.cpp'
 )
 
-main_srcs = files('src/bramble.cpp', 'src/bam.cpp', 'src/reads.cpp', 'src/tree.cpp')
+main_srcs = files('src/bramble.cpp', 'src/bam.cpp', 'src/reads.cpp', 'src/evaluate.cpp')
 
 # Optional sanitizers
 if get_option('memcheck')

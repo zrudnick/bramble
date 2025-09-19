@@ -1,4 +1,3 @@
-// bam.cpp
 
 #include <set>
 #include <unordered_set>
@@ -9,6 +8,8 @@
 #include <cstdlib>
 
 #include "bramble.h"
+#include "g2t.h"
+#include "evaluate.h"
 #include "bam.h"
 #include "htslib/sam.h"
 
@@ -18,6 +19,8 @@
 
 extern bool LONG_READS;
 extern GFastMutex bam_io_mutex;  // Protects BAM io
+
+namespace bramble {
 
 // Add or merge a CIGAR operation
 static uint32_t add_or_merge_op(uint32_t* new_cigar, uint32_t j, uint8_t op, uint32_t len) {
@@ -378,3 +381,5 @@ void write_to_bam(BamIO *io, std::unordered_map<bam_id_t, BamInfo *>& bam_info) 
 
   }
 }
+
+} // namespace bramble

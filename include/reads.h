@@ -1,9 +1,13 @@
-// reads.h
 
-#ifndef READS_H
-#define READS_H
+#pragma once
+#include "GSam.h"
 
-#include "bramble.h"
+using namespace bramble;
+
+namespace bramble {
+  
+struct BundleData;
+struct CReadAln;
 
 int add_new_read(BundleData& bundle, CReadAln* readaln, GSamRecord* brec);
 
@@ -26,5 +30,4 @@ void process_paired_reads(BundleData& bundle, int bundle_start, int read_start,
 void process_read_in(uint bundle_start, uint bundle_end, BundleData& bundle,
         GHash<int>& hashread, GSamRecord* brec, char strand, int nh, int hi);
 
-#endif
-
+}

@@ -1,11 +1,13 @@
-// reads.cpp
 
 #include "bramble.h"
+#include "GSam.h"
 #include "htslib/sam.h"
 
 extern bool LONG_READS;
 static GStr read_id("",
                     256); // Prevent repeated reallocation for each parsed read
+
+namespace bramble {
 
 void process_exons(GSamRecord *brec, CReadAln *readaln) {
   auto exons = brec->exons;
@@ -128,3 +130,5 @@ void process_read_in(uint bundle_start, uint bundle_end, BundleData &bundle,
   process_paired_reads(bundle, bundle_start, read_start, n, brec,
                        read_count, hi, hashread);
 }
+
+} // namespace bramble
