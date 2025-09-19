@@ -4,16 +4,30 @@
 #include <set>
 #include <string>
 #include <vector>
+#include <unordered_set>
 
 #include "bam.h"
 #include "bramble.h"
 
+#ifndef NOTHREADS
+#include "GThreads.h"
+#endif
+
+extern GFastMutex bam_io_mutex;  // Protects BAM io
+
+extern bool LONG_READS;
 extern bool USE_FASTA;
-uint32_t overhang_threshold = 8;
+extern bool SOFT_CLIPS;
+const uint32_t overhang_threshold = 8;
 const uint32_t max_mappings_per_read = 1000;
+const uint32_t max_softclip = 20;
+const uint32_t max_lr_gap = 50; //20
 using tid_t = uint32_t;
+using pos_t = uint32_t;
 using read_id_t = uint32_t; // read index in bundle
 using bam_id_t = uint32_t;  // id in bam_info
+
+int curr_longest_overhang = 0;
 
 /**
  * Prints g2t tree with nodes sorted by genome coordinate
@@ -66,7 +80,14 @@ std::unique_ptr<g2tTree> make_g2t_tree(BundleData *bundle, BamIO *io) {
     GffObj *guide = guides[i];
     char strand = guide->strand;
     const char *tid_string = guide->getID(); // we don't strictly need this
+
+    #ifndef NOTHREADS
+    bam_io_mutex.lock();
+    #endif
     tid_t tid = g2t->insertTidString(tid_string, io);
+    #ifndef NOTHREADS
+    bam_io_mutex.unlock();
+    #endif
 
     for (int j = 0; j < guide->exons.Count(); j++) {
       uint g_start, g_end;
@@ -118,7 +139,7 @@ std::string reverse_complement(const std::string &seq) {
   return rc;
 }
 
-std::string extract_sequence(const char *gseq, uint start, uint length,
+std::string extract_sequence(char *gseq, uint start, uint length,
                              char strand) {
   if (gseq == nullptr)
     return "";
@@ -206,7 +227,7 @@ std::set<tid_t> collapse_intervals(std::vector<IntervalNode *> sorted_intervals,
   auto first_interval = sorted_intervals[0];
   uint prev_end = first_interval->end;
 
-  // PROCESS FIRST INTERVAL: LATER EXONS
+  // PROCESS LATER EXONS
 
   if (!is_first_exon) {
     // Copy TIDs from interval
@@ -214,32 +235,51 @@ std::set<tid_t> collapse_intervals(std::vector<IntervalNode *> sorted_intervals,
     for (const auto &tid : first_interval->tids) {
       auto tid_last_interval =
           g2t->getPrevNode(first_interval, tid, read_strand);
-      if ((tid_last_interval == prev_last_interval) 
-          && (first_interval->start <= exon_start)){
-        exon_tids.insert(tid);
+
+      if (!LONG_READS) { // short reads
+        if ((tid_last_interval == prev_last_interval) 
+          && (first_interval->start <= exon_start)){ // query is within interval
+          exon_tids.insert(tid);
+          }
+      } else {           // long reads
+        if (tid_last_interval == prev_last_interval) {
+          if (first_interval->start <= (exon_start + max_lr_gap)) { // query is within interval
+            exon_tids.insert(tid);
+          }
+        } else { // intermediate
+
+          // ignore short intermediates
+          if ((tid_last_interval != nullptr) && (tid_last_interval->end - tid_last_interval->start < 5000)) { 
+            exon_tids.insert(tid);
+          }
+        }
       }
     }
 
   // PROCESS FIRST INTERVAL: FIRST EXON
 
-    // Start is within bounds --> copy all TIDs from interval
+  // long reads: allow some bp on either side
+  } else if (LONG_READS && ((first_interval->start <= exon_start)
+    || (first_interval->start - exon_start) <= max_lr_gap)) {
+    exon_tids.insert(first_interval->tids.begin(), first_interval->tids.end());
+
+  // Start is within bounds --> copy all TIDs from interval
   } else if (first_interval->start <= exon_start) {
     exon_tids.insert(first_interval->tids.begin(), first_interval->tids.end());
 
-    // Use input FASTA (-S) to check for previous transcript exons to map to
+  // Use input FASTA (-S) to check for previous transcript exons to map to
   } else if (USE_FASTA) {
     // Copy TIDs
     exon_tids.insert(first_interval->tids.begin(), first_interval->tids.end());
     used_backwards_overhang = check_backward_overhang(
         first_interval, exon_start, read_strand, exon_tids, g2t, bundle);
-    if (!used_backwards_overhang) {
+    if (SOFT_CLIPS && !used_backwards_overhang) {
       soft_clip = first_interval->start - exon_start;
     }
 
-    // Soft clip backwards
-  } else {
+  // Soft clip backwards
+  } else if (SOFT_CLIPS && (first_interval->start - exon_start <= max_softclip)) {
     soft_clip = first_interval->start - exon_start;
-    //return {};
   }
 
   // PROCESS FOLLOWING INTERVALS
@@ -249,8 +289,7 @@ std::set<tid_t> collapse_intervals(std::vector<IntervalNode *> sorted_intervals,
     const auto &interval = sorted_intervals[i];
 
     // Check continuity
-    if (interval->start != prev_end)
-      return {};
+    if (interval->start != prev_end) return {};
 
     // Remove TIDs not found in current interval
     auto it = exon_tids.begin();
@@ -362,6 +401,7 @@ uint get_match_pos(IntervalNode *interval, tid_t tid, char read_strand,
   return (exon_start - first_interval->start) + prev_node_sum;
 }
 
+
 /**
  * Process a single read - returns valid matches
  *
@@ -372,52 +412,41 @@ uint get_match_pos(IntervalNode *interval, tid_t tid, char read_strand,
  * @param read_index index of read in bundle->reads
  */
 void process_read_out(BundleData *&bundle, 
-                      uint read_index, 
-                      g2tTree *g2t,
-                      std::map<read_id_t, ReadInfo *> &read_info,
-                      std::vector<uint32_t> group
-                      ) {
+                      uint read_index, g2tTree *g2t,
+                      std::unordered_map<read_id_t, ReadInfo *> &read_info,
+                      std::vector<uint32_t> group) {
 
   CReadAln *read = bundle->reads[read_index];
-  std::set<std::tuple<tid_t, uint>> matches;
-  std::set<std::tuple<tid_t, uint>> tmp_matches;
+  std::unordered_set<std::pair<tid_t, pos_t>, match_hash> matches;
 
   GVec<GSeg> read_exons = read->segs;
-  std::string read_name = read->brec->name();
+  uint exon_count = read_exons.Count();
+  //std::string read_name = read->brec->name();
 
   IntervalNode *first_interval = nullptr;
   IntervalNode *last_interval = nullptr;
   IntervalNode *prev_last_interval = nullptr;
-
-  uint exon_count = read_exons.Count();
+  
   uint32_t soft_clip_front = 0; // number bases to soft clip at front
   uint32_t soft_clip_back = 0;  // number bases to soft clip at back
 
   // Determine which strands to check
   std::vector<char> strands_to_check;
-  if (read->strand == '+') {
-    strands_to_check = {'+'}; // forward strand only
-  } else if (read->strand == '-') {
-    strands_to_check = {'-'}; // reverse strand only  
-  } else {
-    strands_to_check = {'+', '-'}; // unstranded: try forward first, then reverse
-  }
+  if (read->strand == '+') strands_to_check = {'+'}; 
+  else if (read->strand == '-') strands_to_check = {'-'}; 
+  else strands_to_check = {'+', '-'}; // unstranded: try forward first, then reverse
 
   char correct_strand = '.';
 
   for (char strand : strands_to_check) {
-    matches.clear(); // Reset matches for each strand attempt
+    matches.clear(); 
     bool strand_failed = false;
 
     for (uint j = 0; j < exon_count; j++) {
       GSeg curr_exon = read_exons[j];
-      uint exon_start, exon_end;
+      uint32_t exon_start, exon_end;
 
-      std::vector<IntervalNode*> sorted_intervals;
-
-      char read_strand = (strand == '+') ? '+' : '-';
-      
-      if (read_strand == '+') {
+      if (strand == '+') {
         exon_start = curr_exon.start - bundle->start;
         exon_end = curr_exon.end - bundle->start;
       } else { // read_strand == '-'
@@ -426,7 +455,7 @@ void process_read_out(BundleData *&bundle,
       }
 
       // Find all guide intervals that contain the read exon
-      sorted_intervals = g2t->getIntervals(exon_start, exon_end, read_strand);
+      auto sorted_intervals = g2t->getIntervals(exon_start, exon_end, strand);
       
       // No overlap at all
       if (sorted_intervals.empty()) {
@@ -439,9 +468,8 @@ void process_read_out(BundleData *&bundle,
       first_interval = sorted_intervals[0];
       last_interval = sorted_intervals[sorted_intervals.size() - 1];
 
-      bool is_first_exon = (j == 0) ? true : false;
-      bool is_last_exon = (j == exon_count - 1) ? true : false;
-
+      bool is_first_exon = (j == 0);
+      bool is_last_exon = (j == exon_count - 1);
       bool used_backwards_overhang = false;
 
       // *^*^*^ *^*^*^ *^*^*^ *^*^*^
@@ -449,19 +477,21 @@ void process_read_out(BundleData *&bundle,
       // *^*^*^ *^*^*^ *^*^*^ *^*^*^
 
       auto exon_tids = collapse_intervals(
-          sorted_intervals, exon_start, is_first_exon, read_strand, g2t, bundle,
+          sorted_intervals, exon_start, is_first_exon, strand, g2t, bundle,
           used_backwards_overhang, soft_clip_front, prev_last_interval);
 
       // Exon extends beyond guide interval (USE_FASTA mode)
-      if (USE_FASTA && (is_last_exon) && (last_interval->end < exon_end)) {
+      if (USE_FASTA && is_last_exon && (last_interval->end < exon_end)) {
         // Update valid transcripts to only those with matching extensions
-        if (!check_forward_overhang(last_interval, exon_end, read_strand,
-                                    exon_tids, g2t, bundle))
+        bool used_forward_overhang = check_forward_overhang(last_interval, exon_end, strand,
+                                                            exon_tids, g2t, bundle);
+        if (SOFT_CLIPS && !used_forward_overhang) {
           soft_clip_back = exon_end - last_interval->end;
+        }
 
         // Last exon, Exon extends beyond guide interval (no fasta)
-      } else if ((is_last_exon) && (last_interval->end < exon_end)) {
-        if (exon_end - last_interval->end < 20)
+      } else if (is_last_exon && (last_interval->end < exon_end)) {
+        if (SOFT_CLIPS && (exon_end - last_interval->end <= max_softclip))
           soft_clip_back = exon_end - last_interval->end;
         else {
           strand_failed = true;
@@ -472,6 +502,7 @@ void process_read_out(BundleData *&bundle,
       } else if (last_interval->end < exon_end) {
         strand_failed = true;
         break;
+
 
       // Intervals don't support any TIDs
       } else if (exon_tids.empty()) {
@@ -486,22 +517,20 @@ void process_read_out(BundleData *&bundle,
       if (is_first_exon) {
         // Initialize matches with TIDs and positions
         for (const auto &tid : exon_tids) {
-          uint match_pos = get_match_pos(first_interval, tid, read_strand, g2t,
+          uint32_t match_pos = get_match_pos(first_interval, tid, strand, g2t,
                                         exon_start, used_backwards_overhang);
-          matches.insert(std::make_tuple(tid, match_pos));
+          matches.insert(std::make_pair(tid, match_pos));
         }
-        exon_tids.clear();
 
       } else {
-        auto it_match = matches.begin();
-        while (it_match != matches.end()) {
-          if (exon_tids.count(std::get<0>(*it_match))) {
-            ++it_match;
+        auto it = matches.begin();
+        while (it != matches.end()) {
+          if (exon_tids.count(std::get<0>(*it))) {
+            ++it;
           } else {
-            it_match = matches.erase(it_match);
+            it = matches.erase(it);
           }
         }
-        exon_tids.clear();
 
         if (matches.empty()) {
           strand_failed = true;
@@ -530,22 +559,27 @@ void process_read_out(BundleData *&bundle,
   for (read_id_t &i : group) {
     CReadAln *group_read = bundle->reads[i];
 
-    ReadInfo *this_read = new ReadInfo();
-    this_read->valid_read = true;
+    auto this_read = new ReadInfo;
     this_read->matches = matches;
-    this_read->brec = group_read->brec;
-    this_read->read_index = i;
-    this_read->read_size = group_read->len;
-    this_read->nh_i = matches.size();
-    this_read->soft_clip_front = soft_clip_front;
-    this_read->soft_clip_back = soft_clip_back;
-    this_read->strand = correct_strand;
+    this_read->valid_read = true;
 
     // Record mate information
     this_read->is_paired = (group_read->brec->flags() & BAM_FPAIRED);
-    this_read->is_reverse = (correct_strand == '-');
+    
+    // Record ReadOut information
+    this_read->read = new ReadOut;
+    this_read->read->index = i;   // i is individual read_index
+    this_read->read->brec = group_read->brec;
+    this_read->read->read_size = group_read->len;
+    this_read->read->is_reverse = (correct_strand == '-');
+    this_read->read->nh = matches.size();
+    this_read->read->soft_clip_front = soft_clip_front;
+    this_read->read->soft_clip_back = soft_clip_back;
+    this_read->read->strand = correct_strand;
+
     read_info[i] = this_read;
   }
+
   return;
 }
 
@@ -563,42 +597,49 @@ void process_read_out(BundleData *&bundle,
  * @param read_size length of read
  * @param mate_size length of mate
  */
-void add_mate_info(const std::set<tid_t> &final_transcripts,
-                   const std::set<tid_t> &read_transcripts,
-                   const std::set<tid_t> &mate_transcripts,
-                   const std::map<tid_t, uint> &read_positions,
-                   const std::map<tid_t, uint> &mate_positions,
-                   std::map<read_id_t, ReadInfo *> &read_info, 
-                   std::map<bam_id_t, BamInfo *> &bam_info, 
-                   uint read_index, uint mate_index, uint mate_case) {
+void add_mate_info(const std::unordered_set<tid_t> &final_transcripts,
+                   const std::unordered_set<tid_t> &read_transcripts,
+                   const std::unordered_set<tid_t> &mate_transcripts,
+                   const std::unordered_map<tid_t, pos_t> &read_positions,
+                   const std::unordered_map<tid_t, pos_t> &mate_positions,
+                   std::unordered_map<read_id_t, ReadInfo *> &read_info, 
+                   std::unordered_map<bam_id_t, BamInfo *> &bam_info, 
+                   uint32_t read_index, uint32_t mate_index, uint32_t mate_case) {
+
+  // Add read or read pair to bam_info
+  auto add_pair = [&] (ReadInfo* this_read, ReadInfo* mate_read,
+                       tid_t r_tid, tid_t m_tid, 
+                       pos_t r_pos, pos_t m_pos, 
+                       bool is_paired) {
+    
+    // Add this read pair + transcript to bam_info
+    auto this_pair = new BamInfo();
+    this_pair->valid_pair = true;
+    this_pair->is_paired = is_paired;
+    
+    this_pair->r_tid = r_tid;
+    this_pair->r_pos = r_pos;
+    this_pair->read1 = this_read->read;
+
+    if (is_paired) {
+      this_pair->read2 = mate_read->read;
+      this_pair->m_tid = m_tid;
+      this_pair->m_pos = m_pos;
+    }
+
+    bam_info[bam_info.size()] = this_pair;
+  };
 
   auto this_read = read_info[read_index];
+  if (!this_read) return;
 
   // UNPAIRED CASE
-
   if (mate_case == 0) {
-
     for (const tid_t &tid : read_transcripts) {
+      auto it = read_positions.find(tid);
+      auto pos = it->second;
 
-      // Add this read + transcripts to bam_info
-      bam_id_t n = bam_info.size();
-      auto this_pair = new BamInfo();
-      this_pair->valid_pair = true;
-      this_pair->is_paired = false;
-      
-      // Read 1 information
-      this_pair->read_index = read_index;
-      this_pair->tid = tid;
-      this_pair->pos = read_positions.at(tid);
-      this_pair->nh = this_read->nh_i;
-      this_pair->read_size = this_read->read_size;
-      this_pair->brec = this_read->brec;
-      this_pair->is_reverse = this_read->is_reverse;
-      this_pair->soft_clip_front = this_read->soft_clip_front;
-      this_pair->soft_clip_back = this_read->soft_clip_back;
-      this_pair->strand = this_read->strand;
-
-      bam_info[n] = this_pair;
+      add_pair(this_read, nullptr, tid, 0, pos, 0, false); // is_paired = false
     }
 
     return;
@@ -607,85 +648,39 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
   // MATE PAIR CASES
 
   auto mate_read = read_info[mate_index];
+  if (!mate_read) return;
 
   if (mate_case == 1) {
-
     for (const tid_t &tid : final_transcripts) {
+      auto r_it = read_positions.find(tid);
+      auto m_it = mate_positions.find(tid);
+      pos_t r_pos = r_it->second;
+      pos_t m_pos = m_it->second;
 
-      // Add this read pair + transcript to bam_info
-      bam_id_t n = bam_info.size();
-      auto this_pair = new BamInfo();
-      this_pair->same_transcript = true; // true if both mates map to same transcript
-      this_pair->valid_pair = true;
-      this_pair->is_paired = true;
-      
-      // Read 1 information
-      this_pair->read_index = read_index;
-      this_pair->tid = tid;
-      this_pair->pos = read_positions.at(tid);
-      this_pair->nh = this_read->nh_i;
-      this_pair->read_size = this_read->read_size;
-      this_pair->brec = this_read->brec;
-      this_pair->is_reverse = this_read->is_reverse;
-      this_pair->soft_clip_front = this_read->soft_clip_front;
-      this_pair->soft_clip_back = this_read->soft_clip_back;
-      this_pair->strand = this_read->strand;
-
-      // Read 2 information
-      this_pair->mate_index = mate_index;
-      this_pair->mate_tid = tid;
-      this_pair->mate_pos = mate_positions.at(tid);
-      this_pair->mate_nh = mate_read->nh_i;
-      this_pair->mate_size = mate_read->read_size;
-      this_pair->mate_brec = mate_read->brec;
-      this_pair->mate_is_reverse = mate_read->is_reverse;
-      this_pair->mate_soft_clip_front = mate_read->soft_clip_front;
-      this_pair->mate_soft_clip_back = mate_read->soft_clip_back;
-      this_pair->mate_strand = mate_read ->strand;
-
-      bam_info[n] = this_pair;
+      add_pair(this_read, mate_read, tid, tid, r_pos, m_pos, true); // is_paired = true
     }
 
   } else if (mate_case == 2) {
 
-    // Add this read pair + transcript to bam_info
-    bam_id_t n = bam_info.size();
-    auto this_pair = new BamInfo();
-    this_pair->valid_pair = true;
-    this_pair->is_paired = true;
+    // each mate maps to exactly one transcript, but not the same one
+    if (read_transcripts.size() == 1 && mate_transcripts.size() == 1) {
+      tid_t r_tid = *read_transcripts.begin();
+      tid_t m_tid = *mate_transcripts.begin();
+      pos_t r_pos = read_positions.find(r_tid)->second;
+      pos_t m_pos = mate_positions.find(m_tid)->second;
 
-    for (const tid_t &tid : read_transcripts) {
-      // Read 1 information
-      this_pair->read_index = read_index;
-      this_pair->tid = tid;
-      this_pair->pos = read_positions.at(tid);
-      this_pair->nh = this_read->nh_i;
-      this_pair->read_size = this_read->read_size;
-      this_pair->brec = this_read->brec;
-      this_pair->is_reverse = this_read->is_reverse;
-      this_pair->soft_clip_front = this_read->soft_clip_front;
-      this_pair->soft_clip_back = this_read->soft_clip_back;
-      this_pair->strand = this_read->strand;
+      add_pair(this_read, mate_read, r_tid, m_tid, r_pos, m_pos, true); // is_paired = true
     }
 
-    for (const tid_t &tid : mate_transcripts) {
-      // Read 2 information
-      this_pair->mate_index = mate_index;
-      this_pair->mate_tid = tid;
-      this_pair->mate_pos = mate_positions.at(tid);
-      this_pair->mate_nh = mate_read->nh_i;
-      this_pair->mate_size = mate_read->read_size;
-      this_pair->mate_brec = mate_read->brec;
-      this_pair->mate_is_reverse = mate_read->is_reverse;
-      this_pair->mate_soft_clip_front = mate_read->soft_clip_front;
-      this_pair->mate_soft_clip_back = mate_read->soft_clip_back;
-      this_pair->mate_strand = mate_read->strand;
-    }
-
-    bam_info[n] = this_pair;
   }
   // could add more cases here if they exist
 
+}
+
+// Join two IDs into one 64-bit key
+inline uint64_t make_pair_key(read_id_t a, read_id_t b) {
+  if (a > b) std::swap(a, b);
+  return (static_cast<uint64_t>(a) << 32) | static_cast<uint32_t>(b);
 }
 
 /**
@@ -695,9 +690,9 @@ void add_mate_info(const std::set<tid_t> &final_transcripts,
  * @param final_transcripts tids to keep for this read
  */
 void update_read_matches(ReadInfo *read_info,
-                         const std::set<tid_t> &final_transcripts) {
+                         const std::unordered_set<tid_t> &final_transcripts) {
 
-  std::set<std::tuple<tid_t, uint>> new_matches;
+  std::unordered_set<std::pair<tid_t, pos_t>, match_hash> new_matches;
 
   for (const auto &match : read_info->matches) {
     const tid_t &tid = std::get<0>(match);
@@ -717,14 +712,13 @@ void update_read_matches(ReadInfo *read_info,
  * @param mate_map map between read_id and mate_info
  */
 void process_mate_pairs(BundleData *bundle, 
-                        std::map<read_id_t, ReadInfo *> &read_info,
-                        std::map<bam_id_t, BamInfo *> &bam_info) {
+                        std::unordered_map<read_id_t, ReadInfo *> &read_info,
+                        std::unordered_map<bam_id_t, BamInfo *> &bam_info) {
 
   GList<CReadAln> &reads = bundle->reads;
 
-  // Pre-compute read transcript sets to avoid repeated extraction
-  std::vector<std::set<read_id_t>> read_transcript_cache(reads.Count());
-  std::vector<std::map<read_id_t, uint>> read_position_cache(reads.Count());
+  std::vector<std::unordered_set<tid_t>> read_transcript_cache(reads.Count());
+  std::vector<std::unordered_map<tid_t, pos_t>> read_position_cache(reads.Count());
   std::vector<bool> read_valid(reads.Count(), false);
 
   // *^*^*^ *^*^*^ *^*^*^ *^*^*^
@@ -733,22 +727,18 @@ void process_mate_pairs(BundleData *bundle,
 
   for (int i = 0; i < reads.Count(); i++) {
 
-    auto read_info_it = read_info.find(i);
-    if (read_info_it == read_info.end() || !read_info_it->second->valid_read) {
-      continue;
-    }
+    auto it = read_info.find(i);
+    if (it == read_info.end() || !it->second->valid_read) continue;
 
-    auto this_read = read_info_it->second;
+    auto& this_read = it->second;
 
     // Skip reads with too many mappings
-    if (this_read->matches.size() > max_mappings_per_read) {
-      continue;
-    }
+    if (this_read->matches.size() > max_mappings_per_read) continue;
 
     read_valid[i] = true;
 
     // Cache transcript sets
-    for (const auto &match : this_read->matches) {
+    for (auto &match : this_read->matches) {
       tid_t tid = std::get<0>(match);
       uint pos = std::get<1>(match);
       read_transcript_cache[i].insert(tid);
@@ -760,26 +750,21 @@ void process_mate_pairs(BundleData *bundle,
   // Second pass: Process mate pairs using cached data
   // *^*^*^ *^*^*^ *^*^*^ *^*^*^
 
-  // Track processed pairs to avoid duplicates
-  std::set<std::pair<read_id_t, read_id_t>> processed_pairs;
+  // Track processed pairs using key to avoid duplicates
+  std::unordered_set<uint64_t> processed_pairs;
 
   for (int i = 0; i < reads.Count(); i++) {
-    if (!read_valid[i])
-      continue;
+    if (!read_valid[i]) continue;
 
     CReadAln *read = reads[i];
-    std::string read_name = read->brec->name();
-    auto this_read = read_info[i];
+    auto& this_read = read_info[i];
+    uint8_t mate_case = 0;
 
-    uint mate_case;
-
+    // Read is unpaired
     if (read->pair_idx.Count() == 0) {
-      mate_case = 0;
-      const auto &read_transcripts = read_transcript_cache[i];
-      const auto &read_positions = read_position_cache[i];
 
-      add_mate_info({}, read_transcripts, {},
-                    read_positions, {}, read_info, bam_info, 
+      add_mate_info({}, read_transcript_cache[i], {},
+                    read_position_cache[i], {}, read_info, bam_info, 
                     i, -1, mate_case);
       continue; // Skip to next read
     }
@@ -788,7 +773,6 @@ void process_mate_pairs(BundleData *bundle,
     for (int j = 0; j < read->pair_idx.Count(); j++) {
       int mate_index = read->pair_idx[j];
 
-      // Validate mate index and check if mate is valid
       if (mate_index < 0 || mate_index >= reads.Count() ||
           !read_valid[mate_index]) {
         read_valid[i] = false;
@@ -797,15 +781,9 @@ void process_mate_pairs(BundleData *bundle,
       }
 
       // Avoid processing the same pair twice (both directions)
-      std::pair<read_id_t, read_id_t> pair_key =
-          std::make_pair(std::min(i, mate_index), std::max(i, mate_index));
-      if (processed_pairs.find(pair_key) != processed_pairs.end()) {
-        continue;
-      }
-      processed_pairs.insert(pair_key);
+      uint64_t pair_key = make_pair_key(i, mate_index);
+      if (!processed_pairs.insert(pair_key).second) continue;
 
-      CReadAln *mate = reads[mate_index];
-      std::string mate_name = mate->brec->name();
       auto mate_read = read_info[mate_index];
 
       // Use cached transcript sets for fast intersection
@@ -815,14 +793,13 @@ void process_mate_pairs(BundleData *bundle,
       const auto &mate_positions = read_position_cache[mate_index];
 
       // Find common transcripts
-      std::set<tid_t> common_transcripts;
+      std::unordered_set<tid_t> common_transcripts;
       std::set_intersection(
           read_transcripts.begin(), read_transcripts.end(),
           mate_transcripts.begin(), mate_transcripts.end(),
           std::inserter(common_transcripts, common_transcripts.begin()));
 
-      // Apply mate pairing logic with early exit
-      std::set<tid_t> final_transcripts;
+      std::unordered_set<tid_t> final_transcripts;
 
       // *^*^*^ *^*^*^ *^*^*^ *^*^*^
       // Mate pair cases
@@ -870,9 +847,10 @@ void process_mate_pairs(BundleData *bundle,
   }
 }
 
-void free_read_data(AlnGroups* aln_groups, std::map<read_id_t, ReadInfo *> &read_info,
-                    std::map<bam_id_t, BamInfo *> &bam_info) {
-  delete aln_groups;
+void free_read_data(std::unordered_map<read_id_t, ReadInfo *> &read_info,
+                    std::unordered_map<bam_id_t, BamInfo *> &bam_info) {
+
+  // ReadOut is deleted with ReadInfo
   for (const auto &pair : read_info) {
     auto info = std::get<1>(pair);
     delete info;
@@ -895,8 +873,8 @@ void convert_reads(BundleData *bundle, BamIO *io) {
   if (g2t == nullptr)
     return;
 
-  // Create read groups
-  AlnGroups *aln_groups = new AlnGroups();
+  // Create read groups (adds negligable memory)
+  std::unique_ptr<AlnGroups> aln_groups = std::make_unique<AlnGroups>();
   GList<CReadAln> &reads = bundle->reads;
 
   for (int n = 0; n < reads.Count(); n++) {
@@ -904,10 +882,10 @@ void convert_reads(BundleData *bundle, BamIO *io) {
   }
 
   // Create read_info to store info for every read
-  std::map<read_id_t, ReadInfo *> read_info;
+  std::unordered_map<read_id_t, ReadInfo*> read_info;
 
   // Create bam_info to store info for every output line
-  std::map<bam_id_t, BamInfo *> bam_info;
+  std::unordered_map<bam_id_t, BamInfo*> bam_info;
 
   // First pass: process reads
   auto groups = aln_groups->groups;
@@ -925,5 +903,5 @@ void convert_reads(BundleData *bundle, BamIO *io) {
   write_to_bam(io, bam_info);
 
   // Free allocated structures
-  free_read_data(aln_groups, read_info, bam_info);
+  free_read_data(read_info, bam_info);
 }

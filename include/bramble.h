@@ -7,6 +7,7 @@
 #include <memory>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "GArgs.h"
@@ -28,6 +29,7 @@ using namespace std;
 #define MISMATCH_FRAC 0.02
 
 using tid_t = uint32_t;
+using pos_t = uint32_t;
 using read_id_t = uint32_t;
 using bam_id_t = uint32_t;
 
@@ -73,16 +75,6 @@ public:
   }
 
   void stop() {
-    /*
-    if (reader != nullptr) {
-      delete reader;
-      reader = nullptr;
-    }
-    if (writer != nullptr) {
-      delete writer;
-      writer = nullptr;
-    }
-    */
     if (current_record != nullptr) {
       delete current_record;
       current_record = nullptr;
@@ -144,7 +136,62 @@ private:
     }
   }
 
+  void printTreeStructure() {
+    std::cout << "\n=== TREE STRUCTURE ===" << std::endl;
+    if (!root) {
+        std::cout << "Tree is empty" << std::endl;
+        return;
+    }
+    printNodeRecursive(root, "", true, 0);
+    std::cout << "=====================\n" << std::endl;
+}
+
+void printNodeRecursive(IntervalNode *node, const std::string &prefix, bool isLast, int depth) {
+    if (!node) {
+        std::cout << prefix << (isLast ? "└── " : "├── ") << "NULL" << std::endl;
+        return;
+    }
+    
+    // Print current node
+    std::cout << prefix << (isLast ? "└── " : "├── ") 
+              << "[" << node->start << "," << node->end << ") "
+              << "h=" << node->height 
+              << " max=" << node->max_end
+              << " tids={";
+    
+    // Print first few TIDs
+    int count = 0;
+    for (auto tid : node->tids) {
+        if (count++ > 0) std::cout << ",";
+        std::cout << tid;
+        if (count >= 3) { std::cout << "..."; break; }
+    }
+    std::cout << "}" << std::endl;
+    
+    // Print children if they exist OR if we want to show NULL children for debugging
+    bool hasChildren = (node->left != nullptr || node->right != nullptr);
+    
+    if (hasChildren || depth < 3) {  // Show NULL children for shallow depths
+        std::string newPrefix = prefix + (isLast ? "    " : "│   ");
+        
+        if (node->left || node->right) {
+            printNodeRecursive(node->left, newPrefix, !node->right, depth + 1);
+            if (node->right) {
+                printNodeRecursive(node->right, newPrefix, true, depth + 1);
+            }
+        }
+    }
+  }
+
   IntervalNode *rotateRight(IntervalNode *y) {
+    if (!y->left) {
+        std::cout << "ERROR: rotateRight called but y->left is NULL!" << std::endl;
+        std::cout << "Node y: [" << y->start << "," << y->end << "] has no left child" << std::endl;
+        std::cout << "Tree structure before failed rotation:" << std::endl;
+        printTreeStructure();
+        return y;  // Return unchanged rather than segfault
+    }
+
     IntervalNode *x = y->left;
     IntervalNode *T2 = x->right;
 
@@ -271,6 +318,8 @@ public:
 
   void insert(uint32_t start, uint32_t end,
               const tid_t &tid) {
+
+    if (start == end) return;
     
     //GMessage("start = %d\t end = %d\t tid = %d\n", start, end, tid);
     // Insert tid to set of all TIDs
@@ -699,38 +748,14 @@ public:
   }
 };
 
-struct ReadInfo {
-  std::set<std::tuple<tid_t, uint32_t>> matches;
-  GSamRecord *brec;
-  bool valid_read;
-  uint32_t read_index;
-  uint32_t read_size;
-  uint32_t nh_i;
-   bool is_paired;
-  bool has_introns;
-  bool is_reverse;
-  uint32_t soft_clip_front;
-  uint32_t soft_clip_back;
-  char strand;
-
-  ReadInfo() : matches(), brec(nullptr), valid_read(false), read_index(0), 
-               read_size(0), nh_i(0), is_paired(false), has_introns(false), 
-               is_reverse(false), soft_clip_front(0), soft_clip_back(0), strand('.') {}
-
-  ~ReadInfo() {
-    // brec is deleted by CReadAln
+struct match_hash {
+  inline std::size_t operator()(const std::pair<read_id_t, pos_t> & v) const {
+      return v.first*31 + v.second;
   }
 };
 
-struct BamInfo {
-  bool same_transcript; // true if both mates map to same transcript
-  bool valid_pair;      // true if mate information should be output
-  bool is_paired;       // true if from paired reads
-  
-  // Read 1 information
-  read_id_t read_index;
-  tid_t tid;
-  uint32_t pos;
+struct ReadOut {
+  read_id_t index;
   int32_t nh;
   uint32_t read_size;
   GSamRecord *brec;
@@ -741,25 +766,40 @@ struct BamInfo {
   bool discard_read;
   char strand;
 
-  // Read 2 information
-  read_id_t mate_index;
-  tid_t mate_tid;
-  uint32_t mate_pos;
-  int32_t mate_nh;
-  uint32_t mate_size;
-  GSamRecord *mate_brec;
-  bool mate_has_introns;
-  bool mate_is_reverse;
-  uint32_t mate_soft_clip_front;
-  uint32_t mate_soft_clip_back;
-  bool mate_discard_read;
-  char mate_strand;
+  ReadOut() : index(), nh(), read_size(), brec(nullptr), has_introns(false),
+              is_reverse(false), soft_clip_front(0), soft_clip_back(0), discard_read(false),
+              strand('.') {}
+};
 
-  BamInfo() : discard_read(false), strand('.'), mate_discard_read(false), mate_strand('.') {}
+struct ReadInfo {
+  std::unordered_set<std::pair<tid_t, pos_t>, match_hash> matches;
+  bool valid_read;
+  bool is_paired;
 
-  ~BamInfo() {
-    // idk who deletes this but its somebody
+  ReadOut *read;
+
+  ReadInfo() : matches(), valid_read(false), is_paired(false), read() {}
+
+  ~ReadInfo() {
+    // brec is deleted by CReadAln
   }
+};
+
+struct BamInfo {
+  bool same_transcript;
+  bool valid_pair;
+  bool is_paired;
+
+  // Two ends of a pair (or just one if unpaired)
+  ReadOut *read1;
+  ReadOut *read2;
+
+  tid_t r_tid;
+  uint32_t r_pos;
+  tid_t m_tid;
+  uint32_t m_pos;
+
+  BamInfo() : same_transcript(false), valid_pair(false), is_paired(false) {}
 };
 
 // Collect all refguide transcripts for a single genomic sequence
@@ -935,7 +975,7 @@ struct BundleData {
   double num_fragments;    // aligned read/pairs
 
   GStr refseq;           // reference sequence name
-  char *gseq;            // genomic sequence for the bundle
+  char* gseq; // genomic sequence for the bundle
   GList<CReadAln> reads; // all reads in bundle
   GPVec<GffObj> guides; // all guides in bundle
 
@@ -959,7 +999,7 @@ BundleData():status(BundleStatus::BUNDLE_STATUS_CLEAR), idx(0), start(0), end(0)
     guides.Clear();
     reads.Clear();
     // TODO: Think about managing this with a unique_ptr
-    GFREE(gseq);
+    GFREE(gseq); 
 
     start = 0;
     end = 0;

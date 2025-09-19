@@ -125,6 +125,6 @@ void process_read_in(uint bundle_start, uint bundle_end, BundleData &bundle,
   float read_count = calculate_read_count(brec);
 
   // Handle paired-end reads
-  process_paired_reads(bundle, bundle_start, read_start, n, brec, read_count,
-                       hi, hashread);
+  process_paired_reads(bundle, bundle_start, read_start, n, brec,
+                       read_count, hi, hashread);
 }

@@ -41,9 +41,14 @@ Options:\n\
 
 bool VERBOSE = false;     // Verbose, --verbose
 bool LONG_READS = false;  // BAM file contains long reads, --long
-bool FR_STRAND = false;   // Read 1 is on forward strand, --fr
+bool FR_STRAND = true;   // Read 1 is on forward strand, --fr
 bool RF_STRAND = false;   // Read 1 is on reverse strand, --fr
 bool USE_FASTA = false;   // Use FASTA for reducing soft clips
+bool SOFT_CLIPS = true;   // Add soft clips
+
+int incorrect_start;
+int incorrect_end;
+int too_long_overhang;
 
 FILE *f_out = NULL;       // Default: stdout
 uint8_t n_threads = 1;    // Threads, -p
@@ -79,6 +84,7 @@ GConditionVar have_clear; // Will notify when bundle buf space available
 GMutex queue_mutex;       // Controls bundle_queue and bundles access
 GFastMutex log_mutex;     // Only when verbose - to avoid mangling the log output
 GFastMutex reading_mutex;
+GFastMutex bam_io_mutex;  // Protects BAM io
 #endif
 
 bool no_more_bundles = false;
@@ -139,14 +145,13 @@ void process_bundle(BundleData *bundle, BamIO *io) {
   
 	}
 
-  
   convert_reads(bundle, io);
 
   if (VERBOSE) {
     #ifndef NOTHREADS
     GLockGuard<GFastMutex> lock(log_mutex);
     #endif
-    GMessage("^bundle %s:%d-%d done (%d processed potential transcripts).\n",
+    GMessage("^bundle %s:%d-%d done.\n",
              bundle->refseq.chars(), bundle->start, bundle->end);
   }
 
@@ -250,7 +255,8 @@ int main(int argc, char *argv[]) {
       app.add_option("in.bam", input_bam, "input bam file")->required();
   app.add_flag("--fr", FR_STRAND, "assume stranded library fw-firststrand");
   app.add_flag("--rf", RF_STRAND, "assume stranded library fw-secondstrand");
-  app.add_flag("-v", VERBOSE, "verbose (log processing details)");
+  app.add_flag("--verbose", VERBOSE, "verbose (log processing details)");
+  app.add_flag("--long", LONG_READS, "verbose (log processing details)");
   app.add_option("-G", gff,
                  "reference annotation to use for guiding the assembly process "
                  "(GTF/GFF)")
@@ -299,17 +305,17 @@ int main(int argc, char *argv[]) {
            guide_gff.chars());
 
   // GffReader: transcripts only, sort by location
-  GffReader gffreader(f, true, true); // loading only recognizable transcript features
-  gffreader.setRefAlphaSorted(); // alphabetical sorting of RefSeq IDs
-  gffreader.showWarnings(VERBOSE);
+  GffReader *gffreader = new GffReader(f, true, true); // loading only recognizable transcript features
+  gffreader->setRefAlphaSorted(); // alphabetical sorting of RefSeq IDs
+  gffreader->showWarnings(VERBOSE);
 
   // keep attributes, merge close exons, no exon attributes
   // merge_close_exons must be false for correct transcriptome header
   // construction!
-  gffreader.readAll(true, false, false);
+  gffreader->readAll(true, false, false);
 
-  int n_refguides = gffreader.gseqtable.Count();
-  if (n_refguides == 0 || gffreader.gflst.Count() == 0) {
+  int n_refguides = gffreader->gseqtable.Count();
+  if (n_refguides == 0 || gffreader->gflst.Count() == 0) {
     GError("Error: could not any valid reference transcripts in %s (invalid "
            "GTF/GFF file?)\n",
            guide_gff.chars());
@@ -321,8 +327,8 @@ int main(int argc, char *argv[]) {
   // Process each transcript for guide loading and header generation
   uint curr_tid = 0;
   int last_refid = -1;
-  for (int i = 0; i < gffreader.gflst.Count(); i++) {
-    GffObj *guide = gffreader.gflst[i];
+  for (int i = 0; i < gffreader->gflst.Count(); i++) {
+    GffObj *guide = gffreader->gflst[i];
 
     // Chromosome switch
     if (last_refid != guide->gseq_id) {
@@ -355,24 +361,27 @@ int main(int argc, char *argv[]) {
     }
 
     GRefData &grefdata = refguides[guide->gseq_id];
-    grefdata.add(&gffreader, guide); // transcripts already sorted by location
+    grefdata.add(gffreader, guide); // transcripts already sorted by location
   }
 
-  //std::shared_ptr<GffNames> guide_seq_names = GffObj::names; // might have been populated already by gff data
   auto guide_seq_names = std::shared_ptr<GffNames>(GffObj::names);
-  //gffnames_ref(guide_seq_names); // initialize the names collection if not guided
 
   fprintf(header_file, "@CO\tGenerated from GTF: %s\n", guide_gff.chars());
   fclose(header_file);
 
   if (VERBOSE) {
     GMessage("Transcriptome header created\n");
-    GMessage(" %d reference transcripts loaded\n", gffreader.gflst.Count());
+    GMessage(" %d reference transcripts loaded\n", gffreader->gflst.Count());
   }
 
   // ^**^^^*^**^^^*^**^^^*^**^^^*
   // Start BAM IO
   // ^**^^^*^**^^^*^**^^^*^**^^^*
+
+  GMessage("long reads = %d\n", LONG_READS);
+  incorrect_start = 0;
+  incorrect_end = 0;
+  too_long_overhang = 0;
 
   BamIO *io = new BamIO(bam_file_in, bam_file_out, header_path);
   io->start();
@@ -557,8 +566,7 @@ int main(int argc, char *argv[]) {
             //           bundle->refseq.chars());
           }
 
-          bundle->gseq =
-              fasta_seq->copyRange(bundle->start, bundle->end, false, true);
+          bundle->gseq = fasta_seq->copyRange(bundle->start, bundle->end, false, true);
         }
 
 #ifndef NOTHREADS
@@ -746,6 +754,10 @@ int main(int argc, char *argv[]) {
     process_read_in(curr_bundle_start, curr_bundle_end, *bundle, hashread, brec, splice_strand, nh, hi);
   }
 
+  GMessage("# incorrect start = %d\n", incorrect_start);
+  GMessage("# incorrect end = %d\n", incorrect_end);
+  GMessage("# too_long_overhang = %d\n", too_long_overhang);
+
   //^**^^^*^**^^^*^**^^^*^**^^^*
   // Finish and clean up
   //^**^^^*^**^^^*^**^^^*^**^^^*
@@ -768,14 +780,12 @@ int main(int argc, char *argv[]) {
   delete worker_args;
   delete gfasta;
 
-  // there's a leak from GffObj and owned GffExons
-  // they need to be freed somehow
-  // this is my first guess as to how
-  // no i dont think this helped
-  // for (int i = 0; i < gffreader.gflst.Count(); i++) {
-  //   GffObj *guide = gffreader.gflst[i];
-  //   free(guide);
-  // }
+  // Delete gffreader data
+  for (int i = 0; i < gffreader->gflst.Count(); i++) {
+    GffObj *guide = gffreader->gflst[i];
+    delete guide;
+  }
+  delete gffreader;
   
   f_out = stdout;
   fprintf(f_out, "# Bramble version %s\n", VERSION);

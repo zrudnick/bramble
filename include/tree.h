@@ -40,29 +40,30 @@ uint get_match_pos(IntervalNode *interval, tid_t tid, char read_strand,
                    g2tTree *g2t, uint exon_start, bool used_backwards_overhang);
 
 void process_read_out(BundleData *&bundle, 
-                      uint read_index, 
-                      g2tTree *g2t,
-                      std::map<read_id_t, ReadInfo *> &bam_info,
+                      uint read_index, g2tTree *g2t,
+                      std::unordered_map<read_id_t, ReadInfo *> &read_info,
                       std::vector<uint32_t> group);
 
-void add_mate_info(const std::set<tid_t> &final_transcripts,
-                   const std::set<tid_t> &read_transcripts,
-                   const std::set<tid_t> &mate_transcripts,
-                   const std::map<tid_t, uint> &read_positions,
-                   const std::map<tid_t, uint> &mate_positions,
-                   std::map<read_id_t, ReadInfo *> &read_info, 
-                   std::map<bam_id_t, BamInfo *> &bam_info, uint read_index,
-                   uint mate_index, uint mate_case);
+void add_mate_info(const std::unordered_set<tid_t> &final_transcripts,
+                   const std::unordered_set<tid_t> &read_transcripts,
+                   const std::unordered_set<tid_t> &mate_transcripts,
+                   const std::unordered_map<tid_t, pos_t> &read_positions,
+                   const std::unordered_map<tid_t, pos_t> &mate_positions,
+                   std::unordered_map<read_id_t, ReadInfo *> &read_info, 
+                   std::unordered_map<bam_id_t, BamInfo *> &bam_info, 
+                   uint32_t read_index, uint32_t mate_index, uint32_t mate_case);
+
+inline uint64_t make_pair_key(read_id_t a, read_id_t b);
 
 void update_read_matches(ReadInfo *read_info,
                          const std::set<tid_t> &final_transcripts);
 
 void process_mate_pairs(BundleData *bundle, 
-                        std::map<read_id_t, ReadInfo *> &read_info,
-                        std::map<bam_id_t, BamInfo *> &bam_info);
+                        std::unordered_map<read_id_t, ReadInfo *> &read_info,
+                        std::unordered_map<bam_id_t, BamInfo *> &bam_info);
 
-void free_read_data(AlnGroups* aln_groups, std::map<read_id_t, ReadInfo *> &read_info,
-                    std::map<bam_id_t, BamInfo *> &bam_info);
+void free_read_data(std::unordered_map<read_id_t, ReadInfo *> &read_info,
+                    std::unordered_map<bam_id_t, BamInfo *> &bam_info);
 
 void convert_reads(BundleData *bundle, BamIO *io);
 
