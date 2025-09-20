@@ -146,39 +146,102 @@ namespace bramble {
     ~AlnGroups() { Clear(); }
   };
 
+  struct ReadEvaluationResult {
+    bool valid = false;
+    std::unordered_set<std::pair<tid_t, pos_t>, match_hash> matches;
+    char strand = '.';
+    uint32_t soft_clip_front = 0;
+    uint32_t soft_clip_back = 0;
+
+    // debug / metrics
+    uint32_t longest_overhang = 0;
+    std::string reject_reason; // optional
+  };
+
+  class ReadEvaluator {
+  public:
+    virtual ~ReadEvaluator();
+
+    // Evaluate a single read (or read group) and return structured result.
+    virtual ReadEvaluationResult 
+    evaluate(BundleData *bundle, uint read_index, g2tTree *g2t,
+            const std::vector<uint32_t> &group) = 0;
+  
+  protected:
+    
+    /**
+    * Get the match position for this transcript
+    *
+    * @param interval first interval the read matched to
+    * @param tid transcript id
+    * @param read_strand strand that the read aligned to
+    * @param g2t g2t tree for bundle
+    * @param exon_start start of first read exon
+    * @param used_backwards_overhang did we match backwards to a previous interval?
+    * (USE_FASTA mode)
+    */
+    uint get_match_pos(IntervalNode *interval, tid_t tid, char read_strand,
+                      g2tTree *g2t, uint exon_start, bool used_backwards_overhang);
+
+    std::string reverse_complement(const std::string &seq);
+
+    std::string extract_sequence(char *gseq, uint start, uint length, char strand);
+
+    /**
+     * Check if we can match forwards to another interval (USE_FASTA mode)
+     *
+     * @param interval first interval the read matched to
+     */
+    bool check_forward_overhang(IntervalNode *interval, uint exon_end,
+                                char read_strand,
+                                std::set<tid_t> &exon_tids, g2tTree *g2t,
+                                BundleData *bundle);
+
+    // Function to check backward overhang (left extension)
+    bool check_backward_overhang(IntervalNode *interval, uint exon_start,
+                                char read_strand,
+                                std::set<tid_t> &exon_tids, g2tTree *g2t,
+                                BundleData *bundle);
+  };
+
+  class ShortReadEvaluator : public ReadEvaluator {
+  private:
+    std::set<tid_t> 
+    collapse_intervals(std::vector<IntervalNode *> sorted_intervals,
+                      uint exon_start, bool is_first_exon, 
+                      char read_strand, g2tTree *g2t,
+                      BundleData *bundle, bool &used_backwards_overhang,
+                      uint &soft_clip, IntervalNode *prev_last_interval);
+
+  public:
+    ReadEvaluationResult evaluate(BundleData *bundle,
+                                  uint read_index,
+                                  g2tTree *g2t,
+                                  const std::vector<uint32_t> &group) override;
+
+  };
+
+  class LongReadEvaluator : public ReadEvaluator {
+  public:
+    ReadEvaluationResult evaluate(BundleData *bundle,
+                                  uint read_index,
+                                  g2tTree *g2t,
+                                  const std::vector<uint32_t> &group) override;
+
+  private:
+    // helper methods: collapse_intervals_with_score, splice_rescue, compute_exon_chain_score, ...
+  };
+
   // -------- function definitions
 
   void print_tree(g2tTree* g2t);
 
   std::unique_ptr<g2tTree> make_g2t_tree(BundleData *bundle, BamIO *io);
 
-  std::string reverse_complement(const std::string &seq);
-
-  std::string extract_sequence(const char *gseq, uint start, uint length,
-                              char strand);
-
-  bool check_backward_overhang(IntervalNode *interval, uint exon_start,
-                              char read_strand, std::set<std::string> &exon_tids,
-                              g2tTree *g2t, BundleData *bundle);
-
-  std::set<tid_t> 
-  collapse_intervals(std::vector<IntervalNode *> sorted_intervals,
-                    uint exon_start, bool is_first_exon, char read_strand,
-                    g2tTree *g2t, BundleData *bundle,
-                    bool &used_backwards_overhang, uint &soft_clip,
-                    IntervalNode *prev_last_interval);
-
-  bool check_forward_overhang(IntervalNode *interval, uint exon_end,
-                              char read_strand, std::set<tid_t> &exon_tids,
-                              g2tTree *g2t, BundleData *bundle);
-
-  uint get_match_pos(IntervalNode *interval, tid_t tid, char read_strand,
-                    g2tTree *g2t, uint exon_start, bool used_backwards_overhang);
-
-  void process_read_out(BundleData *&bundle, 
-                        uint read_index, g2tTree *g2t,
+  void process_read_out(BundleData *&bundle, uint read_index, g2tTree *g2t,
                         std::unordered_map<read_id_t, ReadInfo *> &read_info,
-                        std::vector<uint32_t> group);
+                        std::vector<read_id_t> group,
+                        std::unique_ptr<ReadEvaluator> &evaluator);
 
   void add_mate_info(const std::unordered_set<tid_t> &final_transcripts,
                     const std::unordered_set<tid_t> &read_transcripts,
@@ -192,7 +255,7 @@ namespace bramble {
   inline uint64_t make_pair_key(read_id_t a, read_id_t b);
 
   void update_read_matches(ReadInfo *read_info,
-                          const std::set<tid_t> &final_transcripts);
+                          const std::unordered_set<tid_t> &final_transcripts);
 
   void process_mate_pairs(BundleData *bundle, 
                           std::unordered_map<read_id_t, ReadInfo *> &read_info,
