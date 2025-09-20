@@ -1,6 +1,14 @@
 // Bramble v1.0.0
 
 #include <numeric>
+#include <algorithm>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <set>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include "CLI/CLI11.hpp"
 #ifndef NOTHREADS
@@ -15,6 +23,15 @@
 #include "bramble.h"
 #include "reads.h"
 #include "evaluate.h"
+
+#include "GArgs.h"
+#include "GBitVec.h"
+#include "GSam.h"
+#include "GStr.h"
+#include "gff.h"
+#include "time.h"
+
+using namespace bramble;
 
 #define VERSION "1.0.0"
 

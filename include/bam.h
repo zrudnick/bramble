@@ -10,65 +10,67 @@ using namespace bramble;
 
 namespace bramble {
 
-struct BamInfo;
-struct BamIO;
+  struct BamInfo;
+  struct BamIO;
 
-struct CigarMem {
-  uint32_t* ptr = nullptr;
-  size_t len = 0;
+  struct CigarMem {
+    uint32_t* ptr = nullptr;
+    size_t len = 0;
 
-  ~CigarMem() {
-    if (len > 0) {
-      if (ptr != nullptr) {
-        free(ptr);
-        ptr = nullptr;
+    ~CigarMem() {
+      if (len > 0) {
+        if (ptr != nullptr) {
+          free(ptr);
+          ptr = nullptr;
+        }
       }
     }
-  }
-  void clear() { 
-    if (len > 0) {
-      memset(reinterpret_cast<char*>(ptr), 0, sizeof(uint32_t) * len);
+    void clear() { 
+      if (len > 0) {
+        memset(reinterpret_cast<char*>(ptr), 0, sizeof(uint32_t) * len);
+      }
     }
-  }
 
-  uint32_t* get_mem(uint32_t size) {
-    if (len == 0) {
-      uint32_t claim = size > 0 ? size : 1;
-      ptr = reinterpret_cast<uint32_t*>(malloc(sizeof(uint32_t) * size));
-      if (ptr == nullptr) { std::exit(EXIT_FAILURE); }
-      len = claim;
-    } else if (len < size) { 
-      ptr = reinterpret_cast<uint32_t*>(realloc(ptr, sizeof(uint32_t) * size));
-      if (ptr == nullptr) { std::exit(EXIT_FAILURE); }
-      len = size;
-    } 
+    uint32_t* get_mem(uint32_t size) {
+      if (len == 0) {
+        uint32_t claim = size > 0 ? size : 1;
+        ptr = reinterpret_cast<uint32_t*>(malloc(sizeof(uint32_t) * size));
+        if (ptr == nullptr) { std::exit(EXIT_FAILURE); }
+        len = claim;
+      } else if (len < size) { 
+        ptr = reinterpret_cast<uint32_t*>(realloc(ptr, sizeof(uint32_t) * size));
+        if (ptr == nullptr) { std::exit(EXIT_FAILURE); }
+        len = size;
+      } 
 
-    return ptr;
-  }
-};
+      return ptr;
+    }
+  };
 
-uint32_t* get_new_cigar_soft_clips(uint32_t* cigar, uint32_t n_cigar, 
-                              uint32_t* new_n_cigar, CigarMem& mem,
-                              uint32_t soft_clip_front, uint32_t soft_clip_back);
+  // -------- function definitions
 
-uint32_t* get_new_cigar(uint32_t* cigar, uint32_t n_cigar, 
-                        uint32_t* new_n_cigar, CigarMem& mem);
+  uint32_t* get_new_cigar_soft_clips(uint32_t* cigar, uint32_t n_cigar, 
+                                uint32_t* new_n_cigar, CigarMem& mem,
+                                uint32_t soft_clip_front, uint32_t soft_clip_back);
 
-uint8_t* copy_cigar_memory(bam1_t* b, uint32_t new_n_cigar,
-                           uint32_t old_n_cigar, uint32_t new_m_data,
-                           const uint32_t* new_cigar, int l_qname,
-                           int l_qseq, int l_aux);
+  uint32_t* get_new_cigar(uint32_t* cigar, uint32_t n_cigar, 
+                          uint32_t* new_n_cigar, CigarMem& mem);
 
-bool update_cigar(bam1_t* b, uint32_t* cigar, uint32_t n_cigar,
-                  CigarMem& mem, uint32_t soft_clip_front,
-                  uint32_t soft_clip_back);
+  uint8_t* copy_cigar_memory(bam1_t* b, uint32_t new_n_cigar,
+                            uint32_t old_n_cigar, uint32_t new_m_data,
+                            const uint32_t* new_cigar, int l_qname,
+                            int l_qseq, int l_aux);
 
-void set_mate_info(bam1_t* b, BamInfo* this_pair, bool first_read);
+  bool update_cigar(bam1_t* b, uint32_t* cigar, uint32_t n_cigar,
+                    CigarMem& mem, uint32_t soft_clip_front,
+                    uint32_t soft_clip_back);
 
-void set_nh_tag(bam1_t* b, int32_t nh_i);
+  void set_mate_info(bam1_t* b, BamInfo* this_pair, bool first_read);
 
-void set_xs_tag(bam1_t* b, char xs_a);
+  void set_nh_tag(bam1_t* b, int32_t nh_i);
 
-void write_to_bam(BamIO* io, std::unordered_map<bam_id_t, BamInfo*>& bam_info);
+  void set_xs_tag(bam1_t* b, char xs_a);
+
+  void write_to_bam(BamIO* io, std::unordered_map<bam_id_t, BamInfo*>& bam_info);
 
 }
