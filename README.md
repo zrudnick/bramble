@@ -1,4 +1,4 @@
-# Bramble: genome to transcriptome coordinate conversion 🌿🫐
+# Bramble: projection of spliced genomic alignments into transcriptomic space 🌿🫐
 
 
 For the `meson` build system. Currently, system dependencies are required for 
