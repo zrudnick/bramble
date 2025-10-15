@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
 
-meson setup build
-cd build
-ninja
-cd ..
+meson setup build --buildtype=release #--buildtype=debug
+ninja -C build -v

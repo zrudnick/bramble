@@ -7,7 +7,7 @@ namespace bramble {
 
   struct IntervalNode {
     uint32_t start, end;
-    uint32_t max_end; // maximum end value in subtree (interval tree augmentation)
+    uint32_t max_end; // maximum end value in subtree
     uint32_t height;
     std::set<tid_t> tids;
     std::unordered_map<tid_t, uint32_t> tid_cum_len;
@@ -26,12 +26,13 @@ namespace bramble {
 
   class IntervalTree {
   public:
+    IntervalNode *root;
     IntervalTree();
 
     ~IntervalTree();
 
   private:
-    IntervalNode *root;
+    // IntervalNode *root;
     std::set<tid_t> all_tids;
 
     int getHeight(IntervalNode *node);
@@ -93,7 +94,7 @@ namespace bramble {
 
     // Find all intervals that overlap with the given range
     std::vector<IntervalNode *> 
-    findOverlapping(uint32_t start, uint32_t end);
+    findOverlapping(uint32_t start, uint32_t end, bool allow_gaps);
 
     // Get next node in chain for a specific TID
     IntervalNode *getNextNodeForTid(IntervalNode *node, const tid_t &tid);
@@ -133,7 +134,7 @@ namespace bramble {
     // tid for it, otherwise give it the next available tid and return that.
     tid_t insertTidString(const char *&tid_name, BamIO* io);
 
-    // get the string name given an id
+    // Get the string name given an id
     const std::string &getTidName(tid_t id);
 
     // Add guide exon with TID and transcript start
@@ -149,7 +150,8 @@ namespace bramble {
 
     // Find all guide TIDs that overlap with a read exon
     std::vector<IntervalNode *> 
-    getIntervals(uint32_t readStart, uint32_t readEnd, char strand);
+    getIntervals(uint32_t readStart, uint32_t readEnd, 
+                char strand, bool allow_gaps = false);
 
     // Get cumulative previous size of exons from transcript
     uint32_t 

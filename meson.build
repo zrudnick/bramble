@@ -59,7 +59,8 @@ gclib_srcs = files(
   'gclib/GFaSeqGet.cpp', 'gclib/gff.cpp', 'gclib/GThreads.cpp'
 )
 
-main_srcs = files('src/bramble.cpp', 'src/bam.cpp', 'src/reads.cpp', 'src/evaluate.cpp', 'src/g2t.cpp')
+main_srcs = files('src/bramble.cpp', 'src/bam.cpp', 'src/bundles.cpp', 'src/threads.cpp',
+'src/core.cpp', 'src/mates.cpp', 'src/evaluate.cpp', 'src/g2t.cpp')
 
 # Optional sanitizers
 if get_option('memcheck')
@@ -96,5 +97,5 @@ endif
 executable('bramble', gclib_srcs + main_srcs + gclib_target,
   include_directories: inc_dirs,
   dependencies: [htslib_dep, quill_dep, gclib_dep] + libs,
-  #link_args : ['-fsanitize=address']
+  # link_args : ['-fsanitize=address']
 )

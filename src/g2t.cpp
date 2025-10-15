@@ -10,8 +10,10 @@
 #include <vector>
 
 #include "types.h"
+#include "bundles.h"
+#include "bramble.h"
 #include "g2t.h"
-#include "io.h"
+
 
 namespace bramble {
 
@@ -127,7 +129,8 @@ namespace bramble {
   }
 
   IntervalNode 
-  *IntervalTree::insertNodeBalanced(IntervalNode *node, IntervalNode *newNode) {
+  *IntervalTree::insertNodeBalanced(IntervalNode *node, 
+                                    IntervalNode *newNode) {
     if (!node)
       return newNode;
 
@@ -380,8 +383,6 @@ namespace bramble {
     // Get all nodes with this TID in genomic order
     auto tidNodes = getTidNodes(tid);
 
-    // Note: around 15s faster to sort here than use tid_chains
-
     // Sort by genomic position
     std::sort(tidNodes.begin(), tidNodes.end(),
               [](IntervalNode *a, IntervalNode *b) {
@@ -438,12 +439,29 @@ namespace bramble {
 
   // Find all intervals that overlap with the given range
   std::vector<IntervalNode *> 
-  IntervalTree::findOverlapping(uint32_t start, uint32_t end) {
+  IntervalTree::findOverlapping(uint32_t start, uint32_t end,
+                                bool allow_gaps) {
     std::vector<IntervalNode *> result;
     findOverlappingHelper(root, start, end, result);
     std::sort(
         result.begin(), result.end(),
         [](IntervalNode *a, IntervalNode *b) { return a->start < b->start; });
+
+    // For short reads, don't allow gaps
+    if (!allow_gaps && !result.empty()) {
+      std::vector<IntervalNode *> contiguous;
+      contiguous.push_back(result[0]);
+      
+      for (size_t i = 1; i < result.size(); ++i) {
+        if (result[i]->start == contiguous.back()->end) {
+          contiguous.push_back(result[i]);
+        } else {
+          break;
+        }
+      }
+      return contiguous;
+    }
+
     return result;
   }
 
@@ -476,7 +494,8 @@ namespace bramble {
   }
 
   // Check for cumulative length
-  uint32_t IntervalTree::findCumulativeLength(IntervalNode *node, const tid_t &tid) {
+  uint32_t IntervalTree::findCumulativeLength(IntervalNode *node, 
+                                              const tid_t &tid) {
     auto it = node->tid_cum_len.find(tid);
     return (it != node->tid_cum_len.end()) ? it->second : 0;
   }
@@ -516,7 +535,8 @@ namespace bramble {
 
   // get the string name given an id
   const std::string &g2tTree::getTidName(tid_t id) {
-    return name_id_map.find(id) != name_id_map.end() ? name_id_map[id] : invalid_name;
+    return (name_id_map.find(id) != name_id_map.end()) ? 
+      name_id_map[id] : invalid_name;
   }
 
   // Add guide exon with TID and transcript start
@@ -542,12 +562,12 @@ namespace bramble {
   // Find all guide TIDs that overlap with a read exon
   std::vector<IntervalNode *> 
   g2tTree::getIntervals(uint32_t readStart, uint32_t readEnd,
-                        char strand) {
+                        char strand, bool allow_gaps) {
     IntervalTree *tree = getTreeForStrand(strand);
     if (!tree)
       return std::vector<IntervalNode *>();
 
-    return tree->findOverlapping(readStart, readEnd);
+    return tree->findOverlapping(readStart, readEnd, allow_gaps);
   }
 
   // Get cumulative previous size of exons from transcript

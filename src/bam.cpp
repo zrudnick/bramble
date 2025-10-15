@@ -7,6 +7,8 @@
 #include <memory>
 #include <cstdlib>
 
+#include "types.h"
+#include "bundles.h"
 #include "bramble.h"
 #include "g2t.h"
 #include "evaluate.h"
@@ -17,178 +19,240 @@
 #include "GThreads.h"
 #endif
 
-extern bool LONG_READS;
-extern GFastMutex bam_io_mutex;  // Protects BAM io
-
 namespace bramble {
 
-  // Add or merge a CIGAR operation
-  static uint32_t add_or_merge_op(uint32_t* new_cigar, uint32_t j, uint8_t op, uint32_t len) {
-    // CIGAR array is not empty
-    if (j > 0) {
-      uint8_t prev_op = new_cigar[j-1] & BAM_CIGAR_MASK;
-      if (prev_op == op) {
-        uint32_t prev_len = new_cigar[j-1] >> BAM_CIGAR_SHIFT;
-        new_cigar[j-1] = ((prev_len + len) << BAM_CIGAR_SHIFT) | op;
-        return j;
+  // Expand CIGAR into single per-base operations
+  void expand_cigars(uint32_t* real_cigar, uint32_t n_cigar,
+                    const Cigar& ideal_cigar,
+                    std::vector<char> &real_expanded,
+                    std::vector<char> &ideal_expanded,
+                    uint32_t real_front_soft_clip,
+                    uint32_t real_front_hard_clip) {
+
+    // ------ Real cigar
+
+    for (uint32_t k = 0; k < n_cigar; k++) {
+      uint32_t op = real_cigar[k] & BAM_CIGAR_MASK;
+      uint32_t len = real_cigar[k] >> BAM_CIGAR_SHIFT;
+      
+      if (op == BAM_CREF_SKIP) continue; // skip introns
+      
+      char op_char = "MIDNSHP=XB"[op];
+      for (uint32_t i = 0; i < len; i++) {
+        real_expanded.push_back(op_char);
       }
     }
 
-    // CIGAR array is empty
-    new_cigar[j] = (len << BAM_CIGAR_SHIFT) | op;
-    return j + 1;
-  }
+    // ------ Ideal cigar
 
-  // Get new CIGAR array (for new soft clips)
-  uint32_t* get_new_cigar_soft_clips(uint32_t* cigar, uint32_t n_cigar, 
-                                uint32_t* new_n_cigar, CigarMem& mem,
-                                uint32_t soft_clip_front, uint32_t soft_clip_back) {
+    // Pad ideal with '_' to match real's front hard clip
+    for (uint32_t i = 0; i < real_front_hard_clip; i++) {
+      ideal_expanded.push_back('_');
+    }
 
-    uint32_t* new_cigar = mem.get_mem(n_cigar + 2); // allocate space for added soft clips
+    // Pad ideal with '_' to match real's front soft clip
+    for (uint32_t i = 0; i < real_front_soft_clip; i++) {
+      ideal_expanded.push_back('_');
+    }
+
+    uint32_t n_pad = real_front_hard_clip + real_front_soft_clip;
     uint32_t j = 0;
-    
-    uint32_t total_soft_clip_front = soft_clip_front;
-    uint32_t total_soft_clip_back = soft_clip_back;
-    
-    // Check for existing front soft clip
-    uint32_t start_i = 0;
-    if ((cigar[0] & BAM_CIGAR_MASK) == BAM_CSOFT_CLIP) {
-      total_soft_clip_front += (cigar[0] >> BAM_CIGAR_SHIFT);
-      start_i = 1;
-    }
-    
-    // Check for existing back soft clip
-    uint32_t end_i = n_cigar;
-    if ((cigar[n_cigar-1] & BAM_CIGAR_MASK) == BAM_CSOFT_CLIP) {
-      total_soft_clip_back += (cigar[n_cigar-1] >> BAM_CIGAR_SHIFT);
-      end_i = n_cigar - 1;
-    }
+    for (const auto& pair : ideal_cigar.cigar) {
+      uint32_t len = pair.first;
+      uint32_t op = pair.second;
+      
+      char op_char = "MIDNSHP=XB"[op];
 
-    // Add front soft clip
-    if (total_soft_clip_front > 0) {
-      j = add_or_merge_op(new_cigar, j, BAM_CSOFT_CLIP, total_soft_clip_front);
-    }
-    
-    // Find where front clipping ends
-    while (start_i < end_i && soft_clip_front > 0) {
-      uint8_t op = cigar[start_i] & BAM_CIGAR_MASK;
-      if (op == BAM_CREF_SKIP) {
-        continue;
-      }
-      
-      uint32_t len = cigar[start_i] >> BAM_CIGAR_SHIFT;
-      if (soft_clip_front >= len) {
-        soft_clip_front -= len;
-        start_i++;
-      } else {
-        break; // op will be partially preserved
-      }
-    }
-    
-    // Find where the back clipping starts
-    int32_t test_i = end_i - 1;
-    while (test_i >= (int32_t)start_i && soft_clip_back > 0) {
-      uint8_t op = cigar[test_i] & BAM_CIGAR_MASK;
-      if (op == BAM_CREF_SKIP) {
-        test_i--;
-        end_i--;
-        continue;
-      }
-      
-      uint32_t len = cigar[test_i] >> BAM_CIGAR_SHIFT;
-      if (soft_clip_back >= len) {
-        soft_clip_back -= len;
-        end_i--;
-        test_i--;
-      } else {
-        break; // op will be partially preserved
-      }
-    }
-    
-    // Process the remaining operations
-    for (uint32_t i = start_i; i < end_i; i++) {
-      uint8_t op = cigar[i] & BAM_CIGAR_MASK;
-      
-      // Skip N operations
-      if (op == BAM_CREF_SKIP) {
-        continue; 
-      }
-      
-      uint32_t len = cigar[i] >> BAM_CIGAR_SHIFT;
-      
-      // Partial front clipping
-      if (i == start_i && soft_clip_front > 0) {
-        len -= soft_clip_front;
-      }
-      
-      // Back clipping on this operation
-      if (i == (end_i - 1) && soft_clip_back > 0) {
-        len -= soft_clip_back;
-      }
-      
-      if (len > 0) {
-        j = add_or_merge_op(new_cigar, j, op, len);
-      }
-    }
-
-    // Add back soft clip
-    if (total_soft_clip_back > 0) {
-      j = add_or_merge_op(new_cigar, j, BAM_CSOFT_CLIP, total_soft_clip_back);
-    }
-
-    *new_n_cigar = j;
-    return new_cigar;
-  }
-
-  // Get new CIGAR array (no new soft clips)
-  uint32_t* get_new_cigar(uint32_t* cigar, uint32_t n_cigar, 
-                          uint32_t* new_n_cigar, CigarMem& mem) {
-    
-    uint32_t* new_cigar = mem.get_mem(n_cigar); 
-    uint32_t j = 0;
-    
-    for (uint32_t i = 0; i < n_cigar; ++i) {
-      uint8_t op = cigar[i] & BAM_CIGAR_MASK;
-      uint32_t len = cigar[i] >> BAM_CIGAR_SHIFT;
-      
-      if (op != BAM_CREF_SKIP) {  // Skip N operations
-        // Check if we can merge with the previous operation
-        if (j > 0) {
-          uint8_t prev_op = new_cigar[j-1] & BAM_CIGAR_MASK;
-          uint32_t prev_len = new_cigar[j-1] >> BAM_CIGAR_SHIFT;
-          
-          // Merge with previous operation of same type
-          if (prev_op == op) {
-            new_cigar[j-1] = ((prev_len + len) << BAM_CIGAR_SHIFT) | op;
-
-          // Different operation type, add new entry
-          } else {
-            new_cigar[j] = (len << BAM_CIGAR_SHIFT) | op;
-            j++;
-          }
-        
-        // First operation, just add it
-        } else {
-          new_cigar[j] = (len << BAM_CIGAR_SHIFT) | op;
+      uint32_t i = 0;
+      while (i < len) {
+        // Pad with '_' where real has an 'I'
+        if ((j + n_pad < real_expanded.size())
+          && real_expanded[j+n_pad] == 'I') {
+          ideal_expanded.push_back('_');
           j++;
+        } else {
+          ideal_expanded.push_back(op_char);
+          i++; j++;
         }
       }
-      // N operations are skipped (not copied)
+    }
+  }
+
+  // Rules for choosing ops
+  char merge_ops(char real_op, char ideal_op) {
+    if (real_op == 'I' && ideal_op == '_') {
+      return '_';
+    }
+    // Added for end soft/hard clips
+    if (ideal_op == '*') {
+      return real_op;
+    }
+    // Unused
+    if (real_op == '*') {
+      return ideal_op;
+    }
+    if (real_op == 'H') {
+      return 'H';
+    }
+    // If real D and ideal S, 
+    // add '_' to avoid adding extra sequence
+    // allow everything on the left to shift right
+    // because whatever, it doens't matter anymore
+    if (real_op == 'D' && ideal_op == 'S') {
+      return '_';
+    }
+    if (real_op == 'I' && ideal_op == 'S') {
+      return 'S';
+    }
+    if (real_op == 'D' && ideal_op == 'I') {
+      return '_';
+    }
+    // If ideal has S, D, or I, use it
+    if (ideal_op == 'S' || ideal_op == 'D' || ideal_op == 'I') {
+      return ideal_op;
+    }
+    // If real has S, D, or I, use it
+    if (real_op == 'S' || real_op == 'D' || real_op == 'I') {
+      return real_op;
+    }
+    // Otherwise use M (or =/X)
+    if (ideal_op == 'M' || ideal_op == '=' || ideal_op == 'X') {
+      return 'M';
+    }
+    if (real_op == 'M' || real_op == '=' || real_op == 'X') {
+      return 'M';
+    }
+    // Fallback
+    return real_op != '*' ? real_op : ideal_op;
+  }
+
+  // Compress expanded CIGAR back to standard format
+  uint32_t* compress_cigar(const std::vector<char>& expanded, 
+                          uint32_t* new_n_cigar,
+                          CigarMem& mem) {
+    // todo: change to # unique ops in expanded
+    uint32_t* new_cigar = mem.get_mem(expanded.size() + 2);
+    uint32_t new_idx = 0;
+    
+    char current_op = expanded[0];
+    uint32_t run_len = 1;
+    
+    auto add_op = [&](char op_char, uint32_t len) {
+      if (len == 0) return;
+      uint32_t op;
+      switch(op_char) {
+        case 'M': case '=': case 'X': op = BAM_CMATCH; break;
+        case 'I': op = BAM_CINS; break;
+        case 'D': op = BAM_CDEL; break;
+        case 'S': op = BAM_CSOFT_CLIP; break;
+        //case 'H': op = BAM_CHARD_CLIP; break;
+        case 'H': return; // just do nothing ::cry::
+        // todo: figure out why hard clips cause errors
+        case '_': return;
+        default: return;
+      }
+      new_cigar[new_idx++] = (len << BAM_CIGAR_SHIFT) | op;
+    };
+    
+    for (size_t i = 1; i < expanded.size(); i++) {
+      if (expanded[i] == '_') {
+        // do nothing
+      }
+      else if (expanded[i] == current_op) {
+        run_len++;
+      } else {
+        add_op(current_op, run_len);
+        current_op = expanded[i];
+        run_len = 1;
+      }
+    }
+    add_op(current_op, run_len);
+    
+    *new_n_cigar = new_idx;
+    return new_cigar;
+  }
+
+  uint32_t* get_new_cigar(uint32_t* real_cigar, uint32_t n_real_cigar,
+                        const Cigar& ideal_cigar, uint32_t* new_n_cigar, 
+                        CigarMem& mem) {
+    
+    // Get front clip length from real cigar
+    uint32_t real_front_hard_clip = 0;
+    uint32_t real_front_soft_clip = 0;
+    uint32_t cigar_idx = 0;
+
+    // Check for leading hard clip
+    if (n_real_cigar > 0 && 
+      ((real_cigar[0] & BAM_CIGAR_MASK) == BAM_CHARD_CLIP)) {
+      real_front_hard_clip = real_cigar[0] >> BAM_CIGAR_SHIFT;
+      cigar_idx++;
+    }
+    
+    // Check for leading soft clip (after potential hard clip)
+    if (cigar_idx < n_real_cigar && 
+      ((real_cigar[cigar_idx] & BAM_CIGAR_MASK) == BAM_CSOFT_CLIP)) {
+      real_front_soft_clip = real_cigar[cigar_idx] >> BAM_CIGAR_SHIFT;
     }
 
-    *new_n_cigar = j;
-    return new_cigar;
+    // Expand both cigars
+    std::vector<char> real_expanded;
+    std::vector<char> ideal_expanded;
+    expand_cigars(real_cigar, n_real_cigar, ideal_cigar,
+      real_expanded, ideal_expanded, real_front_soft_clip,
+      real_front_hard_clip);
+    
+    // Merge position by position
+    size_t max_len = std::max(real_expanded.size(), ideal_expanded.size());
+    std::vector<char> merged;
+    
+    for (size_t i = 0; i < max_len; i++) {
+      char real_op = (i < real_expanded.size()) ? real_expanded[i] : '*';
+      char ideal_op = (i < ideal_expanded.size()) ? ideal_expanded[i] : '*';
+      merged.push_back(merge_ops(real_op, ideal_op));
+    }
+    
+    // Compress back to CIGAR
+    uint32_t* result = compress_cigar(merged, new_n_cigar, mem);
+
+    // // Print debug info
+    //   fprintf(stderr, "\nCIGAR SEQUENCE LENGTH CHANGED: %u -> %u\n", real_total_len, new_total_len);
+    //   fprintf(stderr, "REAL CIGAR: ");
+    //   for (uint32_t k = 0; k < n_real_cigar; k++) {
+    //       uint32_t op = real_cigar[k] & BAM_CIGAR_MASK;
+    //       uint32_t len = real_cigar[k] >> BAM_CIGAR_SHIFT;
+    //       fprintf(stderr, "%u%c", len, "MIDNSHP=XB"[op]);
+    //   }
+    //   fprintf(stderr, "\nIDEAL CIGAR: ");
+    //   for (const auto& pair : ideal_cigar.cigar) {
+    //       fprintf(stderr, "%u%c ", pair.first, "MIDNSHP=XB"[pair.second]);
+    //   }
+    //   fprintf(stderr, "\nREAL EXPANDED:  ");
+    //   for (char c : real_expanded) fprintf(stderr, "%c", c);
+    //   fprintf(stderr, "\nIDEAL EXPANDED: ");
+    //   for (char c : ideal_expanded) fprintf(stderr, "%c", c);
+    //   fprintf(stderr, "\nMERGED:         ");
+    //   for (char c : merged) fprintf(stderr, "%c", c);
+    //   fprintf(stderr, "\nNEW CIGAR: ");
+    //   for (uint32_t k = 0; k < *new_n_cigar; k++) {
+    //       uint32_t op = result[k] & BAM_CIGAR_MASK;
+    //       uint32_t len = result[k] >> BAM_CIGAR_SHIFT;
+    //       fprintf(stderr, "%u%c", len, "MIDNSHP=XB"[op]);
+    //   }
+    //   fprintf(stderr, "\n--------------------\n");
+    
+    return result;
   }
 
   // Copy CIGAR memory for intron removal
-  uint8_t* copy_cigar_memory(bam1_t* b, uint32_t new_n_cigar, uint32_t old_n_cigar,
-                            uint32_t new_m_data, const uint32_t* new_cigar,
+  uint8_t* copy_cigar_memory(bam1_t* b, uint32_t new_n_cigar, 
+                            uint32_t old_n_cigar, uint32_t new_m_data,
+                            const uint32_t* new_cigar,
                             int l_qname, int l_qseq, int l_aux) {
     
     // Reallocate BAM data
     if (new_m_data > b->m_data) {
-        b->m_data = new_m_data;
-        b->data = (uint8_t*)realloc(b->data, b->m_data);
+      b->m_data = new_m_data;
+      b->data = (uint8_t*)realloc(b->data, b->m_data);
     }
     uint8_t* data = b->data;
 
@@ -208,19 +272,13 @@ namespace bramble {
   }
 
   bool update_cigar(bam1_t* b, uint32_t* cigar, uint32_t n_cigar,
-                    CigarMem& mem, uint32_t soft_clip_front,
-                    uint32_t soft_clip_back) {
+                    CigarMem& mem, const Cigar& this_cigar) {
 
     uint32_t* new_cigar = nullptr;
     uint32_t new_n_cigar = 0;
 
-    // Build a new cigar (with or without soft clips)
-    if (soft_clip_front || soft_clip_back) {
-        new_cigar = get_new_cigar_soft_clips(cigar, n_cigar, &new_n_cigar,
-                                            mem, soft_clip_front, soft_clip_back);
-    } else {
-        new_cigar = get_new_cigar(cigar, n_cigar, &new_n_cigar, mem);
-    }
+    new_cigar = get_new_cigar(cigar, n_cigar, this_cigar, 
+      &new_n_cigar, mem);
 
     // Calculate new data layout sizes
     // BAM record layout = [QNAME][CIGAR][SEQ][QUAL][AUX]
@@ -285,6 +343,7 @@ namespace bramble {
       b->core.flag |= BAM_FPROPER_PAIR;
       
       // Calculate insert size for same transcript
+      // todo: replace read_size with correct measure
       int32_t isize = 0;
       if (first_read) {
         isize = ((b->core.mpos + this_pair->read2->read_size) - b->core.pos);
@@ -317,69 +376,27 @@ namespace bramble {
     bam_aux_append(b, "XS", 'A', 1, &new_xs);
   }
 
-  void write_to_bam(BamIO *io, std::unordered_map<bam_id_t, BamInfo *>& bam_info) {
-    std::unordered_set<read_id_t> seen;
-    CigarMem cigar_mem; 
-
-    // Print information for both mates (paired reads) or single read
-    for (const auto& [id, this_pair] : bam_info) {
-      if (!this_pair || !this_pair->valid_pair) continue;
-
-      auto write_read = [&](ReadOut* read, bool is_first) {
-        if (!read || !read->brec) return;
-        
-        bam1_t* b = read->brec->get_b();
-
-        if (seen.insert(read->index).second) {
-          
-          uint32_t* cigar = bam_get_cigar(b);
-          uint32_t n_cigar = b->core.n_cigar;
-
-          update_cigar(b, cigar, n_cigar, cigar_mem, 
-                      read->soft_clip_front, read->soft_clip_back);
-
-          // Set NH and XS tags
-          set_nh_tag(b, read->nh);
-          set_xs_tag(b, read->strand);
-
-          // Set FLAG to indicate whether reverse
-          if (read->is_reverse) b->core.flag |= BAM_FREVERSE;
-
-        }
-
-        // Set new coordinates
-        if (is_first) {
-          b->core.tid = (int32_t)this_pair->r_tid;
-          b->core.pos = (int32_t)this_pair->r_pos;
-        } else {
-          b->core.tid = (int32_t)this_pair->m_tid;
-          b->core.pos = (int32_t)this_pair->m_pos;
-        }
-
-        // Set mate information if available
-        if (this_pair->is_paired)
-            set_mate_info(b, this_pair, is_first);
-
-  #ifndef NOTHREADS
-        bam_io_mutex.lock();
-  #endif
-
-        io->write(read->brec);
-
-  #ifndef NOTHREADS
-        bam_io_mutex.unlock();
-  #endif
-      };
-
-      // Always process first read
-      write_read(this_pair->read1, true);     // first_read = true
-
-      // Process second read if paired
-      if (this_pair->is_paired) {
-        write_read(this_pair->read2, false);  // first_read = false
-      }
-
-    }
+  void remove_extra_tags(bam1_t* b) {
+    uint8_t* sa = bam_aux_get(b, "SA");
+    if (sa) bam_aux_del(b, sa);
+    uint8_t* ms = bam_aux_get(b, "ms");
+    if (ms) bam_aux_del(b, ms);
+    uint8_t* nn = bam_aux_get(b, "nn");
+    if (nn) bam_aux_del(b, nn);
+    uint8_t* ts = bam_aux_get(b, "ts");
+    if (ts) bam_aux_del(b, ts);
+    uint8_t* tp = bam_aux_get(b, "tp");
+    if (tp) bam_aux_del(b, tp);
+    uint8_t* cm = bam_aux_get(b, "cm");
+    if (cm) bam_aux_del(b, cm);
+    uint8_t* s1 = bam_aux_get(b, "s1");
+    if (s1) bam_aux_del(b, s1);
+    uint8_t* s2 = bam_aux_get(b, "s2");
+    if (s2) bam_aux_del(b, s2);
+    uint8_t* de = bam_aux_get(b, "de");
+    if (de) bam_aux_del(b, de);
+    uint8_t* rl = bam_aux_get(b, "rl");
+    if (rl) bam_aux_del(b, rl);
   }
 
 } // namespace bramble

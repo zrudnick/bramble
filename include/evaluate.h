@@ -9,43 +9,67 @@ namespace bramble {
   struct BundleData;
   struct IntervalNode;
 
-  struct match_hash {
-    inline std::size_t operator()(const std::pair<read_id_t, pos_t> & v) const {
-        return v.first*31 + v.second;
+  struct Cigar {
+    std::vector<std::pair<uint32_t, uint8_t>> cigar;
+
+    void add_operation(uint32_t length, uint8_t op) {
+      if (length == 0) return;
+      if (!cigar.empty() && cigar.back().second == op) {
+        cigar.back().first += length;
+      } else {
+        cigar.emplace_back(length, op);
+      }
     }
+
+    void clear() {
+      cigar.clear();
+    }
+
+  };
+
+  struct ExonChainMatch {
+    tid_t tid;
+    pos_t pos;
+    std::vector<IntervalNode*> matched_intervals;
+    uint32_t total_coverage;
+    uint32_t gaps_count;
+    uint32_t total_gap_size;
+    double similarity_score;
+    uint32_t soft_clip_front;
+    uint32_t soft_clip_back;
   };
 
   struct ReadOut {
     read_id_t index;
     int32_t nh;
+    std::string name;
     uint32_t read_size;
     GSamRecord *brec;
-    bool has_introns;
+    Cigar cigar;
     bool is_reverse;
-    uint32_t soft_clip_front;
-    uint32_t soft_clip_back;
     bool discard_read;
     char strand;
 
     ReadOut() 
       : index(), 
         nh(), 
+        name(),
         read_size(), 
-        brec(nullptr), 
-        has_introns(false),
-        is_reverse(false), 
-        soft_clip_front(0), 
-        soft_clip_back(0), 
+        brec(nullptr),
+        cigar(), 
+        is_reverse(false),  
         discard_read(false),
         strand('.') {}
+
+    // brec is deleted by CReadAln
   };
 
   struct ReadInfo {
-    std::unordered_set<std::pair<tid_t, pos_t>, match_hash> matches;
+    std::vector<ExonChainMatch> matches;
     bool valid_read;
     bool is_paired;
 
-    ReadOut *read;
+    std::shared_ptr<ReadOut> read;
 
     ReadInfo() 
       : matches(), 
@@ -53,9 +77,7 @@ namespace bramble {
         is_paired(false), 
         read() {}
 
-    ~ReadInfo() {
-      // brec is deleted by CReadAln
-    }
+    ~ReadInfo() {}
   };
 
   struct BamInfo {
@@ -64,108 +86,48 @@ namespace bramble {
     bool is_paired;
 
     // Two ends of a pair (or just one if unpaired)
-    ReadOut *read1;
-    ReadOut *read2;
+    std::shared_ptr<ReadOut> read1;
+    std::shared_ptr<ReadOut> read2;
 
+    // Read 1 match info
     tid_t r_tid;
     uint32_t r_pos;
+
+    // Read 2 match info
     tid_t m_tid;
     uint32_t m_pos;
 
-    BamInfo() : same_transcript(false), valid_pair(false), is_paired(false) {}
-  };
+    BamInfo() 
+      : same_transcript(false), 
+        valid_pair(false), 
+        is_paired(false) {}
 
-  struct GroupKey {
-    uint start;
-    std::string cigar_str;
-
-    // for std::map
-    bool operator<(const GroupKey &other) const {
-      if (start != other.start)
-        return start < other.start;
-      return cigar_str < other.cigar_str;
-    }
-
-    bool operator==(const GroupKey &other) const {
-      return start == other.start && cigar_str == other.cigar_str;
-    }
-  };
-
-  struct AlnGroups {
-    std::map<GroupKey, uint> key_to_group;
-    std::vector<std::vector<uint32_t>> groups;
-
-    AlnGroups() 
-      : key_to_group(), 
-        groups() {}
-
-    std::string getCigar(bam1_t *b) {
-      uint32_t n_cigar = b->core.n_cigar;
-      uint32_t *cigar = bam_get_cigar(b);
-
-      std::string cigar_str;
-      cigar_str.reserve(n_cigar * 8);
-
-      for (uint32_t i = 0; i < n_cigar; i++) {
-        uint32_t op_len = bam_cigar_oplen(cigar[i]);
-        char op_char = bam_cigar_opchr(cigar[i]);
-        cigar_str += std::to_string(op_len) + op_char;
-      }
-      return cigar_str;
-    }
-
-    void Add(CReadAln *read, uint n) {
-      if (!read || !read->brec)
-        return;
-      bam1_t *b = read->brec->get_b();
-
-      std::string cigar = getCigar(b);
-      GroupKey key{read->start, cigar};
-
-      auto it = key_to_group.find(key);
-      uint32_t group_num;
-
-      // Key exists
-      if (it != key_to_group.end()) {
-        group_num = it->second;
-        groups[group_num].push_back(n);
-
-        // New key, create new group
-      } else {
-        group_num = groups.size();
-        key_to_group[key] = group_num;
-        groups.push_back(std::vector<uint>{n});
-      }
-    }
-
-    void Clear() {
-      key_to_group.clear();
-      groups.clear();
-    }
-
-    ~AlnGroups() { Clear(); }
+    ~BamInfo() {}
   };
 
   struct ReadEvaluationResult {
     bool valid = false;
-    std::unordered_set<std::pair<tid_t, pos_t>, match_hash> matches;
+    std::vector<ExonChainMatch> matches;
     char strand = '.';
-    uint32_t soft_clip_front = 0;
-    uint32_t soft_clip_back = 0;
+    Cigar cigar;
+  };
 
-    // debug / metrics
-    uint32_t longest_overhang = 0;
-    std::string reject_reason; // optional
+  struct ReadEvaluationConfig {
+    uint32_t max_clip_size;         // max soft clip size
+    bool filter_similarity;         // should we filter using similarity score?
+    double similarity_threshold;    // similarity threshold
+    bool ignore_small_exons;        // should we ignore small exons?
+    uint32_t small_exon_size;       // size of small exon
+    ReadEvaluationResult default_result;
   };
 
   class ReadEvaluator {
   public:
     virtual ~ReadEvaluator();
 
-    // Evaluate a single read (or read group) and return structured result.
+    // Evaluate a single read and return structured result
     virtual ReadEvaluationResult 
-    evaluate(BundleData *bundle, uint read_index, g2tTree *g2t,
-            const std::vector<uint32_t> &group) = 0;
+    evaluate(BundleData *bundle, uint read_index, g2tTree *g2t) = 0;
   
   protected:
     
@@ -177,92 +139,115 @@ namespace bramble {
     * @param read_strand strand that the read aligned to
     * @param g2t g2t tree for bundle
     * @param exon_start start of first read exon
-    * @param used_backwards_overhang did we match backwards to a previous interval?
+    * @param used_backwards_overhang did we match backwards to a previous 
+    * interval?
     * (USE_FASTA mode)
     */
-    uint get_match_pos(IntervalNode *interval, tid_t tid, char read_strand,
-                      g2tTree *g2t, uint exon_start, bool used_backwards_overhang);
+    pos_t get_match_pos(IntervalNode *interval, tid_t tid, 
+                        char read_strand, g2tTree *g2t, 
+                        uint exon_start, bool used_backwards_overhang);
+
+    std::tuple<uint32_t, uint32_t> 
+    get_exon_coordinates(BundleData *bundle, GSeg exon, char strand);
 
     std::string reverse_complement(const std::string &seq);
 
-    std::string extract_sequence(char *gseq, uint start, uint length, char strand);
+    std::string extract_sequence(char *gseq, uint start, 
+                                uint length, char strand);
 
     /**
      * Check if we can match forwards to another interval (USE_FASTA mode)
      *
      * @param interval first interval the read matched to
      */
-    bool check_forward_overhang(IntervalNode *interval, uint exon_end,
-                                char read_strand,
-                                std::set<tid_t> &exon_tids, g2tTree *g2t,
-                                BundleData *bundle);
+    bool search_forward(IntervalNode *interval, uint exon_end,
+                        char read_strand,
+                        std::set<tid_t> &exon_tids, g2tTree *g2t,
+                        BundleData *bundle);
 
     // Function to check backward overhang (left extension)
-    bool check_backward_overhang(IntervalNode *interval, uint exon_start,
-                                char read_strand,
-                                std::set<tid_t> &exon_tids, g2tTree *g2t,
-                                BundleData *bundle);
+    bool search_backward(IntervalNode *interval, uint exon_start,
+                        char read_strand,
+                        std::set<tid_t> &exon_tids, g2tTree *g2t,
+                        BundleData *bundle);
+    
+    std::vector<char> get_strands_to_check(CReadAln* read);
+
+    uint32_t boundary_tolerance(uint32_t read_length);
+
+    std::set<tid_t> get_candidate_tids(std::vector<IntervalNode *> intervals);
+
+    void hide_small_exon(Cigar& cigar, uint32_t exon_start, uint32_t exon_end,
+                         bool is_first_exon, bool is_last_exon);
+
+    double 
+    exon_chain_similarity(GVec<GSeg>& read_exons,
+                          const std::vector<std::vector<IntervalNode*>>& 
+                          all_intervals,
+                          tid_t tid, char strand, BundleData* bundle);
+
+    bool check_first_exon(uint32_t exon_start, uint32_t interval_start,
+                          uint32_t exon_end, uint32_t interval_end,
+                          bool is_last_exon, uint32_t max_clip_size);
+
+    void filter_tids(IntervalNode* first_interval, 
+                    IntervalNode* prev_last_interval,
+                    std::set<tid_t> &candidate_tids, 
+                    uint32_t exon_start, g2tTree* g2t, char strand);
+
+    bool check_middle_exon(uint32_t exon_start, uint32_t interval_start,
+                          uint32_t exon_end, uint32_t interval_end,
+                          IntervalNode* first_interval, 
+                          IntervalNode* prev_last_interval,
+                          std::set<tid_t> &candidate_tids, g2tTree* g2t, 
+                          char strand);
+
+    bool check_last_exon(uint32_t exon_start, uint32_t interval_start,
+                        uint32_t exon_end, uint32_t interval_end,
+                        IntervalNode* first_interval,
+                        IntervalNode* prev_last_interval, 
+                        std::set<tid_t> &candidate_tids,
+                        g2tTree* g2t, char strand, uint32_t max_clip_size);
+
+    void build_exon_cigar(Cigar& cigar, bool is_first_exon, bool is_last_exon,
+                          uint32_t exon_start, uint32_t exon_end,
+                          uint32_t interval_start, uint32_t interval_end);
+
+    bool compile_matches(std::vector<ExonChainMatch> &matches,
+                        std::set<tid_t> candidate_tids, 
+                        IntervalNode *first_interval, 
+                        char strand, g2tTree* g2t, uint32_t exon_start, 
+                        bool is_first_exon, bool used_backwards_overhang);
+
+    void filter_by_similarity(std::vector<ExonChainMatch> &matches,
+                              std::vector<std::vector<IntervalNode*>> 
+                              all_matched_intervals,
+                              GVec<GSeg> read_exons, char strand, 
+                              BundleData *bundle, 
+                              double similarity_threshold);
+
+  public:
+    ReadEvaluationResult 
+    evaluate_exon_chains(BundleData *bundle, read_id_t id, g2tTree *g2t,
+                        ReadEvaluationConfig config);
   };
 
   class ShortReadEvaluator : public ReadEvaluator {
-  private:
-    std::set<tid_t> 
-    collapse_intervals(std::vector<IntervalNode *> sorted_intervals,
-                      uint exon_start, bool is_first_exon, 
-                      char read_strand, g2tTree *g2t,
-                      BundleData *bundle, bool &used_backwards_overhang,
-                      uint &soft_clip, IntervalNode *prev_last_interval);
 
   public:
-    ReadEvaluationResult evaluate(BundleData *bundle,
-                                  uint read_index,
-                                  g2tTree *g2t,
-                                  const std::vector<uint32_t> &group) override;
+    ReadEvaluationResult evaluate(BundleData *bundle, read_id_t id, 
+                                  g2tTree *g2t) override;
 
   };
 
   class LongReadEvaluator : public ReadEvaluator {
-  public:
-    ReadEvaluationResult evaluate(BundleData *bundle,
-                                  uint read_index,
-                                  g2tTree *g2t,
-                                  const std::vector<uint32_t> &group) override;
 
-  private:
-    // helper methods: collapse_intervals_with_score, splice_rescue, compute_exon_chain_score, ...
+  public:
+    ReadEvaluationResult evaluate(BundleData *bundle, read_id_t id, 
+                                  g2tTree *g2t) override;
   };
 
   // -------- function definitions
-
-  void print_tree(g2tTree* g2t);
-
-  std::unique_ptr<g2tTree> make_g2t_tree(BundleData *bundle, BamIO *io);
-
-  void process_read_out(BundleData *&bundle, uint read_index, g2tTree *g2t,
-                        std::unordered_map<read_id_t, ReadInfo *> &read_info,
-                        std::vector<read_id_t> group,
-                        std::unique_ptr<ReadEvaluator> &evaluator);
-
-  void add_mate_info(const std::unordered_set<tid_t> &final_transcripts,
-                    const std::unordered_set<tid_t> &read_transcripts,
-                    const std::unordered_set<tid_t> &mate_transcripts,
-                    const std::unordered_map<tid_t, pos_t> &read_positions,
-                    const std::unordered_map<tid_t, pos_t> &mate_positions,
-                    std::unordered_map<read_id_t, ReadInfo *> &read_info, 
-                    std::unordered_map<bam_id_t, BamInfo *> &bam_info, 
-                    uint32_t read_index, uint32_t mate_index, uint32_t mate_case);
-
-  inline uint64_t make_pair_key(read_id_t a, read_id_t b);
-
-  void update_read_matches(ReadInfo *read_info,
-                          const std::unordered_set<tid_t> &final_transcripts);
-
-  void process_mate_pairs(BundleData *bundle, 
-                          std::unordered_map<read_id_t, ReadInfo *> &read_info,
-                          std::unordered_map<bam_id_t, BamInfo *> &bam_info);
-
-  void free_read_data(std::unordered_map<read_id_t, ReadInfo *> &read_info,
-                      std::unordered_map<bam_id_t, BamInfo *> &bam_info);
 
   void convert_reads(BundleData *bundle, BamIO *io);
 
