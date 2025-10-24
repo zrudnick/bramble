@@ -428,7 +428,8 @@ namespace bramble {
       uint32_t node_length = node->end - node->start;
       uint32_t left = cumulative;
       uint32_t right =  total_length - cumulative - node_length;
-      node->tid_cum_len[tid] = std::make_pair(left, right);
+      if (strand == '-') node->tid_cum_len[tid] = left - 1;
+      else node->tid_cum_len[tid] = left;
       cumulative += node_length;
     }
     transcript_lengths[tid] = cumulative;
@@ -498,12 +499,11 @@ namespace bramble {
   }
 
   // Check for cumulative length
-  std::pair<uint32_t, uint32_t> 
+  uint32_t 
   IntervalTree::findCumulativeLength(IntervalNode *node, 
                                     const tid_t &tid) {
     auto it = node->tid_cum_len.find(tid);
-    std::pair<uint32_t, uint32_t> err = std::make_pair(0, 0);
-    return (it != node->tid_cum_len.end()) ? it->second : err;
+    return (it != node->tid_cum_len.end()) ? it->second : 0;
   }
 
   uint32_t IntervalTree::getTranscriptLength(tid_t tid) {
@@ -581,7 +581,7 @@ namespace bramble {
   }
 
   // Get cumulative previous size of exons from transcript
-  std::pair<uint32_t, uint32_t> 
+  uint32_t 
   g2tTree::getCumulativeLength(IntervalNode *node, 
                               const tid_t &tid, char strand) {
     IntervalTree *tree = getTreeForStrand(strand);

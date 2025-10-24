@@ -170,7 +170,7 @@ namespace bramble {
     * interval?
     * (USE_FASTA mode)
     */
-    std::tuple<pos_t, pos_t> get_match_pos(IntervalNode *interval, tid_t tid, 
+    pos_t get_match_pos(IntervalNode *interval, tid_t tid, 
                         char strand, g2tTree *g2t, 
                         uint exon_start, bool used_backwards_overhang);
 

@@ -93,7 +93,7 @@ namespace bramble {
   * @param used_backwards_overhang did we match backwards to a previous interval?
   * (USE_FASTA mode)
   */
-  std::tuple<pos_t, pos_t> ReadEvaluator::get_match_pos(IntervalNode *interval, 
+  pos_t ReadEvaluator::get_match_pos(IntervalNode *interval, 
                                     tid_t tid, char strand,
                                     g2tTree *g2t, uint exon_start,
                                     bool used_backwards_overhang) {
@@ -104,20 +104,13 @@ namespace bramble {
     }
 
     uint32_t interval_start = first_interval->start;
-    std::pair<uint32_t, uint32_t> prev_node_sums =
+    pos_t prev_node_sum =
       g2t->getCumulativeLength(first_interval, tid, strand);
     std::string tid_string = g2t->getTidName(tid);
-    
-    uint32_t prev_node_sum_left = (strand == '+') ? prev_node_sums.first
-      : prev_node_sums.second;
-    uint32_t prev_node_sum_right = (strand == '+') ? prev_node_sums.second
-      : prev_node_sums.first;
     uint32_t match_start = (exon_start > interval_start) ? 
       (exon_start - interval_start) : 0;
 
-    pos_t primary_pos = (pos_t)(match_start + prev_node_sum_left);
-    pos_t secondary_pos = (pos_t)(match_start + prev_node_sum_right);
-    return std::make_tuple(primary_pos, secondary_pos);
+    return (pos_t)(match_start + prev_node_sum);
   }
 
   /**
@@ -593,10 +586,9 @@ namespace bramble {
       if (!match_exists) {
         ExonChainMatch match;
         match.tid = tid;
-        auto [primary_pos, secondary_pos] = get_match_pos(first_intervals[tid], 
+        pos_t pos = get_match_pos(first_intervals[tid], 
           tid, strand, g2t, exon_start, used_backwards_overhang);
-        match.align.pos = primary_pos;
-        match.secondary_pos = secondary_pos;
+        match.align.pos = pos;
         match.align.strand = strand;
         match.align.cigar = std::make_shared<Cigar>();
         match.transcript_length = g2t->getTranscriptLength(tid, strand);

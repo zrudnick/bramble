@@ -463,8 +463,8 @@ namespace bramble {
   void set_xs_tag(bam1_t* b, char xs_a) {
     uint8_t* xs = bam_aux_get(b, "XS");
     if (xs) bam_aux_del(b, xs);
-    // uint8_t new_xs = (uint8_t) xs_a;
-    // bam_aux_append(b, "XS", 'A', 1, &new_xs);
+    uint8_t new_xs = (uint8_t) xs_a;
+    bam_aux_append(b, "XS", 'A', 1, &new_xs);
   }
 
   void set_as_tag(bam1_t* b, double similarity_score) {

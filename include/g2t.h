@@ -10,7 +10,7 @@ namespace bramble {
     uint32_t max_end; // maximum end value in subtree
     uint32_t height;
     std::set<tid_t> tids;
-    std::unordered_map<tid_t, std::pair<uint32_t, uint32_t>> tid_cum_len;
+    std::unordered_map<tid_t, uint32_t> tid_cum_len;
       // cumulative lengths on left and right sides
 
     IntervalNode *left;
@@ -111,7 +111,7 @@ namespace bramble {
     void precomputeAllCumulativeLengths(char strand);
 
     // Check for cumulative length
-    std::pair<uint32_t, uint32_t>
+    pos_t
     findCumulativeLength(IntervalNode *node, const tid_t &tid);
 
     uint32_t getTranscriptLength(tid_t tid);
@@ -159,7 +159,7 @@ namespace bramble {
                 char strand, bool allow_gaps = false);
 
     // Get cumulative previous size of exons from transcript
-    std::pair<uint32_t, uint32_t> 
+    pos_t
     getCumulativeLength(IntervalNode *node, const tid_t &tid, char strand);
 
     // Get next node in chain for a specific TID

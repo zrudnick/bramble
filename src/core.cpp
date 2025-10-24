@@ -201,6 +201,7 @@ namespace bramble {
         // Set coordinates
         if (is_first) {
           b->core.tid = (int32_t)this_pair->r_tid;
+          //GMessage("r_align.pos = %d\n", this_pair->r_align.pos);
           b->core.pos = (int32_t)this_pair->r_align.pos;
           // if (this_pair->r_align.primary_alignment) b->core.flag &= ~BAM_FSECONDARY; // mark primary
           // else b->core.flag |= BAM_FSECONDARY; // default secondary
