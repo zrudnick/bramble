@@ -10,7 +10,8 @@ namespace bramble {
     uint32_t max_end; // maximum end value in subtree
     uint32_t height;
     std::set<tid_t> tids;
-    std::unordered_map<tid_t, uint32_t> tid_cum_len;
+    std::unordered_map<tid_t, std::pair<uint32_t, uint32_t>> tid_cum_len;
+      // cumulative lengths on left and right sides
 
     IntervalNode *left;
     IntervalNode *right;
@@ -34,6 +35,7 @@ namespace bramble {
   private:
     // IntervalNode *root;
     std::set<tid_t> all_tids;
+    std::unordered_map<tid_t, uint32_t> transcript_lengths;
 
     int getHeight(IntervalNode *node);
 
@@ -86,7 +88,7 @@ namespace bramble {
     void buildTidChain(const tid_t &tid);
 
     // Precompute cumulative lengths so that match positions can be calculated
-    void precomputeCumulativeLengths(const tid_t &tid);
+    void precomputeCumulativeLengths(const tid_t &tid, char strand);
 
   public:
     // For debugging (print_tree)
@@ -106,10 +108,13 @@ namespace bramble {
     void buildAllTidChains();
 
     // Precompute for all TIDs in the tree
-    void precomputeAllCumulativeLengths();
+    void precomputeAllCumulativeLengths(char strand);
 
     // Check for cumulative length
-    uint32_t findCumulativeLength(IntervalNode *node, const tid_t &tid);
+    std::pair<uint32_t, uint32_t>
+    findCumulativeLength(IntervalNode *node, const tid_t &tid);
+
+    uint32_t getTranscriptLength(tid_t tid);
   };
 
   // g2t tree using interval tree
@@ -154,7 +159,7 @@ namespace bramble {
                 char strand, bool allow_gaps = false);
 
     // Get cumulative previous size of exons from transcript
-    uint32_t 
+    std::pair<uint32_t, uint32_t> 
     getCumulativeLength(IntervalNode *node, const tid_t &tid, char strand);
 
     // Get next node in chain for a specific TID
@@ -164,6 +169,8 @@ namespace bramble {
     // Get previous node in chain for a specific TID
     IntervalNode 
     *getPrevNode(IntervalNode *node, const tid_t &tid, char strand);
+
+    uint32_t getTranscriptLength(const tid_t &tid, char strand);
   };
 
 }

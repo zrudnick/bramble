@@ -37,11 +37,12 @@ namespace bramble {
     printf("FW Tree:\n");
     for (auto &interval : intervals) {
       printf("(%u, %u)", interval->start, interval->end);
+      printf(" size = %u, %u", interval->end - interval->start);
       for (auto &tid : interval->tids) {
         printf(" %s ", g2t->getTidName(tid).c_str());
         printf(" %d ", interval->tid_cum_len[tid]);
       }
-      printf("-> ");
+      printf("-> \n");
     }
     printf("END\n");
 
@@ -53,7 +54,7 @@ namespace bramble {
         printf(" %s ", g2t->getTidName(tid).c_str());
         printf(" %d ", interval->tid_cum_len[tid]);
       }
-      printf("-> ");
+      printf("-> \n");
     }
     printf("END\n");
   }
@@ -66,6 +67,7 @@ namespace bramble {
    */
   std::unique_ptr<g2tTree> make_g2t_tree(BundleData *bundle, BamIO *io) {
     GPVec<GffObj> guides = bundle->guides;
+    //GMessage("hi\n");
 
     if (guides.Count() == 0)
       return nullptr;
@@ -90,9 +92,9 @@ namespace bramble {
         uint g_start, g_end;
         if (strand == '+') {
           g_start = guide->exons[j]->start - bundle->start;
-          g_end = guide->exons[j]->end - bundle->start;
+          g_end = (guide->exons[j]->end + 1) - bundle->start;
         } else {
-          g_start = bundle->end - guide->exons[j]->end;
+          g_start = bundle->end - (guide->exons[j]->end + 1);
           g_end = bundle->end - guide->exons[j]->start;
         }
 
@@ -124,13 +126,10 @@ namespace bramble {
     this_read->is_paired = (read->brec->flags() & BAM_FPAIRED);
     this_read->read = std::make_shared<ReadOut>();
     this_read->read->name = read->brec->name();
-    this_read->read->cigar = res.cigar;
     this_read->read->index = read_idx;
     this_read->read->brec = read->brec;
     this_read->read->read_size = read->len;
-    this_read->read->is_reverse = (res.strand == '-');
     this_read->read->nh = res.matches.size();
-    this_read->read->strand = res.strand;
 
     return this_read;
   }
@@ -146,38 +145,76 @@ namespace bramble {
 
       // Prepare records for one output alignment
       auto prepare_read = [&](std::shared_ptr<ReadOut> read, 
+                              std::shared_ptr<Cigar> &ideal_cigar,
+                              char strand,
                               bool is_first) {
         if (!read || !read->brec) return;
 
         bam1_t* old_b = read->brec->get_b();
         bam1_t* b; // new copy
 
-        old_b->core.flag |= BAM_FSECONDARY; // default secondary
+        //old_b->core.flag |= BAM_FSECONDARY; // default secondary
 
-        if (seen.insert(read->index).second) {
+        bool new_read = seen.insert(read->index).second;
+        if (new_read && !LONG_READS) {
           uint32_t* cigar = bam_get_cigar(old_b);
           uint32_t n_cigar = old_b->core.n_cigar;
 
-          update_cigar(old_b, cigar, n_cigar, cigar_mem, read->cigar);
+          int32_t nm = 0;
+          update_cigar(old_b, cigar, n_cigar, cigar_mem, *ideal_cigar, nm);
 
-          // Set NH and XS tags
+          // Set tags
           set_nh_tag(old_b, read->nh);
-          set_xs_tag(old_b, read->strand);
+          set_xs_tag(old_b, strand);
+          set_nm_tag(old_b, nm);
           remove_extra_tags(old_b);
 
           if (read->is_reverse) old_b->core.flag |= BAM_FREVERSE;
-          old_b->core.flag &= ~BAM_FSECONDARY;  // mark primary if first time
+          //old_b->core.flag &= ~BAM_FSECONDARY;  // mark primary if first time
+
+        // we have different cigars for every match
+        // so just modify new b every time
+        } else if (new_read && LONG_READS) { 
+          // Set NH and XS tags
+          set_nh_tag(old_b, read->nh);
+          set_xs_tag(old_b, strand);
+          remove_extra_tags(old_b);
+
+          if (read->is_reverse) old_b->core.flag |= BAM_FREVERSE;
+          //old_b->core.flag &= ~BAM_FSECONDARY;  // mark primary if first time
         }
 
-        b = bam_dup1(old_b); 
+        if (!LONG_READS) {
+          b = bam_dup1(old_b);
+        } else {
 
+          b = bam_dup1(old_b);
+
+          // Print BEFORE update
+          uint32_t* cigar = bam_get_cigar(b);
+          uint32_t n_cigar = b->core.n_cigar;
+          int32_t nm = 0;
+          update_cigar(b, cigar, n_cigar, cigar_mem, *ideal_cigar, nm);
+          set_nm_tag(old_b, nm);
+        }
+           
         // Set coordinates
         if (is_first) {
           b->core.tid = (int32_t)this_pair->r_tid;
-          b->core.pos = (int32_t)this_pair->r_pos;
+          b->core.pos = (int32_t)this_pair->r_align.pos;
+          // if (this_pair->r_align.primary_alignment) b->core.flag &= ~BAM_FSECONDARY; // mark primary
+          // else b->core.flag |= BAM_FSECONDARY; // default secondary
+          b->core.flag &= ~BAM_FSECONDARY; // mark primary
+          set_as_tag(b, this_pair->r_align.similarity_score);
+          set_hi_tag(b, this_pair->r_align.hit_index);
         } else {
           b->core.tid = (int32_t)this_pair->m_tid;
-          b->core.pos = (int32_t)this_pair->m_pos;
+          b->core.pos = (int32_t)this_pair->m_align.pos;
+          // if (this_pair->m_align.primary_alignment) b->core.flag &= ~BAM_FSECONDARY; // mark primary
+          // else b->core.flag |= BAM_FSECONDARY; // default secondary
+          b->core.flag &= ~BAM_FSECONDARY; // mark primary
+          set_as_tag(b, this_pair->m_align.similarity_score);
+          set_hi_tag(b, this_pair->m_align.hit_index);
         }
 
         if (this_pair->is_paired)
@@ -187,9 +224,11 @@ namespace bramble {
 
       };
 
-      prepare_read(this_pair->read1, true);
+      prepare_read(this_pair->read1, this_pair->r_align.cigar, 
+        this_pair->r_align.strand, true);
       if (this_pair->is_paired)
-        prepare_read(this_pair->read2, false);
+        prepare_read(this_pair->read2, this_pair->m_align.cigar, 
+          this_pair->m_align.strand, false);
     }
 
     // Write records together to enable reasonable BAM compression
@@ -247,7 +286,8 @@ namespace bramble {
     for (read_id_t n = 0; n < reads.size(); n++) {
       if (seen.count(n)) continue; // already processed as a mate
 
-      ReadInfo* this_read = process_read_out(bundle, n, g2t.get(), evaluator.get());
+      ReadInfo* this_read = process_read_out(bundle, 
+        n, g2t.get(), evaluator.get());
       int n_mates = reads[n]->pair_idx.Count();
 
        // Unpaired reads
@@ -265,7 +305,8 @@ namespace bramble {
 
         if (seen.count(mate_idx)) continue;
 
-        ReadInfo* mate_read = process_read_out(bundle, mate_idx, g2t.get(), evaluator.get());
+        ReadInfo* mate_read = process_read_out(bundle, 
+          mate_idx, g2t.get(), evaluator.get());
         process_mate_pair(this_read, mate_read, emit_pair);
         delete mate_read;
         seen.insert(mate_idx);

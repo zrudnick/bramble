@@ -67,6 +67,9 @@ extern GFastMutex bam_io_mutex;  // Protects BAM io
 
 extern bool no_more_bundles;
 
+uint32_t dropped_reads;
+uint32_t unresolved_reads;
+
 namespace bramble {
 
   void process_exons(GSamRecord *brec, CReadAln *readaln) {
@@ -316,6 +319,11 @@ namespace bramble {
     // Track which guides we've already added to avoid duplicates
     int first_guide_in_range = 0;
 
+    uint32_t all_reads = 0;
+    uint32_t unmapped_reads = 0;
+    dropped_reads = 0;
+    unresolved_reads = 0;
+
     while (more_alignments) {
       const char *ref_name = NULL;
       char splice_strand = '.';
@@ -330,8 +338,12 @@ namespace bramble {
       // Get next alignment
       if ((brec = io->next()) != NULL) {
         rec_count += 1;
+        all_reads++;
         
-        if (brec->isUnmapped()) continue;
+        if (brec->isUnmapped()) {
+          unmapped_reads++;
+          continue;
+        }
 
         ref_name = brec->refName();
         read_start_pos = brec->start;
@@ -416,14 +428,14 @@ namespace bramble {
 
         // Initialize new bundle with first read
         bundle_min_pos = read_start_pos;
-        bundle_max_pos = brec->end;
+        bundle_max_pos = brec->end + 1; // exclusive
 
         // Find guides that overlap this bundle
         // Since reads are sorted and we broke the bundle, we can skip guides that ended before this position
         if (guides != nullptr) {
           // Move first_guide_in_range forward to skip guides that definitely can't overlap
           while (first_guide_in_range < total_guides && 
-                 (*guides)[first_guide_in_range]->end < bundle_min_pos) {
+                 (*guides)[first_guide_in_range]->end <= bundle_min_pos) {
             first_guide_in_range++;
           }
           
@@ -436,15 +448,15 @@ namespace bramble {
             
             while (scan_idx < total_guides) {
               uint guide_start = (*guides)[scan_idx]->start;
-              uint guide_end = (*guides)[scan_idx]->end;
+              uint guide_end = (*guides)[scan_idx]->end + 1;
               
               // If guide starts after bundle ends, we're done (guides are sorted)
-              if (guide_start > bundle_max_pos) {
+              if (guide_start >= bundle_max_pos) {
                 break;
               }
               
               // Check if guide overlaps current bundle range
-              if (guide_end >= bundle_min_pos) {
+              if (guide_end > bundle_min_pos) {
                 bundle->keepGuide((*guides)[scan_idx]);
                 
                 // Expand bundle to include this guide
@@ -469,9 +481,9 @@ namespace bramble {
       }
 
       // Extend bundle with current read
-      if (brec->end > bundle_max_pos) {
+      if (brec->end + 1 > bundle_max_pos) {
         uint old_max = bundle_max_pos;
-        bundle_max_pos = brec->end;
+        bundle_max_pos = brec->end + 1;
 
         // Add any newly overlapping guides
         // Only need to check guides that start between old_max and new bundle_max_pos
@@ -483,15 +495,15 @@ namespace bramble {
             
             while (scan_idx < total_guides) {
               uint guide_start = (*guides)[scan_idx]->start;
-              uint guide_end = (*guides)[scan_idx]->end;
+              uint guide_end = (*guides)[scan_idx]->end + 1;
               
               // If guide starts after bundle ends, we're done
-              if (guide_start > bundle_max_pos) {
+              if (guide_start >= bundle_max_pos) {
                 break;
               }
               
               // Check if guide overlaps current bundle range
-              if (guide_end >= bundle_min_pos) {
+              if (guide_end > bundle_min_pos) {
                 bundle->keepGuide((*guides)[scan_idx]);
                 
                 if (guide_end > bundle_max_pos) {
@@ -510,6 +522,11 @@ namespace bramble {
       process_read_in(bundle_min_pos, bundle_max_pos, *bundle, 
         hashread, brec, splice_strand, nh, hi);
     }
+
+    GMessage("#total input reads is:    %d\n", all_reads);
+    GMessage("#unmapped reads is: %d\n", unmapped_reads);
+    GMessage("#dropped reads is: %d\n", dropped_reads);
+    GMessage("#unresolved reads is: %d\n\n", unresolved_reads);
   }
 
 }

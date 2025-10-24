@@ -31,15 +31,15 @@ namespace bramble {
   void add_mate_info(const std::unordered_set<tid_t> &final_transcripts,
                     const std::unordered_set<tid_t> &read_transcripts,
                     const std::unordered_set<tid_t> &mate_transcripts,
-                    const std::unordered_map<tid_t, pos_t> &read_positions,
-                    const std::unordered_map<tid_t, pos_t> &mate_positions,
+                    const std::unordered_map<tid_t, AlignInfo> &read_alignments,
+                    const std::unordered_map<tid_t, AlignInfo> &mate_alignments,
                     ReadInfo* this_read, ReadInfo* mate_read, uint8_t mate_case, 
                     std::function<void(BamInfo*, bool)> emit_pair) {
 
     // Add read or read pair to bam_info
     auto add_pair = [&] (ReadInfo* this_read, ReadInfo* mate_read,
                         tid_t r_tid, tid_t m_tid, 
-                        pos_t r_pos, pos_t m_pos, 
+                        AlignInfo r_align, AlignInfo m_align,
                         bool is_paired, bool is_last) {
       
       // Add this read pair + transcript to bam_info
@@ -47,14 +47,14 @@ namespace bramble {
       this_pair->valid_pair = true;
       this_pair->is_paired = is_paired;
       
-      this_pair->r_tid = r_tid;
-      this_pair->r_pos = r_pos;
       this_pair->read1 = this_read->read;
+      this_pair->r_tid = r_tid;
+      this_pair->r_align = r_align;
 
       if (is_paired) {
         this_pair->read2 = mate_read->read;
         this_pair->m_tid = m_tid;
-        this_pair->m_pos = m_pos;
+        this_pair->m_align = m_align;
       }
 
       emit_pair(this_pair, is_last);
@@ -66,17 +66,16 @@ namespace bramble {
     if (mate_case == 0) {
       for (auto it = read_transcripts.begin(); it != read_transcripts.end(); ++it) {
         const tid_t &tid = *it;
-        auto r_it = read_positions.find(tid);
-        auto pos = r_it->second;
+        auto align = read_alignments.find(tid)->second;
 
-        bool is_last = (std::next(it) == final_transcripts.end());
+        bool is_last = (std::next(it) == read_transcripts.end());
 
         if (!is_last)
-          add_pair(this_read, nullptr, tid, 0, pos, 0, false, false); 
-          // paired = false, last = false
+          add_pair(this_read, nullptr, tid, 0, align, {}, 
+            false, false); // paired = false, last = false
         else
-          add_pair(this_read, nullptr, tid, 0, pos, 0, false, true); 
-          // paired = false, last = true
+          add_pair(this_read, nullptr, tid, 0, align, {}, 
+            false, true); // paired = false, last = true
       }
 
       return;
@@ -89,18 +88,16 @@ namespace bramble {
     if (mate_case == 1) {
       for (auto it = final_transcripts.begin(); it != final_transcripts.end(); ++it) {
         const tid_t &tid = *it;
-        auto r_it = read_positions.find(tid);
-        auto m_it = mate_positions.find(tid);
-        pos_t r_pos = r_it->second;
-        pos_t m_pos = m_it->second;
+        auto r_align = read_alignments.find(tid)->second;
+        auto m_align = mate_alignments.find(tid)->second;
 
         bool is_last = (std::next(it) == final_transcripts.end());
         if (!is_last)
-          add_pair(this_read, mate_read, tid, tid, r_pos, m_pos, true, false); 
-          // paired = true, last = false
+          add_pair(this_read, mate_read, tid, tid, r_align, m_align, 
+            true, false); // paired = true, last = false
         else 
-          add_pair(this_read, mate_read, tid, tid, r_pos, m_pos, true, true); 
-          // paired = true, last = true
+          add_pair(this_read, mate_read, tid, tid, r_align, m_align, 
+            true, true); // paired = true, last = true
       }
 
     } else if (mate_case == 2) {
@@ -109,11 +106,11 @@ namespace bramble {
       if (read_transcripts.size() == 1 && mate_transcripts.size() == 1) {
         tid_t r_tid = *read_transcripts.begin();
         tid_t m_tid = *mate_transcripts.begin();
-        pos_t r_pos = read_positions.find(r_tid)->second;
-        pos_t m_pos = mate_positions.find(m_tid)->second;
+        auto r_align = read_alignments.find(r_tid)->second;
+        auto m_align = mate_alignments.find(m_tid)->second;
 
-        add_pair(this_read, mate_read, r_tid, m_tid, r_pos, m_pos, true, true); 
-        // paired = true, last = true
+        add_pair(this_read, mate_read, r_tid, m_tid, r_align, m_align, 
+          true, true); // paired = true, last = true
       }
 
     }
@@ -160,15 +157,15 @@ namespace bramble {
     if (mate_read == nullptr) {
 
       std::unordered_set<tid_t> read_transcripts;
-      std::unordered_map<tid_t, pos_t> read_positions;
+      std::unordered_map<tid_t, AlignInfo> read_alignments;
 
       for (auto& match : this_read->matches) {
         tid_t tid = match.tid;
-        uint pos = match.pos;
+        AlignInfo align = match.align;
         read_transcripts.insert(tid);
-        read_positions[tid] = pos;
+        read_alignments[tid] = align;
       }
-      add_mate_info({}, read_transcripts, {}, read_positions, {}, 
+      add_mate_info({}, read_transcripts, {}, read_alignments, {}, 
                     this_read, nullptr, mate_case, emit_pair);
       return;
     }
@@ -181,21 +178,21 @@ namespace bramble {
 
     std::unordered_set<tid_t> read_transcripts;
     std::unordered_set<tid_t> mate_transcripts;
-    std::unordered_map<tid_t, pos_t> read_positions;
-    std::unordered_map<tid_t, pos_t> mate_positions;
+    std::unordered_map<tid_t, AlignInfo> read_alignments;
+    std::unordered_map<tid_t, AlignInfo> mate_alignments;
 
     for (auto& match : this_read->matches) {
       tid_t tid = match.tid;
-      uint pos = match.pos;
+      AlignInfo align = match.align;
       read_transcripts.insert(tid);
-      read_positions[tid] = pos;
+      read_alignments[tid] = align;
     }
 
     for (auto& match : mate_read->matches) {
       tid_t tid = match.tid;
-      uint pos = match.pos;
+      AlignInfo align = match.align;
       mate_transcripts.insert(tid);
-      mate_positions[tid] = pos;
+      mate_alignments[tid] = align;
     }
 
     // *^*^*^ *^*^*^ *^*^*^ *^*^*^
@@ -247,7 +244,7 @@ namespace bramble {
     // *^*^*^ *^*^*^ *^*^*^ *^*^*^
 
     add_mate_info(final_transcripts, read_transcripts, mate_transcripts,
-                  read_positions, mate_positions,
+                  read_alignments, mate_alignments,
                   this_read, mate_read, mate_case, emit_pair);
   }
 

@@ -244,9 +244,13 @@ namespace bramble {
       uint32_t overlap_start = std::max(node->start, start);
       uint32_t overlap_end = std::min(node->end, end);
 
-      if (overlap_start < overlap_end) {
+      // if (overlap_start < overlap_end) {
+      //   node->tids.insert(tid);
+      //   covered_ranges.emplace_back(overlap_start, overlap_end);
+      // }
+      if (node->start >= start && node->end <= end) { // ???
         node->tids.insert(tid);
-        covered_ranges.emplace_back(overlap_start, overlap_end);
+        covered_ranges.emplace_back(node->start, node->end);
       }
     }
 
@@ -400,8 +404,7 @@ namespace bramble {
     }
   }
 
-  // Precompute cumulative lengths so that match positions can be calculated
-  void IntervalTree::precomputeCumulativeLengths(const tid_t &tid) {
+  void IntervalTree::precomputeCumulativeLengths(const tid_t &tid, char strand) {
     auto tidChain = getTidNodes(tid);
 
     // Need to sort by genomic position
@@ -412,22 +415,23 @@ namespace bramble {
                 return a->end < b->end;
               });
 
+    uint32_t total_length = 0;
+    for (size_t i = 0; i < tidChain.size(); ++i) {
+      auto *node = tidChain[i];
+      total_length += (node->end - node->start);
+    }
+
     uint32_t cumulative = 0;
-    uint32_t prev_end = -1;
     for (size_t i = 0; i < tidChain.size(); ++i) {
       auto *node = tidChain[i];
 
-      // Subtract 1 if this and previous node are directly adjacent
-      if (node->start == prev_end) {
-        node->tid_cum_len[tid] = cumulative - 1;
-        cumulative += (node->end - node->start);
-      } else {
-        node->tid_cum_len[tid] = cumulative;
-        cumulative += (node->end - node->start) + 1;
-      }
-
-      prev_end = node->end;
+      uint32_t node_length = node->end - node->start;
+      uint32_t left = cumulative;
+      uint32_t right =  total_length - cumulative - node_length;
+      node->tid_cum_len[tid] = std::make_pair(left, right);
+      cumulative += node_length;
     }
+    transcript_lengths[tid] = cumulative;
   }
 
   // For debugging (print_tree)
@@ -487,17 +491,23 @@ namespace bramble {
   }
 
   // Precompute for all TIDs in the tree
-  void IntervalTree::precomputeAllCumulativeLengths() {
+  void IntervalTree::precomputeAllCumulativeLengths(char strand) {
     for (const auto &tid : all_tids) {
-      precomputeCumulativeLengths(tid);
+      precomputeCumulativeLengths(tid, strand);
     }
   }
 
   // Check for cumulative length
-  uint32_t IntervalTree::findCumulativeLength(IntervalNode *node, 
-                                              const tid_t &tid) {
+  std::pair<uint32_t, uint32_t> 
+  IntervalTree::findCumulativeLength(IntervalNode *node, 
+                                    const tid_t &tid) {
     auto it = node->tid_cum_len.find(tid);
-    return (it != node->tid_cum_len.end()) ? it->second : 0;
+    std::pair<uint32_t, uint32_t> err = std::make_pair(0, 0);
+    return (it != node->tid_cum_len.end()) ? it->second : err;
+  }
+
+  uint32_t IntervalTree::getTranscriptLength(tid_t tid) {
+    return transcript_lengths[tid];
   }
 
   g2tTree::g2tTree() {
@@ -555,8 +565,8 @@ namespace bramble {
 
   // Call this after loading all transcript data
   void g2tTree::precomputeAllCumulativeLengths() {
-    fw_tree->precomputeAllCumulativeLengths();
-    rc_tree->precomputeAllCumulativeLengths();
+    fw_tree->precomputeAllCumulativeLengths('+');
+    rc_tree->precomputeAllCumulativeLengths('-');
   }
 
   // Find all guide TIDs that overlap with a read exon
@@ -571,8 +581,9 @@ namespace bramble {
   }
 
   // Get cumulative previous size of exons from transcript
-  uint32_t g2tTree::getCumulativeLength(IntervalNode *node, const tid_t &tid,
-                                        char strand) {
+  std::pair<uint32_t, uint32_t> 
+  g2tTree::getCumulativeLength(IntervalNode *node, 
+                              const tid_t &tid, char strand) {
     IntervalTree *tree = getTreeForStrand(strand);
     return tree->findCumulativeLength(node, tid);
   }
@@ -589,6 +600,13 @@ namespace bramble {
                                     char strand) {
     IntervalTree *tree = getTreeForStrand(strand);
     return tree->getPrevNodeForTid(node, tid);
+  }
+
+  // Get previous node in chain for a specific TID
+  uint32_t g2tTree::getTranscriptLength(const tid_t &tid,
+                                            char strand) {
+    IntervalTree *tree = getTreeForStrand(strand);
+    return tree->getTranscriptLength(tid);
   }
   
 };

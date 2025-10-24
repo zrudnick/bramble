@@ -7,6 +7,7 @@ using namespace bramble;
 
 namespace bramble {
 
+  struct AlignInfo;
   struct ReadInfo;
   struct BamInfo;
   struct BundleData;
@@ -14,8 +15,8 @@ namespace bramble {
   void add_mate_info(const std::unordered_set<tid_t> &final_transcripts,
                     const std::unordered_set<tid_t> &read_transcripts,
                     const std::unordered_set<tid_t> &mate_transcripts,
-                    const std::unordered_map<tid_t, pos_t> &read_positions,
-                    const std::unordered_map<tid_t, pos_t> &mate_positions,
+                    const std::unordered_map<tid_t, AlignInfo> &read_alignments,
+                    const std::unordered_map<tid_t, AlignInfo> &mate_alignments,
                     ReadInfo* this_read, ReadInfo* mate_read, uint8_t mate_case, 
                     std::function<void(BamInfo*, bool)> emit_pair);
                     

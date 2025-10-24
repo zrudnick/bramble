@@ -9,6 +9,7 @@ namespace bramble {
   struct BundleData;
   struct IntervalNode;
 
+  // i'll make this a uint32_t* at some point
   struct Cigar {
     std::vector<std::pair<uint32_t, uint8_t>> cigar;
 
@@ -21,22 +22,54 @@ namespace bramble {
       }
     }
 
+    // for debugging
+    std::string to_string() const {
+      std::string result;
+      for (const auto& [length, op] : cigar) {
+        result += std::to_string(length);
+        // Convert BAM op code to CIGAR character
+        switch(op) {
+          case BAM_CMATCH: result += 'M'; break;
+          case BAM_CINS: result += 'I'; break;
+          case BAM_CDEL: result += 'D'; break;
+          case BAM_CREF_SKIP: result += 'N'; break;
+          case BAM_CSOFT_CLIP: result += 'S'; break;
+          case BAM_CHARD_CLIP: result += 'H'; break;
+          case BAM_CPAD: result += 'P'; break;
+          case BAM_CEQUAL: result += '='; break;
+          case BAM_CDIFF: result += 'X'; break;
+          default: result += '?'; break;
+        }
+      }
+      return result.empty() ? "*" : result;
+    }
+
     void clear() {
       cigar.clear();
     }
 
   };
 
+  struct AlignInfo {
+    pos_t pos;
+    char strand;
+    std::shared_ptr<Cigar> cigar;
+    bool primary_alignment;
+    double similarity_score;
+    int32_t hit_index;
+
+    AlignInfo()
+      : primary_alignment(false) {}
+  };
+
   struct ExonChainMatch {
     tid_t tid;
-    pos_t pos;
-    std::vector<IntervalNode*> matched_intervals;
+    AlignInfo align;
+    pos_t secondary_pos;
+    uint32_t transcript_length;
+    uint32_t ref_consumed;
     uint32_t total_coverage;
-    uint32_t gaps_count;
-    uint32_t total_gap_size;
-    double similarity_score;
-    uint32_t soft_clip_front;
-    uint32_t soft_clip_back;
+    uint32_t total_read_length;
   };
 
   struct ReadOut {
@@ -45,21 +78,17 @@ namespace bramble {
     std::string name;
     uint32_t read_size;
     GSamRecord *brec;
-    Cigar cigar;
     bool is_reverse;
     bool discard_read;
-    char strand;
 
     ReadOut() 
       : index(), 
         nh(), 
         name(),
         read_size(), 
-        brec(nullptr),
-        cigar(), 
+        brec(nullptr), 
         is_reverse(false),  
-        discard_read(false),
-        strand('.') {}
+        discard_read(false) {}
 
     // brec is deleted by CReadAln
   };
@@ -91,11 +120,11 @@ namespace bramble {
 
     // Read 1 match info
     tid_t r_tid;
-    uint32_t r_pos;
+    AlignInfo r_align;
 
     // Read 2 match info
     tid_t m_tid;
-    uint32_t m_pos;
+    AlignInfo m_align;
 
     BamInfo() 
       : same_transcript(false), 
@@ -106,10 +135,8 @@ namespace bramble {
   };
 
   struct ReadEvaluationResult {
-    bool valid = false;
+    bool valid;
     std::vector<ExonChainMatch> matches;
-    char strand = '.';
-    Cigar cigar;
   };
 
   struct ReadEvaluationConfig {
@@ -143,8 +170,8 @@ namespace bramble {
     * interval?
     * (USE_FASTA mode)
     */
-    pos_t get_match_pos(IntervalNode *interval, tid_t tid, 
-                        char read_strand, g2tTree *g2t, 
+    std::tuple<pos_t, pos_t> get_match_pos(IntervalNode *interval, tid_t tid, 
+                        char strand, g2tTree *g2t, 
                         uint exon_start, bool used_backwards_overhang);
 
     std::tuple<uint32_t, uint32_t> 
@@ -173,57 +200,68 @@ namespace bramble {
     
     std::vector<char> get_strands_to_check(CReadAln* read);
 
-    uint32_t boundary_tolerance(uint32_t read_length);
+    uint32_t get_boundary_tolerance(uint32_t read_length);
 
-    std::set<tid_t> get_candidate_tids(std::vector<IntervalNode *> intervals);
+    std::set<tid_t> get_candidate_tids(std::vector<IntervalNode *> intervals,
+                                      std::vector<ExonChainMatch> &matches,
+                                      std::unordered_map<tid_t, std::shared_ptr<Cigar>> &subcigars,
+                                      uint32_t exon_start, uint32_t exon_end,
+                                      bool is_first_exon, bool is_last_exon, g2tTree *g2t);
 
-    void hide_small_exon(Cigar& cigar, uint32_t exon_start, uint32_t exon_end,
-                         bool is_first_exon, bool is_last_exon);
+    void add_operation(std::vector<ExonChainMatch> &matches,
+                      uint32_t length, uint8_t op, g2tTree *g2t, char strand);
 
-    double 
-    exon_chain_similarity(GVec<GSeg>& read_exons,
-                          const std::vector<std::vector<IntervalNode*>>& 
-                          all_intervals,
-                          tid_t tid, char strand, BundleData* bundle);
+    void hide_small_exon(std::vector<ExonChainMatch> &matches, 
+                        uint32_t exon_start, uint32_t exon_end,
+                        bool is_first_exon, bool is_last_exon, g2tTree *g2t, char strand);
 
     bool check_first_exon(uint32_t exon_start, uint32_t interval_start,
                           uint32_t exon_end, uint32_t interval_end,
                           bool is_last_exon, uint32_t max_clip_size);
 
-    void filter_tids(IntervalNode* first_interval, 
-                    IntervalNode* prev_last_interval,
+    void filter_tids(std::vector<IntervalNode *> intervals,
+                    std::unordered_map<tid_t, IntervalNode *> prev_intervals,
                     std::set<tid_t> &candidate_tids, 
-                    uint32_t exon_start, g2tTree* g2t, char strand);
+                    uint32_t exon_start, g2tTree* g2t, 
+                    char strand, std::unordered_map<tid_t, uint32_t> &gaps);
 
     bool check_middle_exon(uint32_t exon_start, uint32_t interval_start,
-                          uint32_t exon_end, uint32_t interval_end,
-                          IntervalNode* first_interval, 
-                          IntervalNode* prev_last_interval,
-                          std::set<tid_t> &candidate_tids, g2tTree* g2t, 
-                          char strand);
+                          uint32_t exon_end, uint32_t interval_end);
 
     bool check_last_exon(uint32_t exon_start, uint32_t interval_start,
                         uint32_t exon_end, uint32_t interval_end,
-                        IntervalNode* first_interval,
-                        IntervalNode* prev_last_interval, 
-                        std::set<tid_t> &candidate_tids,
-                        g2tTree* g2t, char strand, uint32_t max_clip_size);
+                        uint32_t max_clip_size);
 
-    void build_exon_cigar(Cigar& cigar, bool is_first_exon, bool is_last_exon,
+    void build_exon_cigar(std::vector<ExonChainMatch> &matches,
+                          std::unordered_map<tid_t, std::shared_ptr<Cigar>> &subcigars,
+                          bool is_first_exon, bool is_last_exon,
                           uint32_t exon_start, uint32_t exon_end,
-                          uint32_t interval_start, uint32_t interval_end);
+                          uint32_t interval_start, uint32_t interval_end,
+                          std::unordered_map<tid_t, uint32_t> &gaps, g2tTree* g2t, char strand);
 
-    bool compile_matches(std::vector<ExonChainMatch> &matches,
+    void compile_matches(std::vector<ExonChainMatch> &matches,
                         std::set<tid_t> candidate_tids, 
-                        IntervalNode *first_interval, 
-                        char strand, g2tTree* g2t, uint32_t exon_start, 
-                        bool is_first_exon, bool used_backwards_overhang);
+                        std::unordered_map<tid_t, IntervalNode *> &first_intervals, 
+                        char strand, g2tTree* g2t, 
+                        uint32_t exon_start, uint32_t exon_end,
+                        uint32_t cumulative_length, uint32_t coverage_augment,
+                        bool used_backwards_overhang);
+
+    bool update_matches(std::vector<ExonChainMatch> &matches,
+                        std::set<tid_t> candidate_tids, 
+                        uint32_t exon_start, uint32_t exon_end,
+                        bool is_first_exon,
+                        std::unordered_map<tid_t, uint32_t> &gaps);
+
+    void get_prev_intervals(std::vector<IntervalNode *> intervals,
+                            std::set<tid_t> candidate_tids,
+                            std::unordered_map<tid_t, IntervalNode *> &prev_intervals);
+
+    void get_first_intervals(std::vector<IntervalNode *> intervals,
+                            std::set<tid_t> candidate_tids,
+                            std::unordered_map<tid_t, IntervalNode *> &first_intervals);
 
     void filter_by_similarity(std::vector<ExonChainMatch> &matches,
-                              std::vector<std::vector<IntervalNode*>> 
-                              all_matched_intervals,
-                              GVec<GSeg> read_exons, char strand, 
-                              BundleData *bundle, 
                               double similarity_threshold);
 
   public:
