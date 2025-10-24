@@ -169,7 +169,7 @@ namespace bramble {
           set_nm_tag(old_b, nm);
           remove_extra_tags(old_b);
 
-          if (read->is_reverse) old_b->core.flag |= BAM_FREVERSE;
+          //if (read->is_reverse) old_b->core.flag |= BAM_FREVERSE;
           //old_b->core.flag &= ~BAM_FSECONDARY;  // mark primary if first time
 
         // we have different cigars for every match
@@ -180,7 +180,7 @@ namespace bramble {
           set_xs_tag(old_b, strand);
           remove_extra_tags(old_b);
 
-          if (read->is_reverse) old_b->core.flag |= BAM_FREVERSE;
+          //if (read->is_reverse) old_b->core.flag |= BAM_FREVERSE;
           //old_b->core.flag &= ~BAM_FSECONDARY;  // mark primary if first time
         }
 
@@ -217,6 +217,8 @@ namespace bramble {
           set_as_tag(b, this_pair->m_align.similarity_score);
           set_hi_tag(b, this_pair->m_align.hit_index);
         }
+
+        b->core.flag &= ~BAM_FREVERSE;  // should never be reverse
 
         if (this_pair->is_paired)
           set_mate_info(b, this_pair, is_first);
