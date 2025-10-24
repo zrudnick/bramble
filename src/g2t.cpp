@@ -428,7 +428,7 @@ namespace bramble {
       uint32_t node_length = node->end - node->start;
       uint32_t left = cumulative;
       uint32_t right =  total_length - cumulative - node_length;
-      if (strand == '-') node->tid_cum_len[tid] = left - 1;
+      if (strand == '-' && left > 0) node->tid_cum_len[tid] = left - 1;
       else node->tid_cum_len[tid] = left;
       cumulative += node_length;
     }
