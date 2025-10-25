@@ -96,7 +96,7 @@ namespace bramble {
 
     // Find all intervals that overlap with the given range
     std::vector<IntervalNode *> 
-    findOverlapping(uint32_t start, uint32_t end, bool allow_gaps);
+    findOverlapping(uint32_t start, uint32_t end);
 
     // Get next node in chain for a specific TID
     IntervalNode *getNextNodeForTid(IntervalNode *node, const tid_t &tid);
@@ -156,7 +156,7 @@ namespace bramble {
     // Find all guide TIDs that overlap with a read exon
     std::vector<IntervalNode *> 
     getIntervals(uint32_t readStart, uint32_t readEnd, 
-                char strand, bool allow_gaps = false);
+                char strand);
 
     // Get cumulative previous size of exons from transcript
     pos_t

@@ -33,6 +33,9 @@ const uint32_t overhang_threshold = 8;
 extern uint32_t dropped_reads;
 extern uint32_t unresolved_reads;
 
+uint32_t bundle_start;
+uint32_t bundle_end;
+
 namespace bramble {
 
   ReadEvaluator::~ReadEvaluator() {}
@@ -74,10 +77,10 @@ namespace bramble {
     uint32_t exon_start, exon_end;
     if (strand == '+') {
       exon_start = exon.start - bundle->start;
-      exon_end = exon.end - bundle->start + 1;
+      exon_end = (exon.end + 1) - bundle->start;
     } else {
-      exon_start = bundle->end - exon.end;
-      exon_end = bundle->end - exon.start + 1;
+      exon_start = bundle->end - (exon.end + 1);
+      exon_end = bundle->end - exon.start;
     }
     return std::make_tuple(exon_start, exon_end);
   }
@@ -252,6 +255,27 @@ namespace bramble {
     if (STRICT || !LONG_READS) {
       std::set<tid_t> tids(intervals[0]->tids.begin(), intervals[0]->tids.end());
 
+      // bool verb = false;
+      // for (auto & tid: tids) {
+      //   std::string tid_string = g2t->getTidName(tid);
+      //   if (tid_string == "CHS.34775.20") {
+      //     verb = true;
+      //     GMessage("NEW CASE\n");
+      //     uint32_t s = bundle_end - intervals[0]->end;
+      //     uint32_t e = bundle_end - intervals[0]->start + 1;
+      //     GMessage("bundle_start = %d, bundle_end = %d\n", bundle_start, bundle_end);
+      //     GMessage("interval_start = %d, interval_end = %d, interval # = %d\n", s, e, 0);
+      //     GMessage("interval_start = %d, interval_end = %d, interval # = %d\n", intervals[0]->start, intervals[0]->end, 0);
+      //   }
+      // }
+
+      // for (auto & tid: tids) {
+      //   std::string tid_string = g2t->getTidName(tid);
+      //   if (verb) {
+      //     GMessage("The first interval contains tid %s\n", tid_string.c_str());
+      //   }
+      // }
+
       for (size_t i = 1; i < intervals.size(); ++i) {
       
         // Check for continuity in intervals
@@ -259,16 +283,33 @@ namespace bramble {
           return {};  // gap found
         }
 
+        // if (verb) {
+        //   uint32_t s = bundle_end - intervals[i]->end;
+        //   uint32_t e = bundle_end - intervals[i]->start + 1;
+        //   GMessage("interval_start = %d, interval_end = %d, interval # = %d\n", s, e, i);
+        //   GMessage("interval_start = %d, interval_end = %d, interval # = %d\n", intervals[i]->start, intervals[i]->end, 0);
+        //   GMessage("exon_start = %d, exon_end = %d\n", s, e);
+        //   GMessage("exon_start = %d, exon_end = %d\n", exon_start, exon_end);
+        // }
+
         // Keep only TIDs present in all intervals
         auto it = tids.begin();
         while (it != tids.end()) {
-          if (intervals[i]->tids.count(*it)) {
+          std::string tid_string = g2t->getTidName(*it);
+          if (!intervals[i]->tids.count(*it)) {
+            // if (verb) {
+            //   GMessage("Erasing tid=%s\n", tid_string.c_str());
+            // }
             it = tids.erase(it);
           } else {
+            // if (verb) {
+            //   GMessage("Keeping tid=%s\n", tid_string.c_str());
+            // }
             ++it;
           }
         }
       }
+      //if (verb) GMessage("\n");
       return tids;
     
     // LONG READS
@@ -728,6 +769,9 @@ namespace bramble {
     IntervalNode *last_interval = nullptr;
     uint32_t interval_start;
     uint32_t interval_end;
+
+    bundle_start = bundle->start;
+    bundle_end = bundle->end;
     
     std::vector<ExonChainMatch> matches;
     std::vector<ExonChainMatch> matches_by_strand;

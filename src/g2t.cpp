@@ -444,28 +444,12 @@ namespace bramble {
 
   // Find all intervals that overlap with the given range
   std::vector<IntervalNode *> 
-  IntervalTree::findOverlapping(uint32_t start, uint32_t end,
-                                bool allow_gaps) {
+  IntervalTree::findOverlapping(uint32_t start, uint32_t end) {
     std::vector<IntervalNode *> result;
     findOverlappingHelper(root, start, end, result);
     std::sort(
         result.begin(), result.end(),
         [](IntervalNode *a, IntervalNode *b) { return a->start < b->start; });
-
-    // For short reads, don't allow gaps
-    if (!allow_gaps && !result.empty()) {
-      std::vector<IntervalNode *> contiguous;
-      contiguous.push_back(result[0]);
-      
-      for (size_t i = 1; i < result.size(); ++i) {
-        if (result[i]->start == contiguous.back()->end) {
-          contiguous.push_back(result[i]);
-        } else {
-          break;
-        }
-      }
-      return contiguous;
-    }
 
     return result;
   }
@@ -572,12 +556,12 @@ namespace bramble {
   // Find all guide TIDs that overlap with a read exon
   std::vector<IntervalNode *> 
   g2tTree::getIntervals(uint32_t readStart, uint32_t readEnd,
-                        char strand, bool allow_gaps) {
+                        char strand) {
     IntervalTree *tree = getTreeForStrand(strand);
     if (!tree)
       return std::vector<IntervalNode *>();
 
-    return tree->findOverlapping(readStart, readEnd, allow_gaps);
+    return tree->findOverlapping(readStart, readEnd);
   }
 
   // Get cumulative previous size of exons from transcript
