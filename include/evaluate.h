@@ -249,16 +249,21 @@ namespace bramble {
 
     bool update_matches(std::vector<ExonChainMatch> &matches,
                         std::set<tid_t> candidate_tids, 
+                        std::unordered_map<tid_t, IntervalNode *> &first_intervals, 
+                        char strand, g2tTree* g2t,
                         uint32_t exon_start, uint32_t exon_end,
                         bool is_first_exon,
-                        std::unordered_map<tid_t, uint32_t> &gaps);
+                        std::unordered_map<tid_t, uint32_t> &gaps,
+                        bool used_backwards_overhang);
 
     void get_prev_intervals(std::vector<IntervalNode *> intervals,
                             std::set<tid_t> candidate_tids,
-                            std::unordered_map<tid_t, IntervalNode *> &prev_intervals);
+                            std::unordered_map<tid_t, IntervalNode *> &prev_intervals,
+                            char strand);
 
     void get_first_intervals(std::vector<IntervalNode *> intervals,
                             std::set<tid_t> candidate_tids,
+                            char strand,
                             std::unordered_map<tid_t, IntervalNode *> &first_intervals);
 
     void filter_by_similarity(std::vector<ExonChainMatch> &matches,

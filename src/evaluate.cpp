@@ -33,8 +33,7 @@ const uint32_t overhang_threshold = 8;
 extern uint32_t dropped_reads;
 extern uint32_t unresolved_reads;
 
-uint32_t bundle_start;
-uint32_t bundle_end;
+std::string read_name;
 
 namespace bramble {
 
@@ -112,7 +111,6 @@ namespace bramble {
     std::string tid_string = g2t->getTidName(tid);
     uint32_t match_start = (exon_start > interval_start) ? 
       (exon_start - interval_start) : 0;
-
     return (pos_t)(match_start + prev_node_sum);
   }
 
@@ -255,26 +253,9 @@ namespace bramble {
     if (STRICT || !LONG_READS) {
       std::set<tid_t> tids(intervals[0]->tids.begin(), intervals[0]->tids.end());
 
-      // bool verb = false;
-      // for (auto & tid: tids) {
-      //   std::string tid_string = g2t->getTidName(tid);
-      //   if (tid_string == "CHS.34775.20") {
-      //     verb = true;
-      //     GMessage("NEW CASE\n");
-      //     uint32_t s = bundle_end - intervals[0]->end;
-      //     uint32_t e = bundle_end - intervals[0]->start + 1;
-      //     GMessage("bundle_start = %d, bundle_end = %d\n", bundle_start, bundle_end);
-      //     GMessage("interval_start = %d, interval_end = %d, interval # = %d\n", s, e, 0);
-      //     GMessage("interval_start = %d, interval_end = %d, interval # = %d\n", intervals[0]->start, intervals[0]->end, 0);
-      //   }
-      // }
-
-      // for (auto & tid: tids) {
-      //   std::string tid_string = g2t->getTidName(tid);
-      //   if (verb) {
-      //     GMessage("The first interval contains tid %s\n", tid_string.c_str());
-      //   }
-      // }
+      for (auto & tid: tids) {
+        std::string tid_string = g2t->getTidName(tid);
+      }
 
       for (size_t i = 1; i < intervals.size(); ++i) {
       
@@ -283,33 +264,17 @@ namespace bramble {
           return {};  // gap found
         }
 
-        // if (verb) {
-        //   uint32_t s = bundle_end - intervals[i]->end;
-        //   uint32_t e = bundle_end - intervals[i]->start + 1;
-        //   GMessage("interval_start = %d, interval_end = %d, interval # = %d\n", s, e, i);
-        //   GMessage("interval_start = %d, interval_end = %d, interval # = %d\n", intervals[i]->start, intervals[i]->end, 0);
-        //   GMessage("exon_start = %d, exon_end = %d\n", s, e);
-        //   GMessage("exon_start = %d, exon_end = %d\n", exon_start, exon_end);
-        // }
-
         // Keep only TIDs present in all intervals
         auto it = tids.begin();
         while (it != tids.end()) {
           std::string tid_string = g2t->getTidName(*it);
           if (!intervals[i]->tids.count(*it)) {
-            // if (verb) {
-            //   GMessage("Erasing tid=%s\n", tid_string.c_str());
-            // }
             it = tids.erase(it);
           } else {
-            // if (verb) {
-            //   GMessage("Keeping tid=%s\n", tid_string.c_str());
-            // }
             ++it;
           }
         }
       }
-      //if (verb) GMessage("\n");
       return tids;
     
     // LONG READS
@@ -318,6 +283,7 @@ namespace bramble {
       std::set<tid_t> tids;
       for (uint32_t i = 0; i < intervals.size(); ++i) {
         // Ensure continuity (for now)
+        // Remove to allow gaps
         if (i != 0 && intervals[i]->start != intervals[i-1]->end) {
           return {};  // gap found
         }
@@ -349,11 +315,21 @@ namespace bramble {
 
       uint32_t n_intervals = intervals.size();
       for (uint32_t i = 0; i < n_intervals; i++) {
+
+        // ADD LATER
+        // if (i != 0 && intervals[i]->start != intervals[i-1]->end) {
+        //   uint32_t gap_length = intervals[i]->start - intervals[i-1]->end;
+        //   for (auto &tid : tids) {
+        //     subcigars[tid]->add_operation(gap_length, BAM_CDEL);
+        //   }
+        // }
+
         uint32_t overlap_start = std::max(exon_start, intervals[i]->start);
         uint32_t overlap_end = std::min(exon_end, intervals[i]->end);  
         if (overlap_end >= overlap_start) {
           uint32_t match_length = overlap_end - overlap_start;
           for (auto &tid : tids) {
+            std::string tid_string = g2t->getTidName(tid);
             // Match
             if (intervals[i]->tids.count(tid)) {
               subcigars[tid]->add_operation(match_length, BAM_CMATCH);
@@ -390,14 +366,15 @@ namespace bramble {
                                     uint32_t length, uint8_t op, g2tTree *g2t, char strand) {
     auto it = matches.begin();
     while (it != matches.end()) {
-     //GMessage("Adding op %d with length %d\n", op, length);
       std::shared_ptr<Cigar> match_cigar = it->align.cigar;
       match_cigar->add_operation(length, op);
       if (op != BAM_CSOFT_CLIP && op != BAM_CINS) {
         it->ref_consumed += length;
         it->total_coverage += length;
       }
-      if ((it->align.pos + it->ref_consumed > it->transcript_length)) {
+
+      // fix for short reads
+      if ((LONG_READS) && (it->align.pos + it->ref_consumed > it->transcript_length)) {
         it = matches.erase(it);
       } else {
         ++it;
@@ -475,12 +452,24 @@ namespace bramble {
       }
       
       IntervalNode* tmp = nullptr;
-      for (auto &interval : intervals) {
-        if (interval->tids.count(tid)) {
-          tmp = interval;
-          break;
+      if (strand == '+') {
+        for (auto &interval : intervals) {
+          if (interval->tids.count(tid)) {
+            tmp = interval;
+            break;
+          }
+        }
+      } else { // "-"
+        for (auto it = intervals.rbegin(); it != intervals.rend(); ++it) {
+          auto &interval = *it;
+          if (interval->tids.count(tid)) {
+            tmp = interval;
+            break;
+          }
         }
       }
+      
+      // Shouldn't happen
       if (tmp == nullptr) {
         it_c = candidate_tids.erase(it_c);
       }
@@ -488,9 +477,12 @@ namespace bramble {
       // Check continuity: previous exon for this TID must match prev_last_interval
       // don't allow gaps, it tanks accuracy
       // or allow gaps of like <10
-      auto tid_last_interval = g2t->getPrevNode(tmp, tid, strand);
-      if (!prev_intervals.count(tid) || 
+      IntervalNode* tid_last_interval;
+      if (strand == '+') tid_last_interval = g2t->getPrevNode(tmp, tid, strand);
+      else tid_last_interval = g2t->getNextNode(tmp, tid, strand);
+      if (prev_intervals.count(tid) && 
         tid_last_interval == prev_intervals[tid]) {
+
         ++it_c;
       } else {
         it_c = candidate_tids.erase(it_c);
@@ -649,13 +641,28 @@ namespace bramble {
 
   bool ReadEvaluator::update_matches(std::vector<ExonChainMatch> &matches,
                                       std::set<tid_t> candidate_tids, 
+                                      std::unordered_map<tid_t, IntervalNode *> &first_intervals, 
+                                      char strand, g2tTree* g2t,
                                       uint32_t exon_start, uint32_t exon_end,
                                       bool is_first_exon,
-                                      std::unordered_map<tid_t, uint32_t> &gaps) {
+                                      std::unordered_map<tid_t, uint32_t> &gaps,
+                                      bool used_backwards_overhang) {
     
     auto it = matches.begin();
     while (it != matches.end()) {
       it->total_read_length += (exon_end - exon_start);
+
+      // For reads on negative strand, need to update
+      // match position at each new exon
+      tid_t tid = it->tid;
+      pos_t pos;
+      if (strand == '-' && first_intervals.count(tid)) {
+        pos = get_match_pos(first_intervals[tid], 
+          tid, strand, g2t, exon_start, used_backwards_overhang);
+        it->align.pos = pos;
+      }
+
+      // For short reads, remove tids unsupported by all exons
       if ((STRICT || !LONG_READS) && !is_first_exon) {
         if (candidate_tids.count(it->tid)) {
           ++it;
@@ -673,33 +680,47 @@ namespace bramble {
   void ReadEvaluator::get_prev_intervals(std::vector<IntervalNode *> intervals,
                                         std::set<tid_t> candidate_tids,
                                         std::unordered_map<tid_t, IntervalNode *>
-                                        &prev_intervals) {
+                                        &prev_intervals, char strand) {
     // Update last seen intervals for each candidate tids
     // Previous candidate tids not in this interval set 
     // will simply not be updated
     for (tid_t tid : candidate_tids) {
-      for (int32_t i = intervals.size() - 1; i >= 0; i--) {
-        IntervalNode* interval = intervals[i];
-        if (interval->tids.count(tid)) {
-          prev_intervals[tid] = interval;
-          break;
+      if (strand == '+') {
+        for (int32_t i = intervals.size() - 1; i >= 0; i--) {
+          IntervalNode* interval = intervals[i];
+          if (interval->tids.count(tid)) {
+            prev_intervals[tid] = interval;
+            break;
+          }
+        }
+      } else { // "-"
+        for (int32_t i = 0; i < intervals.size(); i++) {
+          IntervalNode* interval = intervals[i];
+          if (interval->tids.count(tid)) {
+            prev_intervals[tid] = interval;
+            break;
+          }
         }
       }
+      
     }
   }
 
   void ReadEvaluator::get_first_intervals(std::vector<IntervalNode *> intervals,
                                           std::set<tid_t> candidate_tids,
+                                          char strand,
                                           std::unordered_map<tid_t, IntervalNode *>
                                           &first_intervals) {
     for (tid_t tid : candidate_tids) {
-      for (uint32_t i = 0; i < intervals.size(); i++) {
-        IntervalNode* interval = intervals[i];
-        if (interval->tids.count(tid)) {
-          first_intervals[tid] = interval;
-          break;
+        for (uint32_t i = 0; i < intervals.size(); i++) {
+          IntervalNode* interval = intervals[i];
+          if (interval->tids.count(tid)) {
+            first_intervals[tid] = interval;
+            break;
+          }
         }
-      }
+
+      // same for '+' and '-'
     }
   }
 
@@ -770,8 +791,7 @@ namespace bramble {
     uint32_t interval_start;
     uint32_t interval_end;
 
-    bundle_start = bundle->start;
-    bundle_end = bundle->end;
+    //read_name = read->brec->name();
     
     std::vector<ExonChainMatch> matches;
     std::vector<ExonChainMatch> matches_by_strand;
@@ -804,7 +824,6 @@ namespace bramble {
             coverage_augment += (exon_end - exon_start);
             continue;
           }
-          std::string read_name = read->brec->name();
           dropped_reads++;
           unresolved_reads++;
           strand_failed = true;
@@ -815,7 +834,7 @@ namespace bramble {
         std::unordered_map<tid_t, std::shared_ptr<Cigar>> subcigars;
         auto candidate_tids = get_candidate_tids(intervals, matches, subcigars,
           exon_start, exon_end, is_first_exon, is_last_exon, g2t);
-        if (!LONG_READS && candidate_tids.empty()) {
+        if (candidate_tids.empty()) {
           strand_failed = true;
           unresolved_reads++;
           break;
@@ -851,7 +870,7 @@ namespace bramble {
           candidate_tids, exon_start, g2t, strand, gaps);
 
         std::unordered_map<tid_t, IntervalNode *> first_intervals;
-        get_first_intervals(intervals, candidate_tids, first_intervals);
+        get_first_intervals(intervals, candidate_tids, strand, first_intervals);
 
         // Create exon chain matches 
         if ((!LONG_READS && is_first_exon) || (LONG_READS)) {
@@ -864,11 +883,11 @@ namespace bramble {
         build_exon_cigar(matches, subcigars,
           is_first_exon, is_last_exon, exon_start, 
           exon_end, interval_start, interval_end, gaps, g2t, strand);
-
-        // Update exon chain matches
-        
+ 
         strand_failed = !update_matches(matches, 
-          candidate_tids, exon_start, exon_end, is_first_exon, gaps);
+          candidate_tids, first_intervals, strand, g2t, 
+          exon_start, exon_end, is_first_exon, gaps, 
+          used_backwards_overhang);
         if (strand_failed) {
           unresolved_reads++;
           break;
@@ -882,11 +901,16 @@ namespace bramble {
         }
 
         if (!is_last_exon) get_prev_intervals(intervals, 
-          candidate_tids, prev_intervals);
+          candidate_tids, prev_intervals, strand);
 
         // After the last exon, filter matches by similarity
         if (config.filter_similarity && is_last_exon) 
           filter_by_similarity(matches, config.similarity_threshold);
+
+        if (is_last_exon && matches.empty()) {
+          strand_failed = true;
+          break;
+        }
 
         // Calculate at end for new matches in next exon
         cumulative_length += (exon_end - exon_start);
@@ -959,8 +983,8 @@ namespace bramble {
   ReadEvaluationResult 
   ShortReadEvaluator::evaluate(BundleData *bundle, read_id_t id, g2tTree *g2t) {
 
-    boundary_tolerance = 30; 
-    similarity_threshold = 0.95;
+    boundary_tolerance = 50; 
+    similarity_threshold = 0.50;
     ReadEvaluationConfig config = {
       boundary_tolerance,             // boundary tolerance
       true,                           // filter similarity
@@ -978,13 +1002,13 @@ namespace bramble {
   LongReadEvaluator::evaluate(BundleData *bundle, read_id_t id, g2tTree *g2t) {
 
     boundary_tolerance = 50;
-    similarity_threshold = 0.60;
+    similarity_threshold = 0.50;
     ReadEvaluationConfig config = {
       boundary_tolerance,             // boundary tolerance
       true,                           // filter similarity
       similarity_threshold,           // similarity threshold
       true,                           // ignore_small_exons
-      25,                             // small exon size
+      SMALL_EXON,                     // small exon size
       {false, {}}                     // default result
     };   
 

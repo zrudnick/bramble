@@ -67,7 +67,6 @@ namespace bramble {
    */
   std::unique_ptr<g2tTree> make_g2t_tree(BundleData *bundle, BamIO *io) {
     GPVec<GffObj> guides = bundle->guides;
-    //GMessage("hi\n");
 
     if (guides.Count() == 0)
       return nullptr;
@@ -80,13 +79,13 @@ namespace bramble {
       char strand = guide->strand;
       const char *tid_string = guide->getID(); // we don't strictly need this
 
-      #ifndef NOTHREADS
+#ifndef NOTHREADS
       bam_io_mutex.lock();
-      #endif
+#endif
       tid_t tid = g2t->insertTidString(tid_string, io);
-      #ifndef NOTHREADS
+#ifndef NOTHREADS
       bam_io_mutex.unlock();
-      #endif
+#endif
 
       for (int j = 0; j < guide->exons.Count(); j++) {
         uint g_start, g_end;
@@ -105,7 +104,13 @@ namespace bramble {
     g2t->buildAllTidChains();
     g2t->precomputeAllCumulativeLengths();
 
-    //print_tree(g2t.get());
+#ifndef NOTHREADS
+    bam_io_mutex.lock();
+#endif
+    print_tree(g2t.get());
+#ifndef NOTHREADS
+    bam_io_mutex.unlock();
+#endif
     return g2t;
   }
 
@@ -153,8 +158,6 @@ namespace bramble {
         bam1_t* old_b = read->brec->get_b();
         bam1_t* b; // new copy
 
-        //old_b->core.flag |= BAM_FSECONDARY; // default secondary
-
         bool new_read = seen.insert(read->index).second;
         if (new_read && !LONG_READS) {
           uint32_t* cigar = bam_get_cigar(old_b);
@@ -169,9 +172,6 @@ namespace bramble {
           set_nm_tag(old_b, nm);
           remove_extra_tags(old_b);
 
-          //if (read->is_reverse) old_b->core.flag |= BAM_FREVERSE;
-          //old_b->core.flag &= ~BAM_FSECONDARY;  // mark primary if first time
-
         // we have different cigars for every match
         // so just modify new b every time
         } else if (new_read && LONG_READS) { 
@@ -179,9 +179,6 @@ namespace bramble {
           set_nh_tag(old_b, read->nh);
           set_xs_tag(old_b, strand);
           remove_extra_tags(old_b);
-
-          //if (read->is_reverse) old_b->core.flag |= BAM_FREVERSE;
-          //old_b->core.flag &= ~BAM_FSECONDARY;  // mark primary if first time
         }
 
         if (!LONG_READS) {
@@ -195,25 +192,24 @@ namespace bramble {
           uint32_t n_cigar = b->core.n_cigar;
           int32_t nm = 0;
           update_cigar(b, cigar, n_cigar, cigar_mem, *ideal_cigar, nm);
-          set_nm_tag(old_b, nm);
+          set_nm_tag(b, nm);
         }
            
         // Set coordinates
         if (is_first) {
           b->core.tid = (int32_t)this_pair->r_tid;
-          //GMessage("r_align.pos = %d\n", this_pair->r_align.pos);
           b->core.pos = (int32_t)this_pair->r_align.pos;
-          // if (this_pair->r_align.primary_alignment) b->core.flag &= ~BAM_FSECONDARY; // mark primary
-          // else b->core.flag |= BAM_FSECONDARY; // default secondary
-          b->core.flag &= ~BAM_FSECONDARY; // mark primary
+          if (this_pair->r_align.primary_alignment) b->core.flag &= ~BAM_FSECONDARY; // mark primary
+          else b->core.flag |= BAM_FSECONDARY; // default secondary
+          //b->core.flag &= ~BAM_FSECONDARY; // mark primary
           set_as_tag(b, this_pair->r_align.similarity_score);
           set_hi_tag(b, this_pair->r_align.hit_index);
         } else {
           b->core.tid = (int32_t)this_pair->m_tid;
           b->core.pos = (int32_t)this_pair->m_align.pos;
-          // if (this_pair->m_align.primary_alignment) b->core.flag &= ~BAM_FSECONDARY; // mark primary
-          // else b->core.flag |= BAM_FSECONDARY; // default secondary
-          b->core.flag &= ~BAM_FSECONDARY; // mark primary
+          if (this_pair->m_align.primary_alignment) b->core.flag &= ~BAM_FSECONDARY; // mark primary
+          else b->core.flag |= BAM_FSECONDARY; // default secondary
+          //b->core.flag &= ~BAM_FSECONDARY; // mark primary
           set_as_tag(b, this_pair->m_align.similarity_score);
           set_hi_tag(b, this_pair->m_align.hit_index);
         }
