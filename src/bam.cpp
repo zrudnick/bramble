@@ -498,4 +498,47 @@ namespace bramble {
     if (rl) bam_aux_del(b, rl);
   }
 
+  int reverse_complement_bam(bam1_t *b) {
+    // validate record
+    if (!b) return -1;
+    if (b->core.l_qseq <= 0) return 0;
+
+    int len = b->core.l_qseq;
+
+    uint8_t *seq = bam_get_seq(b);
+    uint8_t *qual = bam_get_qual(b);
+
+    // Allocate buffer for the reversed complemented sequence
+    // Each byte holds two bases
+    std::vector<uint8_t> tmp((len + 1) / 2);
+    for (int i = 0; i < len; ++i) {
+        uint8_t nt = bam_seqi(seq, len - 1 - i);
+        uint8_t nt_complement;
+        switch (nt) {
+            case 1: nt_complement = 8; break; // A -> T
+            case 2: nt_complement = 4; break; // C -> G
+            case 4: nt_complement = 2; break; // G -> C
+            case 8: nt_complement = 1; break; // T -> A
+            default: nt_complement = 15; break; // N or others -> N
+        }
+        bam_set_seqi(tmp, i, nt_complement);
+    }
+
+    memcpy(seq, tmp.data(), (len + 1) / 2);
+
+    if (qual && qual[0] != 0xff) { // qualities exist - need to be reversed as well
+        for (int i = 0; i < len / 2; ++i) {
+            uint8_t qtmp = qual[i];
+            qual[i] = qual[len - 1 - i];
+            qual[len - 1 - i] = qtmp;
+        }
+    }
+
+    // flip the reverse flag
+    b->core.flag ^= BAM_FREVERSE;
+
+    // TODO: need to handle MD (and potentially other tags) here, since invalid after reversal
+    return 0;
+  }
+
 } // namespace bramble

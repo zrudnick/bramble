@@ -71,4 +71,6 @@ namespace bramble {
 
   void set_as_tag(bam1_t* b, double similarity_score);
 
+  int reverse_complement_bam(bam1_t* b);
+
 }

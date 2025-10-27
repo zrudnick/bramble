@@ -214,7 +214,13 @@ namespace bramble {
           set_hi_tag(b, this_pair->m_align.hit_index);
         }
 
-        b->core.flag &= ~BAM_FREVERSE;  // should never be reverse
+        // if read is being reversed - reverse-complement the sequence and quality strings
+        if (b->core.flag & BAM_FREVERSE) {
+          int rc_res = reverse_complement_bam(b);
+          if (rc_res != 0) {
+            GError("Error: reverse_complement_bam failed with code %d\n", rc_res);
+          }
+        }
 
         if (this_pair->is_paired)
           set_mate_info(b, this_pair, is_first);
