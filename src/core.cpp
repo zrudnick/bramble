@@ -104,13 +104,13 @@ namespace bramble {
     g2t->buildAllTidChains();
     g2t->precomputeAllCumulativeLengths();
 
-#ifndef NOTHREADS
-    bam_io_mutex.lock();
-#endif
-    print_tree(g2t.get());
-#ifndef NOTHREADS
-    bam_io_mutex.unlock();
-#endif
+// #ifndef NOTHREADS
+//     bam_io_mutex.lock();
+// #endif
+//     print_tree(g2t.get());
+// #ifndef NOTHREADS
+//     bam_io_mutex.unlock();
+// #endif
     return g2t;
   }
 
@@ -195,13 +195,13 @@ namespace bramble {
           set_nm_tag(b, nm);
         }
            
-        // Set coordinates
+        // Set coordinates and align-secific information
         if (is_first) {
           b->core.tid = (int32_t)this_pair->r_tid;
           b->core.pos = (int32_t)this_pair->r_align.pos;
           if (this_pair->r_align.primary_alignment) b->core.flag &= ~BAM_FSECONDARY; // mark primary
           else b->core.flag |= BAM_FSECONDARY; // default secondary
-          //b->core.flag &= ~BAM_FSECONDARY; // mark primary
+          
           set_as_tag(b, this_pair->r_align.similarity_score);
           set_hi_tag(b, this_pair->r_align.hit_index);
         } else {
@@ -209,13 +209,14 @@ namespace bramble {
           b->core.pos = (int32_t)this_pair->m_align.pos;
           if (this_pair->m_align.primary_alignment) b->core.flag &= ~BAM_FSECONDARY; // mark primary
           else b->core.flag |= BAM_FSECONDARY; // default secondary
-          //b->core.flag &= ~BAM_FSECONDARY; // mark primary
+          
           set_as_tag(b, this_pair->m_align.similarity_score);
           set_hi_tag(b, this_pair->m_align.hit_index);
         }
 
-        // if read is being reversed - reverse-complement the sequence and quality strings
+        // If read is being reversed - reverse-complement the sequence and quality strings
         if (b->core.flag & BAM_FREVERSE) {
+          // update to allow * for sequence
           int rc_res = reverse_complement_bam(b);
           if (rc_res != 0) {
             GError("Error: reverse_complement_bam failed with code %d\n", rc_res);

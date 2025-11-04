@@ -523,10 +523,10 @@ namespace bramble {
         hashread, brec, splice_strand, nh, hi);
     }
 
-    GMessage("#total input reads is:    %d\n", all_reads);
-    GMessage("#unmapped reads is: %d\n", unmapped_reads);
-    GMessage("#dropped reads is: %d\n", dropped_reads);
-    GMessage("#unresolved reads is: %d\n\n", unresolved_reads);
+    // GMessage("#total input reads is:    %d\n", all_reads);
+    // GMessage("#unmapped reads is: %d\n", unmapped_reads);
+    // GMessage("#dropped reads is: %d\n", dropped_reads);
+    // GMessage("#unresolved reads is: %d\n\n", unresolved_reads);
   }
 
 }

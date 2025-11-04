@@ -140,7 +140,11 @@ namespace bramble {
   };
 
   struct ReadEvaluationConfig {
+    uint32_t boundary_tolerance;    // boundary tolerance
     uint32_t max_clip_size;         // max soft clip size
+    uint32_t max_ins;               // max insertion to intervals
+      // for when there exist no guides to explain a portion of an exon
+    uint32_t max_gap;               // max gap in reference to intervals
     bool filter_similarity;         // should we filter using similarity score?
     double similarity_threshold;    // similarity threshold
     bool ignore_small_exons;        // should we ignore small exons?
@@ -200,24 +204,19 @@ namespace bramble {
     
     std::vector<char> get_strands_to_check(CReadAln* read);
 
-    uint32_t get_boundary_tolerance(uint32_t read_length);
-
     std::set<tid_t> get_candidate_tids(std::vector<IntervalNode *> intervals,
                                       std::vector<ExonChainMatch> &matches,
                                       std::unordered_map<tid_t, std::shared_ptr<Cigar>> &subcigars,
                                       uint32_t exon_start, uint32_t exon_end,
                                       bool is_first_exon, bool is_last_exon, g2tTree *g2t);
 
-    void add_operation(std::vector<ExonChainMatch> &matches,
-                      uint32_t length, uint8_t op, g2tTree *g2t, char strand);
+    void add_operation_for_all(std::vector<ExonChainMatch> &matches,
+                              uint32_t length, uint8_t op, g2tTree *g2t, 
+                              char strand);
 
     void hide_small_exon(std::vector<ExonChainMatch> &matches, 
                         uint32_t exon_start, uint32_t exon_end,
                         bool is_first_exon, bool is_last_exon, g2tTree *g2t, char strand);
-
-    bool check_first_exon(uint32_t exon_start, uint32_t interval_start,
-                          uint32_t exon_end, uint32_t interval_end,
-                          bool is_last_exon, uint32_t max_clip_size);
 
     void filter_tids(std::vector<IntervalNode *> intervals,
                     std::unordered_map<tid_t, IntervalNode *> prev_intervals,
@@ -225,12 +224,19 @@ namespace bramble {
                     uint32_t exon_start, g2tTree* g2t, 
                     char strand, std::unordered_map<tid_t, uint32_t> &gaps);
 
+    bool check_first_exon(uint32_t exon_start, uint32_t interval_start,
+                          uint32_t exon_end, uint32_t interval_end,
+                          bool is_last_exon, uint32_t max_clip_size,
+                          uint32_t tolerance);
+
     bool check_middle_exon(uint32_t exon_start, uint32_t interval_start,
-                          uint32_t exon_end, uint32_t interval_end);
+                          uint32_t exon_end, uint32_t interval_end,
+                          uint32_t tolerance);
 
     bool check_last_exon(uint32_t exon_start, uint32_t interval_start,
                         uint32_t exon_end, uint32_t interval_end,
-                        uint32_t max_clip_size);
+                        uint32_t max_clip_size,
+                        uint32_t tolerance);
 
     void build_exon_cigar(std::vector<ExonChainMatch> &matches,
                           std::unordered_map<tid_t, std::shared_ptr<Cigar>> &subcigars,

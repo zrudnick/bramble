@@ -33,7 +33,6 @@ namespace bramble {
     ~IntervalTree();
 
   private:
-    // IntervalNode *root;
     std::set<tid_t> all_tids;
     std::unordered_map<tid_t, uint32_t> transcript_lengths;
 

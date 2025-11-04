@@ -244,11 +244,7 @@ namespace bramble {
       uint32_t overlap_start = std::max(node->start, start);
       uint32_t overlap_end = std::min(node->end, end);
 
-      // if (overlap_start < overlap_end) {
-      //   node->tids.insert(tid);
-      //   covered_ranges.emplace_back(overlap_start, overlap_end);
-      // }
-      if (node->start >= start && node->end <= end) { // ???
+      if (node->start >= start && node->end <= end) {
         node->tids.insert(tid);
         covered_ranges.emplace_back(node->start, node->end);
       }

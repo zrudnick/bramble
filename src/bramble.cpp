@@ -47,14 +47,15 @@ Options:\n\
  --help     : print this usage message and exit\n\
  --version  : print just the version at stdout and exit\n\
  --verbose  : verbose (log bundle processing details)\n\
- --long     : BAM file contains alignments from long reads\n\
- --fr       : assume stranded library fw-firststrand\n\
- --rf       : assume stranded library fw-secondstrand\n\
+ --long     : alignments are from long reads?\n\
  -G <file>  : reference annotation to use for guiding the BAM conversion (GTF/GFF)\n\
  -o <file>  : output path/file name for the projected alignments (default: stdout)\n\
  -p <int>   : number of threads (CPUs) to use (default: 1)\n\
  -S <file>  : genome sequence file (FASTA format)\n\
 "
+
+// --fr       : assume stranded library fw-firststrand\n\
+// --rf       : assume stranded library fw-secondstrand\n\
 
 bool VERBOSE = false;     // Verbose, --verbose
 bool LONG_READS = false;  // BAM file contains long reads, --long
@@ -113,7 +114,7 @@ int main(int argc, char *argv[]) {
   //     quill::Frontend::create_or_get_sink<quill::ConsoleSink>("sink_id_1"));
 
   CLI::App app{
-      "A program to project spliced genomic alignments onto the transcriptome",
+      "Project spliced genomic alignments into transcriptomic space",
       "Bramble"};
 
   std::string gff;
@@ -121,10 +122,10 @@ int main(int argc, char *argv[]) {
   std::string input_bam;
   auto input_opt =
       app.add_option("in.bam", input_bam, "input bam file")->required();
-  app.add_flag("--fr", FR_STRAND, "assume stranded library fw-firststrand");
-  app.add_flag("--rf", RF_STRAND, "assume stranded library fw-secondstrand");
+  // app.add_flag("--fr", FR_STRAND, "assume stranded library fw-firststrand");
+  // app.add_flag("--rf", RF_STRAND, "assume stranded library fw-secondstrand");
   app.add_flag("--verbose", VERBOSE, "verbose (log processing details)");
-  app.add_flag("--long", LONG_READS, "verbose (log processing details)");
+  app.add_flag("--long", LONG_READS, "alignments are from long reads?");
   app.add_option("-G", gff,
                  "reference annotation to use for guiding the assembly process "
                  "(GTF/GFF)")
@@ -257,8 +258,6 @@ int main(int argc, char *argv[]) {
 #endif
 
   GThread *threads = new GThread[n_threads]; // threads for processing bundles
-  // GPVec<BundleData> *bundle_queue =
-  //     new GPVec<BundleData>(false);          // queue for holding loaded bundles
   GPVec<BundleData> bundle_queue(false);
   BundleData *bundles =
       new BundleData[n_threads + 1];         // redef with more bundles
@@ -300,7 +299,6 @@ int main(int argc, char *argv[]) {
 
   io->stop(); // close BAM reader & writer
   delete io;
-  //delete worker_args;
   delete gfasta;
 
   // Delete gffreader data

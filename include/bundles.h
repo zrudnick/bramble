@@ -51,22 +51,22 @@ namespace bramble {
 
   // Bundle status
   enum BundleStatus {
-    BUNDLE_STATUS_CLEAR = 0, // Available for loading/prepping
-    BUNDLE_STATUS_LOADING = 1, // Being prepared by the main thread (there can be only one)
-    BUNDLE_STATUS_READY = 2 // Ready to be processed, or being processed
+    BUNDLE_STATUS_CLEAR = 0,      // Available for loading/prepping
+    BUNDLE_STATUS_LOADING = 1,    // Being prepared by the main thread (there can be only one)
+    BUNDLE_STATUS_READY = 2       // Ready to be processed, or being processed
   };
 
   // Read Alignment
   struct CReadAln : public GSeg {
-    char strand; // 1, 0 (unknown), -1 (reverse)
+    char strand;                  // 1, 0 (unknown), -1 (reverse)
     short int nh;
     uint32_t len;
-    float read_count; // keeps count for all reads (including paired and unpaired)
-    bool unitig : 1;  // set if read come from an unitig
-    bool longread : 1;      // set if read comes from long read data
-    GVec<float> pair_count; // keeps count for all paired reads
-    GVec<int> pair_idx; // keeps indeces for all pairs in assembly mode, or all
-                        // reads that were collapsed in merge mode
+    float read_count;             // keeps count for all reads (including paired and unpaired)
+    bool unitig : 1;              // set if read come from an unitig
+    bool longread : 1;            // set if read comes from long read data
+    GVec<float> pair_count;       // keeps count for all paired reads
+    GVec<int> pair_idx;           // keeps indices for all pairs in assembly mode, or all
+                                    // reads that were collapsed in merge mode
 
     // For mate position calculations
     uint32_t mate_genomic_pos;

@@ -19,7 +19,6 @@
 #include "GThreads.h"
 #endif
 
-int seen_s;
 extern double similarity_threshold;
 extern bool LONG_READS;
 
@@ -47,8 +46,6 @@ namespace bramble {
         real_expanded.push_back(op_char);
       }
       if (k == 0 && op_char == 'H') req += 1;
-      if (k > req && op_char == 'S') seen_s += len;
-      if (k > req && op_char == 'H') seen_s += len;
     }
 
     // ------ Ideal cigar
@@ -172,7 +169,6 @@ namespace bramble {
       }
       
       if (curr == 'S') {
-        size_t s_start = i;
         while (i < size && processed[i] == 'S') i++;
         
         if (i < size && processed[i] == 'I') {
@@ -246,7 +242,6 @@ namespace bramble {
     uint32_t real_front_hard_clip = 0;
     uint32_t real_front_soft_clip = 0;
     uint32_t cigar_idx = 0;
-    seen_s = 0;
 
     // Check for leading hard clip
     if (n_real_cigar > 0 && 
@@ -281,42 +276,6 @@ namespace bramble {
     // Compress back to CIGAR
     uint32_t* result = compress_cigar(merged, new_n_cigar, mem, nm);
 
-    bool ideal_has_s = false;
-    for (const auto& pair : ideal_cigar.cigar) {
-      uint32_t len = pair.first;
-      uint32_t op = pair.second;
-      if (op == BAM_CSOFT_CLIP && len > 100) ideal_has_s = true;
-    }
-
-    bool wrong_len = (real_expanded.size() != ideal_expanded.size() + seen_s);
-
-    // Print debug info
-    // if (ideal_has_s) {
-      // fprintf(stderr, "REAL CIGAR: ");
-      // for (uint32_t k = 0; k < n_real_cigar; k++) {
-      //     uint32_t op = real_cigar[k] & BAM_CIGAR_MASK;
-      //     uint32_t len = real_cigar[k] >> BAM_CIGAR_SHIFT;
-      //     fprintf(stderr, "%u%c", len, "MIDNSHP=XB"[op]);
-      // }
-      // fprintf(stderr, "\nIDEAL CIGAR: ");
-      // for (const auto& pair : ideal_cigar.cigar) {
-      //     fprintf(stderr, "%u%c ", pair.first, "MIDNSHP=XB"[pair.second]);
-      // }
-      // fprintf(stderr, "\nREAL EXPANDED:  ");
-      // for (char c : real_expanded) fprintf(stderr, "%c", c);
-      // fprintf(stderr, "\nIDEAL EXPANDED: ");
-      // for (char c : ideal_expanded) fprintf(stderr, "%c", c);
-      // fprintf(stderr, "\nMERGED:         ");
-      // for (char c : merged) fprintf(stderr, "%c", c);
-      // fprintf(stderr, "\nNEW CIGAR: ");
-      // for (uint32_t k = 0; k < *new_n_cigar; k++) {
-      //     uint32_t op = result[k] & BAM_CIGAR_MASK;
-      //     uint32_t len = result[k] >> BAM_CIGAR_SHIFT;
-      //     fprintf(stderr, "%u%c", len, "MIDNSHP=XB"[op]);
-      // }
-      // fprintf(stderr, "\n--------------------\n");
-    // }
-    
     return result;
   }
 
@@ -422,7 +381,7 @@ namespace bramble {
       b->core.flag |= BAM_FPROPER_PAIR;
       
       // Calculate insert size for same transcript
-      // todo: replace read_size with correct measure
+      // todo: replace read_size with better measure?
       int32_t isize = 0;
       if (first_read) {
         isize = ((b->core.mpos + this_pair->read2->read_size) - b->core.pos);
@@ -470,7 +429,10 @@ namespace bramble {
   void set_as_tag(bam1_t* b, double similarity_score) {
     uint8_t* as = bam_aux_get(b, "AS");
     if (as) bam_aux_del(b, as);
-    double score = std::pow(1.0+(similarity_score - similarity_threshold), 3.0)*100.0;
+
+    double score;
+    if (!LONG_READS) score = std::pow(1.0+(similarity_score - similarity_threshold), 3.0)*100.0;
+    else score = similarity_score*1000.0;
     int32_t new_as = static_cast<int32_t>(score);
     bam_aux_append(b, "AS", 'i', sizeof(int32_t), (uint8_t*)&new_as);
   }
