@@ -61,10 +61,10 @@ bramble <in.bam ...> [-G <guide_gff>] [-o <out.bam>] [-p <cpus>] [options]
 ```
 <in.bam>: One or more input BAM files with genomic alignments
 -G <file>: Reference annotation (GTF/GFF) to guide coordinate conversion
+-o <file>: Output BAM file path
 ```
 *Options:*
 ```
--o <file>: Output BAM file path (default: stdout)
 -p <int>: Number of threads to use (default: 1)
 --long: Optimize for long-read alignments
 --verbose: Print detailed processing information
