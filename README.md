@@ -5,7 +5,7 @@ Bramble converts genomic BAM alignments to transcriptomic coordinates, enabling 
 
 Traditional RNA-seq quantification involves a fundamental trade-off: lightweight pseudoalignment and alignment-based methods may efficiently estimate transcript abundance, but they are limited by dependence on existing annotations. They miss novel isoforms and splice junctions, divergent sequences (SNPs, mutations, strain variants), unannotated transcripts, and transcriptional noise. Genome-based methods capture all of these features through spliced alignment, but quantification tools expect transcriptomic coordinates, creating a compatibility barrier.
 
-Bramble bridges this gap by projecting spliced genomic alignments into transcriptomic space, giving you *the best of both worlds*: discover novel isoforms, variants, and unannotated features through genome alignment, and also run standard quantification tools that expect transcriptomic coordinates. Some benefits of using Bramble include:
+Bramble bridges this gap by projecting spliced genomic alignments into transcriptomic space, giving you the best of both worlds: discover novel isoforms, variants, and unannotated features through genome alignment, and also run standard quantification tools that expect transcriptomic coordinates. Some benefits of using Bramble include:
 
 *Improved quantification accuracy:* 
 - More accurate downstream expression estimates compared to direct alignment-based transcriptome quantification
@@ -79,3 +79,4 @@ For issues or questions, please open an issue!
 You may also contact us for questions or suggestions at zrudnic1@jh.edu.
 
 # License
+Bramble is free, open source software released under an [MIT License](https://opensource.org/license/MIT).
