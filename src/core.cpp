@@ -223,8 +223,7 @@ namespace bramble {
           }
         }
 
-        if (this_pair->is_paired)
-          set_mate_info(b, this_pair, is_first);
+        set_mate_info(b, this_pair, is_first); // must be called for both paired and non-paired instances
 
         to_write.push_back(b);
 
@@ -296,7 +295,7 @@ namespace bramble {
         n, g2t.get(), evaluator.get());
       int n_mates = reads[n]->pair_idx.Count();
 
-       // Unpaired reads
+      // Unpaired reads
       if (n_mates == 0) {
         process_mate_pair(this_read, nullptr, emit_pair);
         delete this_read;

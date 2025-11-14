@@ -72,6 +72,10 @@ namespace bramble {
       return writer->get_tid(transcript_id);
     }
 
+    bam_hdr_t* get_header() {
+      return reader->header();
+    }
+
     void stop() {
       if (current_record != nullptr) {
         delete current_record;

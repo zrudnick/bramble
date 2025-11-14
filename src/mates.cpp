@@ -40,12 +40,13 @@ namespace bramble {
     auto add_pair = [&] (ReadInfo* this_read, ReadInfo* mate_read,
                         tid_t r_tid, tid_t m_tid, 
                         AlignInfo r_align, AlignInfo m_align,
-                        bool is_paired, bool is_last) {
+                        bool is_paired, bool same_transcript, bool is_last) {
       
       // Add this read pair + transcript to bam_info
       auto this_pair = new BamInfo();
       this_pair->valid_pair = true;
       this_pair->is_paired = is_paired;
+      this_pair->same_transcript = same_transcript;
       
       this_pair->read1 = this_read->read;
       this_pair->r_tid = r_tid;
@@ -72,10 +73,10 @@ namespace bramble {
 
         if (!is_last)
           add_pair(this_read, nullptr, tid, 0, align, {}, 
-            false, false); // paired = false, last = false
+            false, false, false); // paired = false, same_transcript = false, last = false
         else
           add_pair(this_read, nullptr, tid, 0, align, {}, 
-            false, true); // paired = false, last = true
+            false, false, true); // paired = false, same_transcript = false, last = true
       }
 
       return;
@@ -86,6 +87,8 @@ namespace bramble {
     if (!mate_read) return;
 
     if (mate_case == 1) {
+
+      // mates map to the same transcript
       for (auto it = final_transcripts.begin(); it != final_transcripts.end(); ++it) {
         const tid_t &tid = *it;
         auto r_align = read_alignments.find(tid)->second;
@@ -94,10 +97,10 @@ namespace bramble {
         bool is_last = (std::next(it) == final_transcripts.end());
         if (!is_last)
           add_pair(this_read, mate_read, tid, tid, r_align, m_align, 
-            true, false); // paired = true, last = false
+            true, true, false); // paired = true, same_transcript = true, last = false
         else 
           add_pair(this_read, mate_read, tid, tid, r_align, m_align, 
-            true, true); // paired = true, last = true
+            true, true, true); // paired = true, same_transcript = true, last = true
       }
 
     } else if (mate_case == 2) {
@@ -110,7 +113,7 @@ namespace bramble {
         auto m_align = mate_alignments.find(m_tid)->second;
 
         add_pair(this_read, mate_read, r_tid, m_tid, r_align, m_align, 
-          true, true); // paired = true, last = true
+          true, false, true); // paired = true, same_transcript = false, last = true
       }
 
     }

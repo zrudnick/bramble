@@ -26,6 +26,7 @@
 #include "evaluate.h"
 
 extern bool VERBOSE;
+extern bool DEBUG;
 
 extern uint8_t n_threads;    // Threads, -p
 
@@ -105,7 +106,7 @@ namespace bramble {
   // Process current bundle
   void process_bundle(BundleData *bundle, BamIO *io) {
 
-    if (VERBOSE) {
+    if (DEBUG) {
     #ifndef NOTHREADS
       GLockGuard<GFastMutex> lock(log_mutex);
     #endif
@@ -117,7 +118,7 @@ namespace bramble {
 
     convert_reads(bundle, io);
 
-    if (VERBOSE) {
+    if (DEBUG) {
 #ifndef NOTHREADS
       GLockGuard<GFastMutex> lock(log_mutex);
 #endif

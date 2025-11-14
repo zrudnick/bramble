@@ -58,12 +58,13 @@ Options:\n\
 // --rf       : assume stranded library fw-secondstrand\n\
 
 bool VERBOSE = false;     // Verbose, --verbose
+bool DEBUG = false;
 bool LONG_READS = false;  // BAM file contains long reads, --long
 bool FR_STRAND = true;   // Read 1 is on forward strand, --fr
 bool RF_STRAND = false;   // Read 1 is on reverse strand, --fr
 bool USE_FASTA = false;   // Use FASTA for reducing soft clips
 bool SOFT_CLIPS = true;   // Add soft clips
-bool STRICT = false;      // Use for strict boundary adherence
+bool STRICT = true;      // Use for strict boundary adherence
 
 FILE *f_out = NULL;       // Default: stdout
 uint8_t n_threads = 1;    // Threads, -p
@@ -155,8 +156,13 @@ int main(int argc, char *argv[]) {
     GError("Error creating file: %s\n", header_path.chars());
   fprintf(header_file, "@HD\tVN:1.0\tSO:coordinate\n");
 
-  if (VERBOSE)
-    GMessage(" Loading reference annotation (guides)..\n");
+  if (VERBOSE || DEBUG) {
+    // print logo
+    GMessage("   __                  __   __   \n  / /  _______ ___ _  / /  / /__ \n / _ \\/ __/ _ `/  ' \\/ _ \\/ / -_)\n/_.__/_/  \\_,_/_/_/_/_.__/_/\\__/ \n\n");
+    GMessage("## Running Bramble version %s ##\n\n", VERSION);
+    GMessage("-- Loading reference annotation...\n");
+  }
+    
 
   // Open GFF/GTF file
   FILE *f = fopen(guide_gff.chars(), "r");
@@ -167,7 +173,7 @@ int main(int argc, char *argv[]) {
   // GffReader: transcripts only, sort by location
   GffReader *gffreader = new GffReader(f, true, true); // loading only recognizable transcript features
   gffreader->setRefAlphaSorted(); // alphabetical sorting of RefSeq IDs
-  gffreader->showWarnings(VERBOSE);
+  gffreader->showWarnings(DEBUG);
 
   // keep attributes, merge close exons, no exon attributes
   // merge_close_exons must be false for correct transcriptome header
@@ -196,7 +202,7 @@ int main(int argc, char *argv[]) {
 
     // Sanity check: make sure there are no exonless "genes" or other
     if (guide->exons.Count() == 0) {
-      if (VERBOSE)
+      if (DEBUG)
         // LOG_WARNING(logger, "Warning: exonless GFF {} feature with ID {} found, added "
         //          "implicit exon {}-{}.\n",
         //          guide->getFeatureName(), guide->getID(), guide->start,
@@ -228,12 +234,16 @@ int main(int argc, char *argv[]) {
   fprintf(header_file, "@CO\tGenerated from GTF: %s\n", guide_gff.chars());
   fclose(header_file);
 
-  if (VERBOSE) {
-    GMessage("Transcriptome header created\n");
-    GMessage(" %d reference transcripts loaded\n", gffreader->gflst.Count());
+  if (VERBOSE || DEBUG) {
+    GMessage("Reference annotation loaded! We found %d unique transcripts\n\n", gffreader->gflst.Count());
   
-    if (LONG_READS) GMessage("Reads are being evaluated as long reads");
-    else GMessage("Reads are being evaluated as short reads");
+    if (LONG_READS) {
+      GMessage("-- Using LONG READS mode\n");
+    }
+    else {
+      GMessage("-- Using SHORT READS mode\n");
+      GMessage("Have long-read input data? Try running with the --long flag\n"); 
+    }
   }
   
   BamIO *io = new BamIO(bam_file_in, bam_file_out, header_path);
@@ -248,7 +258,7 @@ int main(int argc, char *argv[]) {
   size_t tstack_size = GThread::defaultStackSize();
   if (tstack_size < DEF_TSTACK_SIZE)
     def_stack_size = DEF_TSTACK_SIZE;
-  if (VERBOSE) {
+  if (DEBUG) {
     if (tstack_size < def_stack_size) {
       GMessage("Default stack size for threads: %d (increased to %d)\n",
                tstack_size, def_stack_size);
@@ -290,7 +300,7 @@ int main(int argc, char *argv[]) {
     for (int t = 0; t < n_threads; t++) {
       threads[t].join();
     }
-    if (VERBOSE) {
+    if (DEBUG) {
       // LOG_INFO(logger, " All threads finished.\n");
     }
     delete[] threads;

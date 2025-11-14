@@ -355,11 +355,11 @@ namespace bramble {
     int32_t tid;
     int32_t pos;
     if (first_read) {
-      tid = (int32_t)this_pair->r_tid;
-      pos = (int32_t)this_pair->r_align.pos;
-    } else {
       tid = (int32_t)this_pair->m_tid;
       pos = (int32_t)this_pair->m_align.pos;
+    } else {
+      tid = (int32_t)this_pair->r_tid;
+      pos = (int32_t)this_pair->r_align.pos;
     }
     
     // Set basic paired flags
@@ -381,15 +381,24 @@ namespace bramble {
       b->core.flag |= BAM_FPROPER_PAIR;
       
       // Calculate insert size for same transcript
-      // todo: replace read_size with better measure?
       int32_t isize = 0;
       if (first_read) {
-        isize = ((b->core.mpos + this_pair->read2->read_size) - b->core.pos);
+        if (b->core.mpos > b->core.pos) {
+          isize = ((b->core.mpos + this_pair->read2->read_size) - b->core.pos);
+        } else {
+          isize = -((b->core.pos + this_pair->read1->read_size) - b->core.mpos);
+        }
+        
       } else {
-        isize = -((b->core.pos + this_pair->read2->read_size) - b->core.mpos); // negative for second read in pair
+        if (b->core.pos > b->core.mpos) {
+          isize = -((b->core.pos + this_pair->read1->read_size) - b->core.mpos);
+        } else {
+          isize = ((b->core.mpos + this_pair->read2->read_size) - b->core.pos);
+        }
+        
       }
       b->core.isize = isize;
-        
+              
     // Mates map to different transcripts
     } else {
       b->core.mtid = tid;
@@ -397,7 +406,6 @@ namespace bramble {
       b->core.isize = 0;
       b->core.flag |= BAM_FPROPER_PAIR;
     }
-    
   }
 
   // Add new NH tag (after removing current one)
