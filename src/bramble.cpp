@@ -64,7 +64,7 @@ bool FR_STRAND = true;   // Read 1 is on forward strand, --fr
 bool RF_STRAND = false;   // Read 1 is on reverse strand, --fr
 bool USE_FASTA = false;   // Use FASTA for reducing soft clips
 bool SOFT_CLIPS = true;   // Add soft clips
-bool STRICT = true;      // Use for strict boundary adherence
+bool STRICT = false;      // Use for strict boundary adherence
 
 FILE *f_out = NULL;       // Default: stdout
 uint8_t n_threads = 1;    // Threads, -p
