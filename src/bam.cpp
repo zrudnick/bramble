@@ -504,6 +504,15 @@ namespace bramble {
         }
     }
 
+    // reverse cigar operations
+    uint32_t n_cigar = b->core.n_cigar;
+    uint32_t *cigar = bam_get_cigar(b);
+    for (uint32_t i = 0; i < n_cigar / 2; i++) {
+        uint32_t temp = cigar[i];
+        cigar[i] = cigar[n_cigar - 1 - i];
+        cigar[n_cigar - 1 - i] = temp;
+    }
+
     // flip the reverse flag
     b->core.flag ^= BAM_FREVERSE;
 
