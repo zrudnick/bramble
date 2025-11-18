@@ -962,7 +962,7 @@ namespace bramble {
   ReadEvaluationResult 
   ShortReadEvaluator::evaluate(BundleData *bundle, read_id_t id, g2tTree *g2t) {
 
-    uint32_t boundary_tolerance = 5; 
+    uint32_t boundary_tolerance = 5;
     uint32_t max_clip = 25;
     uint32_t max_ins = 0;
     uint32_t max_gap = 0;
