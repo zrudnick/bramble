@@ -118,8 +118,8 @@ namespace bramble {
     unsigned long num_reads; // number of reads in this bundle
 
     GStr refseq;           // reference sequence name
-    char* gseq; // genomic sequence for the bundle
-    GPVec<GffObj> guides; // all guides in bundle
+    char* gseq;            // genomic sequence for the bundle
+    GPVec<GffObj> guides;  // all guides in bundle
     std::vector<CReadAln *> reads; // all reads in bundle
 
     BundleData()

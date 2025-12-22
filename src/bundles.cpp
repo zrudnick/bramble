@@ -77,33 +77,6 @@ uint32_t unresolved_reads;
 
 namespace bramble {
 
-  // Build once at startup
-  std::unordered_map<std::string, uint32_t> build_chr_length_map(BamIO* io) {
-    std::unordered_map<std::string, uint32_t> chr_lengths;
-
-    bam_hdr_t* hdr = io->get_header();
-    for (int i = 0; i < hdr->n_targets; ++i) {
-      std::string name(hdr->target_name[i]);
-      uint32_t len = hdr->target_len[i];
-      chr_lengths[name] = len;
-    }
-    return chr_lengths;
-  }
-
-  void print_chromosome_progress(const char* ref_name, double pct, int width = 30) {
-    int pos = static_cast<int>((pct / 100.0) * (width - 1));
-    std::string buf(width, ' ');
-    buf[pos] = 'o';
-    buf[0] = '>';
-    buf[width-1] = '<';
-
-    std::cerr << "\r\033[K-- Processing chromosome "
-              << std::setw(30) << std::left << ref_name
-              << "[" << buf << "] "
-              << std::fixed << std::setprecision(1)
-              << pct << "%" << std::flush;
-  }
-
   void process_exons(GSamRecord *brec, CReadAln *readaln) {
     auto exons = brec->exons;
     for (int i = 0; i < exons.Count(); i++) {
@@ -356,8 +329,6 @@ namespace bramble {
     dropped_reads = 0;
     unresolved_reads = 0;
 
-    //std::unordered_map<std::string, uint32_t> chr_lengths = build_chr_length_map(io);
-
     while (more_alignments) {
       const char *ref_name = NULL;
       char splice_strand = '.';
@@ -390,7 +361,6 @@ namespace bramble {
         // Check for chromosome change
         new_chromosome = (last_ref_name.is_empty() || last_ref_name != ref_name);
         if (new_chromosome) {
-          //if (VERBOSE || DEBUG) std::cerr << std::endl; // finish line
           ref_id = guide_seq_names->gseqs.addName(ref_name);
           if (ref_id >= n_refguides && DEBUG) {
             GMessage("WARNING: no reference transcripts found for genomic sequence \"%s\"!\n", ref_name);
@@ -431,14 +401,6 @@ namespace bramble {
       if (new_bundle || new_chromosome) {
         hashread.Clear();
         rec_count = 0;
-
-        // auto it = chr_lengths.find(ref_name);
-        // if ((VERBOSE || DEBUG) && it != chr_lengths.end()) {
-        //   uint32_t chr_len = it->second;
-        //   double pct = (100.0 * read_start_pos) / chr_len;
-
-        //   print_chromosome_progress(ref_name, pct);
-        // }
 
         // Push completed bundle
         push_bundle(bundle, bundle_queue, bundle_min_pos, bundle_max_pos);

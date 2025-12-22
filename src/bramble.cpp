@@ -158,7 +158,10 @@ int main(int argc, char *argv[]) {
 
   if (VERBOSE || DEBUG) {
     // print logo
-    GMessage("   __                  __   __   \n  / /  _______ ___ _  / /  / /__ \n / _ \\/ __/ _ `/  ' \\/ _ \\/ / -_)\n/_.__/_/  \\_,_/_/_/_/_.__/_/\\__/ \n\n");
+    GMessage("   __                  __   __   \n");
+    GMessage("  / /  _______ ___ _  / /  / /__ \n");
+    GMessage(" / _ \\/ __/ _ `/  ' \\/ _ \\/ / -_)\n");
+    GMessage("/_.__/_/  \\_,_/_/_/_/_.__/_/\\__/ \n\n");
     GMessage("## Running Bramble version %s ##\n\n", VERSION);
     GMessage("-- Loading reference annotation...\n");
   }

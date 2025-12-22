@@ -26,6 +26,20 @@ extern bool USE_FASTA;
 extern bool SOFT_CLIPS;
 
 namespace bramble {
+
+  std::tuple<uint32_t, uint32_t> 
+  get_guide_coordinates(BundleData *bundle, GffExon *g, char strand) {
+    uint32_t g_start, g_end;
+    if (strand == '+') {
+      g_start = g->start - bundle->start;
+      g_end = (g->end + 1) - bundle->start;
+    } else {
+      g_start = bundle->end - (g->end + 1);
+      g_end = bundle->end - g->start;
+    }
+    return std::make_tuple(g_start, g_end);
+  }
+
   /**
    * Prints g2t tree with nodes sorted by genome coordinate
    * For debugging only
@@ -63,6 +77,7 @@ namespace bramble {
    * Builds g2t tree from guide transcripts
    *
    * @param bundle current bundle of reads
+   * @param io for optional linking of tids to transcript names
    * @return complete g2t tree for bundle
    */
   std::unique_ptr<g2tTree> make_g2t_tree(BundleData *bundle, BamIO *io) {
@@ -88,6 +103,7 @@ namespace bramble {
 #endif
 
       for (int j = 0; j < guide->exons.Count(); j++) {
+        // auto [g_start, g_end] = get_guide_coordinates(bundle, guide->exons[j], strand);
         uint g_start, g_end;
         if (strand == '+') {
           g_start = guide->exons[j]->start - bundle->start;
@@ -96,7 +112,6 @@ namespace bramble {
           g_start = bundle->end - (guide->exons[j]->end + 1);
           g_end = bundle->end - guide->exons[j]->start;
         }
-
         g2t->addGuideExon(g_start, g_end, tid, strand);
       }
     }
@@ -112,6 +127,14 @@ namespace bramble {
 //     bam_io_mutex.unlock();
 // #endif
     return g2t;
+  }
+
+  // MAPQ = int(-10log10(1-1/Nmap))
+  uint32_t get_mapq(uint32_t nh) {
+    if (nh == 1) return 255;
+    else if (nh == 2) return 3;
+    else if (nh == 3 || nh == 4) return 1;
+    else return 0;
   }
 
   ReadInfo *process_read_out(BundleData *&bundle, uint read_idx, g2tTree *g2t,
@@ -135,6 +158,7 @@ namespace bramble {
     this_read->read->brec = read->brec;
     this_read->read->read_size = read->len;
     this_read->read->nh = res.matches.size();
+    this_read->read->mapq = get_mapq(this_read->read->nh);
 
     return this_read;
   }
@@ -213,6 +237,17 @@ namespace bramble {
           set_as_tag(b, this_pair->m_align.similarity_score);
           set_hi_tag(b, this_pair->m_align.hit_index);
         }
+
+        // Update mapping quality score
+        // must have values between 0–255
+        uint8_t prev_qual = b->core.qual;
+        if (prev_qual <= 3) {
+          if (read->mapq > 3) b->core.qual = prev_qual;
+          else b->core.qual = (uint8_t)read->mapq;
+        } else {
+          b->core.qual = (uint8_t)read->mapq;
+        }
+        
 
         // If read is being reversed - reverse-complement the sequence and quality strings
         if (b->core.flag & BAM_FREVERSE) {

@@ -453,7 +453,8 @@ namespace bramble {
   bool ReadEvaluator::check_first_exon(uint32_t exon_start, uint32_t interval_start,
                                       uint32_t exon_end, uint32_t interval_end,
                                       bool is_last_exon, uint32_t max_clip_size,
-                                      uint32_t tolerance) {
+                                      uint32_t tolerance, uint32_t max_junc_gap,
+                                      char strand) {
     
     if (STRICT) tolerance = 0;
 
@@ -474,6 +475,17 @@ namespace bramble {
         }
       }
     }
+
+    // check for cases where splice junctions are not reconstructed
+    if (!is_last_exon && strand == '+' && (exon_end < interval_end)) {
+      if (interval_end - exon_end > max_junc_gap) {
+        return false;
+      }
+    } else if (!is_last_exon && strand == '-' && (interval_start < exon_start)) {
+      if (interval_start < exon_start > max_junc_gap) {
+        return false;
+      }
+    }
     return true;
   }
 
@@ -481,13 +493,26 @@ namespace bramble {
                                         uint32_t interval_start,
                                         uint32_t exon_end, 
                                         uint32_t interval_end,
-                                        uint32_t tolerance) {
+                                        uint32_t tolerance,
+                                        uint32_t max_junc_gap,
+                                        char strand) {
 
     if (STRICT) tolerance = 0;
 
     if ((exon_start + tolerance < interval_start) || 
       (exon_end - tolerance > interval_end)) {
       return false;
+    }
+
+    // check for cases where splice junctions are not reconstructed
+    if (exon_start > interval_start) {
+      if (exon_start - interval_start > max_junc_gap) {
+        return false;
+      }
+    } else if (exon_end < interval_end) {
+      if (interval_end - exon_end > max_junc_gap) {
+        return false;
+      }
     }
     return true;
   }
@@ -497,7 +522,9 @@ namespace bramble {
                                       uint32_t exon_end, 
                                       uint32_t interval_end,
                                       uint32_t max_clip_size,
-                                      uint32_t tolerance) {
+                                      uint32_t tolerance,
+                                      uint32_t max_junc_gap,
+                                      char strand) {
 
     if (STRICT) tolerance = 0;
 
@@ -514,6 +541,17 @@ namespace bramble {
         if ((clip_size >= max_clip_size)){
           return false;
         }
+      }
+    }
+
+    // check for cases where splice junctions are not reconstructed
+    if (strand == '+' && exon_start > interval_start) {
+      if (exon_start - interval_start > max_junc_gap) {
+        return false;
+      }
+    } else if (strand == '-' && interval_end > exon_end) {
+      if (interval_end > exon_end > max_junc_gap) {
+        return false;
       }
     }
     return true;
@@ -765,9 +803,6 @@ namespace bramble {
     
   }
 
-  // calculate FP and TP for long reads
-  // venn diagrams
- 
   ReadEvaluationResult 
   ReadEvaluator::evaluate_exon_chains(BundleData *bundle, read_id_t id, 
                                       g2tTree *g2t, 
@@ -840,13 +875,15 @@ namespace bramble {
         if (is_first_exon) {
           strand_failed = !(check_first_exon(exon_start, interval_start,
             exon_end, interval_end, is_last_exon, config.max_clip_size, 
-            config.boundary_tolerance));
+            config.boundary_tolerance, config.max_junc_gap, strand));
         } else if (is_last_exon) {
            strand_failed = !(check_last_exon(exon_start, interval_start, 
-            exon_end, interval_end, config.max_clip_size, config.boundary_tolerance));
+            exon_end, interval_end, config.max_clip_size, config.boundary_tolerance,
+            config.max_junc_gap, strand));
         } else {
           strand_failed = !(check_middle_exon(exon_start, interval_start, 
-            exon_end, interval_end, config.boundary_tolerance));
+            exon_end, interval_end, config.boundary_tolerance, 
+            config.max_junc_gap, strand));
         }
         if (strand_failed) {
           unresolved_reads++;
@@ -962,11 +999,12 @@ namespace bramble {
   ReadEvaluationResult 
   ShortReadEvaluator::evaluate(BundleData *bundle, read_id_t id, g2tTree *g2t) {
 
-    uint32_t boundary_tolerance = 5;
-    uint32_t max_clip = 25;
-    uint32_t max_ins = 0;
-    uint32_t max_gap = 0;
-    double similarity_threshold = 0.90;
+    uint32_t boundary_tolerance = 25; //5
+    uint32_t max_clip = 25; //25
+    uint32_t max_ins = 5;
+    uint32_t max_gap = 5;
+    uint32_t max_junc_gap = 0;
+    double similarity_threshold = 0.75; // 0.90
 
     ReadEvaluationConfig config = {
       boundary_tolerance,             // boundary tolerance
@@ -978,6 +1016,7 @@ namespace bramble {
       similarity_threshold,           // similarity threshold
       false,                          // ignore small exons?
       0,                              // small exon size
+      max_junc_gap,                   // max junction gap
       {false, {}}                     // default result
     }; 
 
@@ -992,7 +1031,9 @@ namespace bramble {
     uint32_t max_clip = 20;
     uint32_t max_ins = 20;
     uint32_t max_gap = 20;
+    uint32_t max_junc_gap = 0;
     double similarity_threshold = 0.99;
+    
     ReadEvaluationConfig config = {
       boundary_tolerance,             // boundary tolerance
       max_clip,                       // max clip size
@@ -1003,6 +1044,7 @@ namespace bramble {
       similarity_threshold,           // similarity threshold
       true,                           // ignore small exons?
       SMALL_EXON,                     // small exon size
+      max_junc_gap,                   // max junction gap
       {false, {}}                     // default result
     };   
 

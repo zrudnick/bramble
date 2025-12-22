@@ -74,7 +74,8 @@ namespace bramble {
 
   struct ReadOut {
     read_id_t index;
-    int32_t nh;
+    uint32_t nh;
+    uint32_t mapq;
     std::string name;
     uint32_t read_size;
     GSamRecord *brec;
@@ -84,6 +85,7 @@ namespace bramble {
     ReadOut() 
       : index(), 
         nh(), 
+        mapq(),
         name(),
         read_size(), 
         brec(nullptr), 
@@ -149,6 +151,7 @@ namespace bramble {
     double similarity_threshold;    // similarity threshold
     bool ignore_small_exons;        // should we ignore small exons?
     uint32_t small_exon_size;       // size of small exon
+    uint32_t max_junc_gap;          // max junc mismatch
     ReadEvaluationResult default_result;
   };
 
@@ -227,16 +230,18 @@ namespace bramble {
     bool check_first_exon(uint32_t exon_start, uint32_t interval_start,
                           uint32_t exon_end, uint32_t interval_end,
                           bool is_last_exon, uint32_t max_clip_size,
-                          uint32_t tolerance);
+                          uint32_t tolerance, uint32_t max_junc_gap,
+                          char strand);
 
     bool check_middle_exon(uint32_t exon_start, uint32_t interval_start,
                           uint32_t exon_end, uint32_t interval_end,
-                          uint32_t tolerance);
+                          uint32_t tolerance, uint32_t max_junc_gap,
+                          char strand);
 
     bool check_last_exon(uint32_t exon_start, uint32_t interval_start,
                         uint32_t exon_end, uint32_t interval_end,
-                        uint32_t max_clip_size,
-                        uint32_t tolerance);
+                        uint32_t max_clip_size, uint32_t tolerance, 
+                        uint32_t max_junc_gap, char strand);
 
     void build_exon_cigar(std::vector<ExonChainMatch> &matches,
                           std::unordered_map<tid_t, std::shared_ptr<Cigar>> &subcigars,

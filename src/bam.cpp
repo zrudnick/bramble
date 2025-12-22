@@ -441,8 +441,8 @@ namespace bramble {
     double score;
     if (!LONG_READS) score = std::pow(1.0+(similarity_score - similarity_threshold), 3.0)*100.0;
     else score = similarity_score*1000.0;
-    int32_t new_as = static_cast<int32_t>(score);
-    bam_aux_append(b, "AS", 'i', sizeof(int32_t), (uint8_t*)&new_as);
+    // int32_t new_as = static_cast<int32_t>(score);
+    // bam_aux_append(b, "AS", 'i', sizeof(int32_t), (uint8_t*)&new_as);
   }
 
   void remove_extra_tags(bam1_t* b) {
@@ -502,6 +502,15 @@ namespace bramble {
             qual[i] = qual[len - 1 - i];
             qual[len - 1 - i] = qtmp;
         }
+    }
+
+    // reverse cigar operations
+    uint32_t n_cigar = b->core.n_cigar;
+    uint32_t *cigar = bam_get_cigar(b);
+    for (uint32_t i = 0; i < n_cigar / 2; i++) {
+        uint32_t temp = cigar[i];
+        cigar[i] = cigar[n_cigar - 1 - i];
+        cigar[n_cigar - 1 - i] = temp;
     }
 
     // flip the reverse flag
