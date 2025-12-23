@@ -192,6 +192,5 @@ namespace bramble {
   void build_bundles(BamIO* io, BundleData *bundles, BundleData* bundle, 
                     GPVec<BundleData> *bundle_queue, GVec<GRefData> refguides, 
                     int n_refguides, std::shared_ptr<GffNames> guide_seq_names);
-
 }
 

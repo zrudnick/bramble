@@ -16,9 +16,8 @@
 
 #ifndef NOTHREADS
 #include "GThreads.h"
-#endif
-
 extern GFastMutex bam_io_mutex;     // protects BAM io
+#endif
 const uint32_t CHUNK_SIZE = 5000;   // size of each write to BAM
 
 extern bool LONG_READS;

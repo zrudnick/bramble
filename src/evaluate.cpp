@@ -17,9 +17,8 @@
 
 #ifndef NOTHREADS
 #include "GThreads.h"
-#endif
-
 extern GFastMutex bam_io_mutex;  // protects BAM io
+#endif
 
 extern bool LONG_READS;
 extern bool USE_FASTA;

@@ -26,7 +26,7 @@
 #include "evaluate.h"
 
 extern bool VERBOSE;
-extern bool DEBUG;
+extern bool BRAMBLE_DEBUG;
 
 extern uint8_t n_threads;    // Threads, -p
 
@@ -106,7 +106,7 @@ namespace bramble {
   // Process current bundle
   void process_bundle(BundleData *bundle, BamIO *io) {
 
-    if (DEBUG) {
+    if (BRAMBLE_DEBUG) {
     #ifndef NOTHREADS
       GLockGuard<GFastMutex> lock(log_mutex);
     #endif
@@ -118,7 +118,7 @@ namespace bramble {
 
     convert_reads(bundle, io);
 
-    if (DEBUG) {
+    if (BRAMBLE_DEBUG) {
 #ifndef NOTHREADS
       GLockGuard<GFastMutex> lock(log_mutex);
 #endif
@@ -131,12 +131,17 @@ namespace bramble {
 
   // Check that there aren't any threads waiting
   bool no_threads_waiting() {
+#ifndef NOTHREADS
     wait_mutex.lock();
     int threads = threads_waiting;
     wait_mutex.unlock();
     return (threads < 1);
+#else
+    return true;
+#endif
   }
 
+#ifndef NOTHREADS
   // Worker thread waits for incoming bundle, calls process_bundle
   void worker_thread(GThreadData &td) {
     WorkerArgs *args = (WorkerArgs *)(td.udata);
@@ -205,4 +210,5 @@ namespace bramble {
 
     return idx;
   }
+#endif
 }

@@ -14,7 +14,9 @@ namespace bramble {
 
   bool no_threads_waiting();
 
+#ifndef NOTHREADS
   void worker_thread(GThreadData &td);
 
   int wait_for_data(BundleData *bundles);
+#endif
 }

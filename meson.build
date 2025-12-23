@@ -23,8 +23,14 @@ bz2_dep = dependency('bzip2', fallback: ['bzip2', 'bzip2_dep'])
 lzma_dep = dependency('liblzma', required: true)
 curl_dep = dependency('libcurl', required: true)
 libdeflate_dep = dependency('libdeflate', fallback: ['libdeflate', 'libdeflate_dep'], required: true)
+openmp_dep = dependency('openmp', required: false)
 
 libs = [libdeflate_dep, curl_dep, zlib_dep, bz2_dep, lzma_dep, cc.find_library('m', required: false)]
+
+if openmp_dep.found()
+  libs += [openmp_dep]
+  add_project_arguments('-DUSE_OPENMP', language: 'cpp')
+endif
 
 # Paths to external directories
 # htslib_dir = 'htslib'
@@ -98,4 +104,15 @@ executable('bramble', gclib_srcs + main_srcs + gclib_target,
   include_directories: inc_dirs,
   dependencies: [htslib_dep, quill_dep, gclib_dep] + libs,
   # link_args : ['-fsanitize=address']
+)
+
+main_iit_srcs = files('src/iit.cpp', 'src/bam.cpp', 'src/bundles.cpp', 'src/threads.cpp',
+'src/core.cpp', 'src/mates.cpp', 'src/evaluate.cpp', 'src/g2t.cpp')
+
+# temporary target for testing integration/indexing with cgranges/IITree
+cgranges_inc = include_directories('subprojects/cgranges/cpp')
+executable('iit', gclib_srcs + main_iit_srcs + gclib_target,
+  include_directories: inc_dirs + [cgranges_inc],
+  dependencies: [htslib_dep, quill_dep, gclib_dep] + libs,
+  cpp_args: ['-DNOTHREADS'],
 )

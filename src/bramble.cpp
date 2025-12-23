@@ -58,7 +58,7 @@ Options:\n\
 // --rf       : assume stranded library fw-secondstrand\n\
 
 bool VERBOSE = false;     // Verbose, --verbose
-bool DEBUG = false;
+bool BRAMBLE_DEBUG = false;
 bool LONG_READS = false;  // BAM file contains long reads, --long
 bool FR_STRAND = true;   // Read 1 is on forward strand, --fr
 bool RF_STRAND = false;   // Read 1 is on reverse strand, --fr
@@ -156,7 +156,7 @@ int main(int argc, char *argv[]) {
     GError("Error creating file: %s\n", header_path.chars());
   fprintf(header_file, "@HD\tVN:1.0\tSO:coordinate\n");
 
-  if (VERBOSE || DEBUG) {
+    if (VERBOSE || BRAMBLE_DEBUG) {
     // print logo
     GMessage("   __                  __   __   \n  / /  _______ ___ _  / /  / /__ \n / _ \\/ __/ _ `/  ' \\/ _ \\/ / -_)\n/_.__/_/  \\_,_/_/_/_/_.__/_/\\__/ \n\n");
     GMessage("## Running Bramble version %s ##\n\n", VERSION);
@@ -173,7 +173,7 @@ int main(int argc, char *argv[]) {
   // GffReader: transcripts only, sort by location
   GffReader *gffreader = new GffReader(f, true, true); // loading only recognizable transcript features
   gffreader->setRefAlphaSorted(); // alphabetical sorting of RefSeq IDs
-  gffreader->showWarnings(DEBUG);
+  gffreader->showWarnings(BRAMBLE_DEBUG);
 
   // keep attributes, merge close exons, no exon attributes
   // merge_close_exons must be false for correct transcriptome header
@@ -202,7 +202,7 @@ int main(int argc, char *argv[]) {
 
     // Sanity check: make sure there are no exonless "genes" or other
     if (guide->exons.Count() == 0) {
-      if (DEBUG)
+      if (BRAMBLE_DEBUG)
         // LOG_WARNING(logger, "Warning: exonless GFF {} feature with ID {} found, added "
         //          "implicit exon {}-{}.\n",
         //          guide->getFeatureName(), guide->getID(), guide->start,
@@ -234,7 +234,7 @@ int main(int argc, char *argv[]) {
   fprintf(header_file, "@CO\tGenerated from GTF: %s\n", guide_gff.chars());
   fclose(header_file);
 
-  if (VERBOSE || DEBUG) {
+  if (VERBOSE || BRAMBLE_DEBUG) {
     GMessage("Reference annotation loaded! We found %d unique transcripts\n\n", gffreader->gflst.Count());
   
     if (LONG_READS) {
@@ -258,7 +258,7 @@ int main(int argc, char *argv[]) {
   size_t tstack_size = GThread::defaultStackSize();
   if (tstack_size < DEF_TSTACK_SIZE)
     def_stack_size = DEF_TSTACK_SIZE;
-  if (DEBUG) {
+  if (BRAMBLE_DEBUG) {
     if (tstack_size < def_stack_size) {
       GMessage("Default stack size for threads: %d (increased to %d)\n",
                tstack_size, def_stack_size);
@@ -300,7 +300,7 @@ int main(int argc, char *argv[]) {
     for (int t = 0; t < n_threads; t++) {
       threads[t].join();
     }
-    if (DEBUG) {
+    if (BRAMBLE_DEBUG) {
       // LOG_INFO(logger, " All threads finished.\n");
     }
     delete[] threads;

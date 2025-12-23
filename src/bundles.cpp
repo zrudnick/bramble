@@ -31,7 +31,7 @@
 #include "time.h"
 
 extern bool VERBOSE;     // Verbose, --verbose
-extern bool DEBUG;
+extern bool BRAMBLE_DEBUG;
 extern bool LONG_READS;  // BAM file contains long reads, --long
 extern bool FR_STRAND;   // Read 1 is on forward strand, --fr
 extern bool RF_STRAND;   // Read 1 is on reverse strand, --fr
@@ -258,7 +258,7 @@ namespace bramble {
 
   // Process reads in previous bundle
   void push_bundle(BundleData *bundle, GPVec<BundleData> *bundle_queue,
-                  int curr_bundle_start, int curr_bundle_end) {
+                  int curr_bundle_start, int curr_bundle_end, BamIO* io) {
 
     if (bundle->reads.size() > 0) {
       bundle->getReady(curr_bundle_start, curr_bundle_end);
@@ -392,7 +392,7 @@ namespace bramble {
         if (new_chromosome) {
           //if (VERBOSE || DEBUG) std::cerr << std::endl; // finish line
           ref_id = guide_seq_names->gseqs.addName(ref_name);
-          if (ref_id >= n_refguides && DEBUG) {
+          if (ref_id >= n_refguides && BRAMBLE_DEBUG) {
             GMessage("WARNING: no reference transcripts found for genomic sequence \"%s\"!\n", ref_name);
           }
           prev_pos = 0;
@@ -441,7 +441,7 @@ namespace bramble {
         // }
 
         // Push completed bundle
-        push_bundle(bundle, bundle_queue, bundle_min_pos, bundle_max_pos);
+        push_bundle(bundle, bundle_queue, bundle_min_pos, bundle_max_pos, io);
 
         if (new_chromosome) {
           total_guides = 0;
@@ -573,3 +573,4 @@ namespace bramble {
   }
 
 }
+
