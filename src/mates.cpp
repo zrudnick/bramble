@@ -130,12 +130,13 @@ namespace bramble {
   void update_read_matches(ReadInfo *this_read,
                           const std::unordered_set<tid_t> &final_transcripts) {
 
-    std::vector<ExonChainMatch> new_matches;
+    std::unordered_map<tid_t, ExonChainMatch> new_matches;
 
-    for (const auto &match : this_read->matches) {
-      const tid_t &tid = match.tid;
+    for (const auto &pair : this_read->matches) {
+      const tid_t &tid = pair.first;
+      const auto match = pair.second;
       if (final_transcripts.find(tid) != final_transcripts.end()) {
-        new_matches.emplace_back(match);
+        new_matches[tid] = match;
       }
     }
 
@@ -162,8 +163,9 @@ namespace bramble {
       std::unordered_set<tid_t> read_transcripts;
       std::unordered_map<tid_t, AlignInfo> read_alignments;
 
-      for (auto& match : this_read->matches) {
-        tid_t tid = match.tid;
+      for (auto& pair : this_read->matches) {
+        const tid_t tid = pair.first;
+        const auto match = pair.second;
         AlignInfo align = match.align;
         read_transcripts.insert(tid);
         read_alignments[tid] = align;
@@ -184,15 +186,17 @@ namespace bramble {
     std::unordered_map<tid_t, AlignInfo> read_alignments;
     std::unordered_map<tid_t, AlignInfo> mate_alignments;
 
-    for (auto& match : this_read->matches) {
-      tid_t tid = match.tid;
+    for (auto& pair : this_read->matches) {
+      const tid_t tid = pair.first;
+      const auto match = pair.second;
       AlignInfo align = match.align;
       read_transcripts.insert(tid);
       read_alignments[tid] = align;
     }
 
-    for (auto& match : mate_read->matches) {
-      tid_t tid = match.tid;
+    for (auto& pair : mate_read->matches) {
+      const tid_t tid = pair.first;
+      const auto match = pair.second;
       AlignInfo align = match.align;
       mate_transcripts.insert(tid);
       mate_alignments[tid] = align;

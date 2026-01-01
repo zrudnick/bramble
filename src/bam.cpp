@@ -276,6 +276,31 @@ namespace bramble {
     // Compress back to CIGAR
     uint32_t* result = compress_cigar(merged, new_n_cigar, mem, nm);
 
+    // Print debug info
+    // fprintf(stderr, "REAL CIGAR: ");
+    // for (uint32_t k = 0; k < n_real_cigar; k++) {
+    //     uint32_t op = real_cigar[k] & BAM_CIGAR_MASK;
+    //     uint32_t len = real_cigar[k] >> BAM_CIGAR_SHIFT;
+    //     fprintf(stderr, "%u%c", len, "MIDNSHP=XB"[op]);
+    // }
+    // fprintf(stderr, "\nIDEAL CIGAR: ");
+    // for (const auto& pair : ideal_cigar.cigar) {
+    //     fprintf(stderr, "%u%c ", pair.first, "MIDNSHP=XB"[pair.second]);
+    // }
+    // // fprintf(stderr, "\nREAL EXPANDED:  ");
+    // // for (char c : real_expanded) fprintf(stderr, "%c", c);
+    // // fprintf(stderr, "\nIDEAL EXPANDED: ");
+    // // for (char c : ideal_expanded) fprintf(stderr, "%c", c);
+    // // fprintf(stderr, "\nMERGED:         ");
+    // // for (char c : merged) fprintf(stderr, "%c", c);
+    // fprintf(stderr, "\nNEW CIGAR: ");
+    // for (uint32_t k = 0; k < *new_n_cigar; k++) {
+    //     uint32_t op = result[k] & BAM_CIGAR_MASK;
+    //     uint32_t len = result[k] >> BAM_CIGAR_SHIFT;
+    //     fprintf(stderr, "%u%c", len, "MIDNSHP=XB"[op]);
+    // }
+    // fprintf(stderr, "\n--------------------\n");
+
     return result;
   }
 

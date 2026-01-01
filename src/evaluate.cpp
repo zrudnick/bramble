@@ -38,10 +38,10 @@ namespace bramble {
   ReadEvaluator::~ReadEvaluator() {}
 
   // Evaluate read group and return matches
-  ReadEvaluationResult 
-  ReadEvaluator::evaluate(BundleData *bundle, uint read_index, 
-                          g2tTree *g2t) {
-    return ReadEvaluationResult{};
+  std::unordered_map<tid_t, ExonChainMatch> 
+  ReadEvaluator::evaluate(CReadAln * read, 
+                          read_id_t id, g2tTree *g2t) {
+    return std::unordered_map<tid_t, ExonChainMatch>{};
   }
 
   std::string ReadEvaluator::reverse_complement(const std::string &seq) {
@@ -69,687 +69,294 @@ namespace bramble {
     return seq;
   }
 
-  std::tuple<uint32_t, uint32_t> 
-  ReadEvaluator::get_exon_coordinates(BundleData *bundle, GSeg exon, char strand) {
-    uint32_t exon_start, exon_end;
-    if (strand == '+') {
-      exon_start = exon.start - bundle->start;
-      exon_end = (exon.end + 1) - bundle->start;
-    } else {
-      exon_start = bundle->end - (exon.end + 1);
-      exon_end = bundle->end - exon.start;
-    }
-    return std::make_tuple(exon_start, exon_end);
-  }
+  // std::tuple<uint32_t, uint32_t> 
+  // ReadEvaluator::get_exon_coordinates(GSeg exon, char strand, 
+  //                                     uint32_t ref_len) {
+  //   uint32_t exon_start, exon_end;
+  //   //if (strand == '+') {
+  //     exon_start = exon.start;
+  //     exon_end = exon.end + 1;
+  //   // } else {
+  //   //   exon_start = ref_len - (exon.end + 1);
+  //   //   exon_end = ref_len - exon.start;
+  //   // }
+  //   return std::make_tuple(exon_start, exon_end);
+  // }
     
-  /**
-  * Get the match position for this transcript
-  *
-  * @param interval first interval the read matched to
-  * @param tid transcript id
-  * @param read_strand strand that the read aligned to
-  * @param g2t g2t tree for bundle
-  * @param exon_start start of first read exon
-  * @param used_backwards_overhang did we match backwards to a previous interval?
-  * (USE_FASTA mode)
-  */
-  pos_t ReadEvaluator::get_match_pos(IntervalNode *interval, 
-                                    tid_t tid, char strand,
-                                    g2tTree *g2t, uint exon_start,
-                                    bool used_backwards_overhang) {
-    IntervalNode *first_interval = interval;
-     
-    if (used_backwards_overhang) {
-      first_interval = g2t->getPrevNode(interval, tid, strand);
-    }
-
-    uint32_t interval_start = first_interval->start;
-    pos_t prev_node_sum =
-      g2t->getCumulativeLength(first_interval, tid, strand);
-    std::string tid_string = g2t->getTidName(tid);
-    uint32_t match_start = (exon_start > interval_start) ? 
-      (exon_start - interval_start) : 0;
-    return (pos_t)(match_start + prev_node_sum);
-  }
-
-  /**
-   * Check if we can match forwards to another interval 
-   * (USE_FASTA mode)
-   *
-   */
-  bool ReadEvaluator::search_forward(IntervalNode *interval, uint exon_end,
-                                    char read_strand,
-                                    std::set<tid_t> &exon_tids, g2tTree *g2t,
-                                    BundleData *bundle) {
-
-    std::set<tid_t> tmp_exon_tids;
-    uint32_t overhang_length = exon_end - interval->end;
-    if (overhang_length > overhang_threshold) return false;
-
-    uint32_t overhang_start;
-    if (read_strand == '+') {
-      overhang_start = interval->end;
-    } else {
-      uint32_t relative_end = bundle->end - bundle->start;
-      overhang_start = relative_end - interval->end - overhang_length;
-    }
-
-    // Extract overhang sequence from genomic sequence
-    if (bundle->gseq == nullptr) return false;
-    std::string overhang_seq = extract_sequence(bundle->gseq, overhang_start,
-      overhang_length, read_strand);
-
-    for (const auto &tid : exon_tids) {
-      IntervalNode *next_interval = g2t->getNextNode(interval, tid, read_strand);
-
-      if (next_interval && next_interval->start >= overhang_start) {
-        uint32_t check_length = 
-          std::min(overhang_length, next_interval->end - next_interval->start);
-        
-        uint32_t next_overhang_start;
-        if (read_strand == '+' || read_strand == 1) {
-          next_overhang_start = next_interval->start;
-        } else {
-          next_overhang_start =
-            (bundle->end - next_interval->start - check_length - bundle->start);
-        }
-
-        std::string guide_seq = extract_sequence(bundle->gseq, 
-          next_overhang_start, check_length, read_strand);
-
-        if (overhang_seq == guide_seq) {
-          tmp_exon_tids.insert(tid);
-        }
-      }
-    }
+  // /**
+  // * Get the match position for this transcript
+  // *
+  // * @param interval first interval the read matched to
+  // * @param tid transcript id
+  // * @param read_strand strand that the read aligned to
+  // * @param g2t g2t tree for bundle
+  // * @param exon_start start of first read exon
+  // * (USE_FASTA mode)
+  // */
+  // pos_t ReadEvaluator::get_match_pos(std::shared_ptr<IntervalNode> interval, char strand,
+  //                                   tid_t tid, uint32_t exon_start, uint32_t exon_end) {
     
-    std::swap(exon_tids, tmp_exon_tids);
-    tmp_exon_tids.clear();
-
-    return !exon_tids.empty();
-  }
-
-  /**
-   * Check if we can match backwards to another interval 
-   * (USE_FASTA mode)
-   *
-   */
-  bool ReadEvaluator::search_backward(IntervalNode *interval, uint exon_start,
-                                      char read_strand,
-                                      std::set<tid_t> &exon_tids, g2tTree *g2t,
-                                      BundleData *bundle) {
-
-    std::set<tid_t> tmp_exon_tids;
-    uint32_t overhang_length = interval->start - exon_start;
-    if (overhang_length > overhang_threshold) return false;
-
-    uint32_t overhang_start;
-    if (read_strand == '+') {
-      overhang_start = exon_start;
-    } else {
-      uint32_t relative_end = bundle->end - bundle->start;
-      overhang_start = relative_end - exon_start - overhang_length;
-    }
-
-    // Extract overhang sequence from genomic sequence
-    if (bundle->gseq == nullptr) return false;
-    std::string overhang_seq = extract_sequence(bundle->gseq, overhang_start,
-      overhang_length, read_strand);
-
-    for (const auto &tid : exon_tids) {
-      IntervalNode *prev_interval = g2t->getPrevNode(interval, tid, read_strand);
-
-      if (prev_interval &&
-          prev_interval->end <= overhang_start + overhang_length) {
-        uint32_t check_length =
-            std::min(overhang_length, prev_interval->end - prev_interval->start);
-        
-        uint32_t prev_overhang_start;
-        if (read_strand == '+') {
-          prev_overhang_start = prev_interval->end - check_length;
-        } else {
-          prev_overhang_start = bundle->end - prev_interval->end - bundle->start;
-        }
-
-        std::string guide_seq = extract_sequence(
-          bundle->gseq, prev_overhang_start, check_length, read_strand);
-
-        if (overhang_seq == guide_seq) {
-          tmp_exon_tids.insert(tid);
-        }
-      }
-    }
-    std::swap(exon_tids, tmp_exon_tids);
-    tmp_exon_tids.clear();
-
-    return !exon_tids.empty();
-  }
+  //   pos_t cum_len = interval->tid_cum_len[tid];
+  //   uint32_t match_start;
+  //   if (strand == '+') {
+  //     match_start = (exon_start > interval->start) ? 
+  //       (exon_start - interval->start) : 0;
+  //   } else {
+  //     match_start = (exon_end < interval->end) ? 
+  //       (interval->end - exon_end) : 0;
+  //   }
+  //   return (pos_t)(match_start + cum_len);
+  // }
 
   std::vector<char> 
-  ReadEvaluator::get_strands_to_check(CReadAln* read) {
+  ReadEvaluator::get_strands_to_check(CReadAln * read) {
     if (read->strand == '+') return {'+'}; 
     if (read->strand == '-') return {'-'}; 
     return {'+', '-'};  // unstranded: try forward first, then reverse
   }
 
-  std::set<tid_t> 
-  ReadEvaluator::get_candidate_tids(std::vector<IntervalNode *> intervals,
-                                    std::vector<ExonChainMatch> &matches,
-                                    std::unordered_map<tid_t, std::shared_ptr<Cigar>> &subcigars,
-                                    uint32_t exon_start, uint32_t exon_end,
-                                    bool is_first_exon, bool is_last_exon, g2tTree *g2t) {
-    if (intervals.empty()) 
-      return {};
-
-    if (STRICT || !LONG_READS) {
-      std::set<tid_t> tids(intervals[0]->tids.begin(), intervals[0]->tids.end());
-
-      for (uint32_t i = 1; i < intervals.size(); ++i) {
-      
-        // Check for continuity in intervals
-        if (intervals[i]->start != intervals[i-1]->end) {
-          return {};  // gap found
-        }
-
-        // Keep only TIDs present in all intervals
-        auto it = tids.begin();
-        while (it != tids.end()) {
-          if (!intervals[i]->tids.count(*it)) {
-            it = tids.erase(it);
-          } else {
-            ++it;
-          }
-        }
-      }
-      return tids;
-    
-    // LONG READS
-    } else {
-       // Add ALL possible tids from every interval
-      std::set<tid_t> tids;
-      uint32_t max_ins = 10;
-      for (uint32_t i = 0; i < intervals.size(); ++i) {
-
-        for (auto &tid_here : intervals[i]->tids) {
-          tids.emplace(tid_here);
-        }
-
-        uint32_t match_length = intervals[i]->end - intervals[i]->start;
-        if (match_length > max_ins) {
-          auto it = tids.begin();
-          while (it != tids.end()) {
-            // If long interval, remove any TIDs not in this interval
-            if (!intervals[i]->tids.count(*it)) {
-              it = tids.erase(it);
-            } else {
-              ++it;
-            }
-          }
-        }
-      }
-
-      // Determine TID-based cigar portions for this exon
-      for (auto &tid : tids) {
-        subcigars[tid] = std::make_shared<Cigar>();
-      }
-
-      auto not_in = [&](uint32_t start, uint32_t end, tid_t tid) {
-        if (start >= intervals.size()) return true;
-        end = std::min<uint32_t>(end, intervals.size());
-        while (start < end) {
-          if (intervals[start]->tids.count(tid)) return false;
-          start++;
-        }
-        return true;
-      };
-
-      uint32_t n_intervals = intervals.size();
-      for (uint32_t i = 0; i < n_intervals; i++) {
-
-        // If intervals are non-contiguous, this represents insertions
-        // Small insertions are common in long-read data
-        if (i != 0 && intervals[i]->start != intervals[i-1]->end) {
-          uint32_t insertion_length = intervals[i]->start - intervals[i-1]->end;
-          if (insertion_length > max_ins) return {};
-          for (auto &tid_here : intervals[i]->tids) {
-            if (tids.count(tid_here)) 
-              subcigars[tid_here]->add_operation(insertion_length, BAM_CINS);
-          }
-        }
-
-        uint32_t overlap_start = std::max(exon_start, intervals[i]->start);
-        uint32_t overlap_end = std::min(exon_end, intervals[i]->end); 
-        if (overlap_end <= overlap_start) continue;
-
-        uint32_t match_length = overlap_end - overlap_start;
-        for (auto &tid : tids) {
-          // Match
-          if (intervals[i]->tids.count(tid)) {
-            subcigars[tid]->add_operation(match_length, BAM_CMATCH);
-
-          // Insertion / Soft Clip
-          } else {
-            if (is_first_exon && not_in(0, i, tid)) {
-              subcigars[tid]->add_operation(match_length, BAM_CSOFT_CLIP);
-            } else if (is_last_exon && not_in(i+1, n_intervals, tid)) {
-              subcigars[tid]->add_operation(match_length, BAM_CSOFT_CLIP);
-            } else {
-              subcigars[tid]->add_operation(match_length, BAM_CINS);
-            }
-          }
-        }
-      }
-      return tids;
-    }
-  }
-
   // Add operation to every CIGAR in matches
-  void ReadEvaluator::add_operation_for_all(std::vector<ExonChainMatch> &matches,
+  // Used for hide_small_exon
+  void ReadEvaluator::add_operation_for_all(std::unordered_map<tid_t, ExonChainMatch> &matches,
                                             uint32_t length, uint8_t op, g2tTree *g2t, 
                                             char strand) {
     auto it = matches.begin();
     while (it != matches.end()) {
-      std::shared_ptr<Cigar> match_cigar = it->align.cigar;
+      std::shared_ptr<Cigar> match_cigar = it->second.align.cigar;
       match_cigar->add_operation(length, op);
       if (op != BAM_CSOFT_CLIP && op != BAM_CINS) {
-        it->ref_consumed += length;
-        it->total_coverage += length;
+        it->second.ref_consumed += length;
+        it->second.total_coverage += length;
       }
       ++it;
     }
   };
 
-  void ReadEvaluator::hide_small_exon(std::vector<ExonChainMatch> &matches,
+  void ReadEvaluator::hide_small_exon(std::unordered_map<tid_t, ExonChainMatch> &matches,
                                       uint32_t exon_start, uint32_t exon_end,
-                                      bool is_first_exon, bool is_last_exon, g2tTree *g2t, char strand) {
+                                      ExonStatus status, g2tTree *g2t, char strand) {
 
     uint32_t match_size = exon_end - exon_start;
 
     // First exon: soft clip whole thing
-    if (is_first_exon && SOFT_CLIPS) {
+    if ((status == FIRST_EXON || status == ONLY_EXON)) {
       add_operation_for_all(matches, match_size, BAM_CSOFT_CLIP, g2t, strand);
     }
     
     // Middle exon: entire thing is an insertion
-    if (!is_first_exon && !is_last_exon) {
+    if ((status == MIDDLE_EXON)) {
       add_operation_for_all(matches, match_size, BAM_CINS, g2t, strand);
     }
     
     // Last exon: soft clip whole thing
-    if (is_last_exon && SOFT_CLIPS) {
+    if ((status == LAST_EXON || status == ONLY_EXON)) {
       add_operation_for_all(matches, match_size, BAM_CSOFT_CLIP, g2t, strand);
     }
   }
   
-  // @requires: not called on first exon
-  void ReadEvaluator::filter_tids(std::vector<IntervalNode *> intervals,
-                                  std::unordered_map<tid_t, IntervalNode *> 
-                                  prev_intervals,
-                                  std::set<tid_t> &candidate_tids,
-                                  uint32_t exon_start,
-                                  g2tTree* g2t, char strand,
-                                  std::unordered_map<tid_t, uint32_t> &gaps) {
+  // goal: remove tids with intermediate exon unaccounted for
+  void 
+  ReadEvaluator::ensure_continuity(std::vector<std::shared_ptr<IntervalNode>> &intervals,
+                                  std::unordered_map<tid_t, uint8_t> &exon_id_map,
+                                  ExonStatus status) {
+    
     // Keep only TIDs with correct continuity
-    auto it_c = candidate_tids.begin();
-    while (it_c != candidate_tids.end()) {
-      auto tid = *it_c;
-      
-      // Get first interval containing current TID
-      IntervalNode* tmp = nullptr;
-      if (strand == '+') {
-        for (auto &interval : intervals) {
-          if (interval->tids.count(tid)) {
-            tmp = interval;
-            break;
-          }
-        }
-      } else { // "-"
-        for (auto it = intervals.rbegin(); it != intervals.rend(); ++it) {
-          auto &interval = *it;
-          if (interval->tids.count(tid)) {
-            tmp = interval;
-            break;
-          }
-        }
-      }
-      
-      // Shouldn't happen
-      if (tmp == nullptr) {
-        it_c = candidate_tids.erase(it_c);
-        continue;
-      }
-      
-      // Check continuity: previous exon for this TID must match prev_last_interval
-      // don't allow gaps, it tanks accuracy
-      // or allow gaps of like <10
-      IntervalNode* tid_last_interval;
-      if (strand == '+') tid_last_interval = g2t->getPrevNode(tmp, tid, strand);
-      else tid_last_interval = g2t->getNextNode(tmp, tid, strand);
+    if (!(status == FIRST_EXON || status == ONLY_EXON)) {
+      auto it_i = intervals.begin();
+      while (it_i != intervals.end()) {
+        auto interval = *it_i;
+        auto tid = interval->tid;
+        
+        // Check continuity: successive query exons should match to 
+        // successive guide exons, with no guide exons in between
 
-      // Long reads often have short deletions ("gaps") in reference to the reference
-      uint32_t gap_size = 0;
-      uint32_t max_gap = 10;
-      
-      if (LONG_READS && tid_last_interval != nullptr) {
-        while (prev_intervals.count(tid) && tid_last_interval != prev_intervals[tid]) {
-          gap_size += (tid_last_interval->end - tid_last_interval->start);
-          if (gap_size > max_gap) break; // give up if gap if too large
-
-          if (strand == '+') tid_last_interval = g2t->getPrevNode(tmp, tid, strand);
-          else tid_last_interval = g2t->getNextNode(tmp, tid, strand);
-          if (tid_last_interval == nullptr) break; // give up if we reach last possible node
-        }
-      }
-      if (prev_intervals.count(tid) && 
-        tid_last_interval == prev_intervals[tid]) {
-        if (LONG_READS) gaps[tid] = gap_size;
-        ++it_c;
-      } else {
-        it_c = candidate_tids.erase(it_c);
-      }
-    }
-  }
-
-  bool ReadEvaluator::check_first_exon(uint32_t exon_start, uint32_t interval_start,
-                                      uint32_t exon_end, uint32_t interval_end,
-                                      bool is_last_exon, uint32_t max_clip_size,
-                                      uint32_t tolerance, uint32_t max_junc_gap,
-                                      char strand) {
-    
-    if (STRICT) tolerance = 0;
-
-    if (!SOFT_CLIPS) {
-      if (is_last_exon && 
-        (exon_start < interval_start || exon_end > interval_end)) {
-        return false;
-      } else if (exon_start < interval_start || exon_end - tolerance > interval_end) {
-        return false;
-      }
-    } else {
-      if (exon_end - tolerance > interval_end) {
-        return false;
-      } else if (exon_start < interval_start) {
-        uint32_t clip_size = interval_start - exon_start;
-        if ((clip_size >= max_clip_size)){
-          return false;
-        }
-      }
-    }
-
-    // check for cases where splice junctions are not reconstructed
-    if (!is_last_exon && strand == '+' && (exon_end < interval_end)) {
-      if (interval_end - exon_end > max_junc_gap) {
-        return false;
-      }
-    } else if (!is_last_exon && strand == '-' && (interval_start < exon_start)) {
-      if (interval_start < exon_start > max_junc_gap) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  bool ReadEvaluator::check_middle_exon(uint32_t exon_start, 
-                                        uint32_t interval_start,
-                                        uint32_t exon_end, 
-                                        uint32_t interval_end,
-                                        uint32_t tolerance,
-                                        uint32_t max_junc_gap,
-                                        char strand) {
-
-    if (STRICT) tolerance = 0;
-
-    if ((exon_start + tolerance < interval_start) || 
-      (exon_end - tolerance > interval_end)) {
-      return false;
-    }
-
-    // check for cases where splice junctions are not reconstructed
-    if (exon_start > interval_start) {
-      if (exon_start - interval_start > max_junc_gap) {
-        return false;
-      }
-    } else if (exon_end < interval_end) {
-      if (interval_end - exon_end > max_junc_gap) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  bool ReadEvaluator::check_last_exon(uint32_t exon_start, 
-                                      uint32_t interval_start,
-                                      uint32_t exon_end, 
-                                      uint32_t interval_end,
-                                      uint32_t max_clip_size,
-                                      uint32_t tolerance,
-                                      uint32_t max_junc_gap,
-                                      char strand) {
-
-    if (STRICT) tolerance = 0;
-
-    if (!SOFT_CLIPS) {
-      if ((exon_start + tolerance < interval_start) || 
-        (exon_end > interval_end)) {
-        return false;
-      }
-    } else {
-      if (exon_start + tolerance < interval_start) {
-        return false;
-      } else if (exon_end > interval_end) {
-        uint32_t clip_size = exon_end - interval_end;
-        if ((clip_size >= max_clip_size)){
-          return false;
-        }
-      }
-    }
-
-    // check for cases where splice junctions are not reconstructed
-    if (strand == '+' && exon_start > interval_start) {
-      if (exon_start - interval_start > max_junc_gap) {
-        return false;
-      }
-    } else if (strand == '-' && interval_end > exon_end) {
-      if (interval_end > exon_end > max_junc_gap) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  void ReadEvaluator::build_exon_cigar(std::vector<ExonChainMatch> &matches,
-                                      std::unordered_map<tid_t, std::shared_ptr<Cigar>> &subcigars,
-                                      bool is_first_exon, bool is_last_exon, 
-                                      uint32_t exon_start, uint32_t exon_end,
-                                      uint32_t interval_start, uint32_t interval_end,
-                                      std::unordered_map<tid_t, uint32_t> &gaps,
-                                      g2tTree* g2t, char strand) {
-    // Long reads: Handle gaps between previous and current exon
-    if (LONG_READS) {
-      for (auto &match : matches) {
-        tid_t tid = match.tid;
-        std::shared_ptr<Cigar> cigar = match.align.cigar;
-        if (gaps.count(tid) && gaps[tid] > 0) cigar->add_operation(gaps[tid], BAM_CDEL);
-      }
-    }
-
-    // Handle start boundary
-    if (exon_start < interval_start) {
-      uint32_t overhang = interval_start - exon_start;
-      if (is_first_exon && SOFT_CLIPS) add_operation_for_all(matches, overhang, BAM_CSOFT_CLIP, g2t, strand);
-      else if (!is_first_exon) add_operation_for_all(matches, overhang, BAM_CINS, g2t, strand);
-    }
-    
-    // Add match for overlapping region
-    if (STRICT || !LONG_READS) {
-      uint32_t overlap_start = std::max(exon_start, interval_start);
-      uint32_t overlap_end = std::min(exon_end, interval_end);  
-      if (overlap_end >= overlap_start) {
-        uint32_t match_length = overlap_end - overlap_start;
-        add_operation_for_all(matches, match_length, BAM_CMATCH, g2t, strand);
-      }
-    } else {
-      auto it_m = matches.begin();
-      while (it_m != matches.end()) {
-        tid_t tid = it_m->tid;
-        std::shared_ptr<Cigar> cigar = it_m->align.cigar;
-        // Might happen if TID in previous exons
-        // was not found for this exon
-        auto it_s = subcigars.find(tid);
-        if (it_s == subcigars.end()) {
-          ++it_m;
+        if (!exon_id_map.count(tid)) {
+          it_i = intervals.erase(it_i);
           continue;
         }
-        // If tid in subcigar, add subcigar to match cigar
-        std::shared_ptr<Cigar> subcigar = it_s->second;
-        for (uint32_t i = 0; i < subcigar->cigar.size(); i++) {
-          uint32_t len = subcigar->cigar[i].first;
-          uint8_t op = subcigar->cigar[i].second;
-          cigar->add_operation(len, op);
 
-          // Update coverage for similarity calculation
-          if (op == BAM_CMATCH || op == BAM_CDEL) {
-            if (op == BAM_CMATCH) it_m->total_coverage += len;
-            it_m->ref_consumed += len;
-          }
-        }
-        
-        ++it_m;
-      }
-    } 
-    
-    // Handle end boundary
-    if (exon_end > interval_end) {
-      uint32_t overhang = exon_end - interval_end;
-      if (is_last_exon && SOFT_CLIPS) add_operation_for_all(matches, overhang, BAM_CSOFT_CLIP, g2t, strand);
-      else if (!is_last_exon) add_operation_for_all(matches, overhang, BAM_CINS, g2t, strand);
-    }
-  }
-
-  void ReadEvaluator::compile_matches(std::vector<ExonChainMatch> &matches,
-                                      std::set<tid_t> candidate_tids, 
-                                      std::unordered_map<tid_t, IntervalNode *> &first_intervals, 
-                                      char strand, g2tTree* g2t,
-                                      uint32_t exon_start, uint32_t exon_end,
-                                      uint32_t cumulative_length, uint32_t coverage_augment,
-                                      bool used_backwards_overhang) {
-    // Initialize matches with TIDs and positions
-    for (const auto &tid : candidate_tids) {
-      bool match_exists = false;
-      auto it = matches.begin();
-      while (it != matches.end()) {
-        if (it->tid == tid) {
-          match_exists = true;
-          break;
-        }
-        ++it;
-      }
-
-      if (!match_exists) {
-        ExonChainMatch match;
-        match.tid = tid;
-        pos_t pos = get_match_pos(first_intervals[tid], 
-          tid, strand, g2t, exon_start, used_backwards_overhang);
-        match.align.pos = pos;
-        match.align.strand = strand;
-        match.align.cigar = std::make_shared<Cigar>();
-        match.transcript_length = g2t->getTranscriptLength(tid, strand);
-        match.ref_consumed = 0;
-        match.total_coverage = 0 + coverage_augment; // same as ref consumed
-        match.total_read_length = cumulative_length;
-          // current exon length added in update_matches
-        match.align.similarity_score = 0;
-        matches.emplace_back(match);
-
-        if (cumulative_length > 0) {
-          match.align.cigar->add_operation(cumulative_length, BAM_CSOFT_CLIP);
-        }
-      }
-    }
-  }
-
-  bool ReadEvaluator::update_matches(std::vector<ExonChainMatch> &matches,
-                                      std::set<tid_t> candidate_tids, 
-                                      std::unordered_map<tid_t, IntervalNode *> &first_intervals, 
-                                      char strand, g2tTree* g2t,
-                                      uint32_t exon_start, uint32_t exon_end,
-                                      bool is_first_exon,
-                                      std::unordered_map<tid_t, uint32_t> &gaps,
-                                      bool used_backwards_overhang) {
-    
-    auto it = matches.begin();
-    while (it != matches.end()) {
-      it->total_read_length += (exon_end - exon_start);
-
-      if (!is_first_exon) {
-        // For reads on negative strand, need to update
-        // match position at each new exon
-        tid_t tid = it->tid;
-        if (strand == '-' && first_intervals.count(tid)) {
-          pos_t pos = get_match_pos(first_intervals[tid], 
-            tid, strand, g2t, exon_start, used_backwards_overhang);
-          it->align.pos = pos;
-        }
-
-        // Remove tids unsupported by all exons
-        if (candidate_tids.count(it->tid)) {
-          ++it;
+        uint8_t prev_exon_id = exon_id_map[tid];
+        uint8_t curr_exon_id = interval->exon_id;
+        if (curr_exon_id != (prev_exon_id + 1)) {
+          it_i = intervals.erase(it_i);
         } else {
-          it = matches.erase(it);
+          ++it_i;
+        }
+      }
+    }
+
+    exon_id_map.clear();
+    for (auto &interval : intervals) {
+      auto tid = interval->tid;
+      exon_id_map[tid] = interval->exon_id;
+    }
+  }
+
+  void ReadEvaluator::build_exon_cigar(std::unordered_map<tid_t, ExonChainMatch> &matches,
+                                      ExonStatus status, uint32_t exon_start, uint32_t exon_end,
+                                      std::vector<std::shared_ptr<IntervalNode>> &intervals,
+                                      std::unordered_map<tid_t, uint32_t> &gaps,
+                                      g2tTree* g2t, char strand) {
+    // Handle gaps between previous and current exon
+    if (!gaps.empty()) {
+      for (auto &pair : matches) {
+        tid_t tid = pair.first;
+        auto match = pair.second;
+        std::shared_ptr<Cigar> cigar = match.align.cigar;
+        if (gaps.count(tid) && gaps[tid] > 0) cigar->add_operation(gaps[tid], BAM_CDEL);
+        match.ref_consumed += gaps[tid];
+        match.total_coverage += gaps[tid];
+      }
+    }
+
+    // Loop through intervals
+    // Add S, M, I to match CIGAR accordingly
+    auto it_i = intervals.begin();
+    while (it_i != intervals.end()) {
+      auto interval = *it_i;
+      auto tid = interval->tid;
+      std::string tid_string = g2t->getTidName(tid);
+      // if (tid_string == "CHS.55407.18" && exon_start == 35682013) {
+      //   printf("interval->start = %d, interval->end = %d\n", interval->start, interval->end);
+      //   printf("exon_start = %d, exon_end = %d\n", exon_start, exon_end);
+      // }
+      if (!matches.count(tid)) {
+        it_i = intervals.erase(it_i);
+        continue;
+      }
+      auto& match = matches[tid];
+      std::shared_ptr<Cigar> cigar = match.align.cigar;
+
+      if (strand == '+') {
+        // Handle start boundary
+        if (exon_start < interval->start) {
+          uint32_t overhang = interval->start - exon_start;
+          // if (tid_string == "CHS.55407.18" && exon_start == 35682013) {
+          //   printf("left clip = %d\n", overhang);
+          // }
+          if (status == FIRST_EXON || status == ONLY_EXON) 
+            cigar->add_operation(overhang, BAM_CSOFT_CLIP);
+            // if (tid_string == "CHS.55407.18" && exon_start == 35682013) {
+            //   printf("added clip\n");
+            // }
+          else if (status == MIDDLE_EXON || status == LAST_EXON)
+            cigar->add_operation(overhang, BAM_CINS);
         }
       } else {
-        ++it;
+        // Handle end boundary
+        if (exon_end > interval->end) {
+          uint32_t overhang = exon_end - interval->end;
+          if (status == LAST_EXON || status == ONLY_EXON) 
+            cigar->add_operation(overhang, BAM_CSOFT_CLIP);
+          else if (status == FIRST_EXON || status == MIDDLE_EXON)
+            cigar->add_operation(overhang, BAM_CINS);
+        }
+      }
+ 
+      // Add match for overlapping region
+      uint32_t overlap_start = std::max(exon_start, interval->start);
+      uint32_t overlap_end = std::min(exon_end, interval->end);  
+      if (overlap_end >= overlap_start) {
+        uint32_t match_length = overlap_end - overlap_start;
+        // if (tid_string == "CHS.55407.18" && exon_start == 35682013) {
+        //   printf("match length = %d\n", match_length);
+        // }
+        cigar->add_operation(match_length, BAM_CMATCH);
+        match.ref_consumed += match_length;
+        match.total_coverage += match_length;
+      }
+
+      if (strand == '+') {
+        // Handle end boundary
+        if (exon_end > interval->end) {
+          uint32_t overhang = exon_end - interval->end;
+          if (status == LAST_EXON || status == ONLY_EXON) 
+            cigar->add_operation(overhang, BAM_CSOFT_CLIP);
+          else if (status == FIRST_EXON || status == MIDDLE_EXON)
+            cigar->add_operation(overhang, BAM_CINS);
+        }
+      } else {
+        // Handle start boundary
+        if (exon_start < interval->start) {
+          uint32_t overhang = interval->start - exon_start;
+          // if (tid_string == "CHS.55407.18" && exon_start == 35682013) {
+          //   printf("left clip = %d\n", overhang);
+          // }
+          if (status == FIRST_EXON || status == ONLY_EXON) 
+            cigar->add_operation(overhang, BAM_CSOFT_CLIP);
+            // if (tid_string == "CHS.55407.18" && exon_start == 35682013) {
+            //   printf("added clip\n");
+            // }
+          else if (status == MIDDLE_EXON || status == LAST_EXON)
+            cigar->add_operation(overhang, BAM_CINS);
+        }
+      }
+
+      ++it_i;
+    }
+  }
+
+  void ReadEvaluator::compile_matches(std::unordered_map<tid_t, ExonChainMatch> &matches,
+                                      std::vector<std::shared_ptr<IntervalNode>> &intervals,
+                                      char strand, uint32_t exon_start, uint32_t exon_end,
+                                      uint32_t cumulative_length, uint32_t coverage_augment) {
+    // Initialize matches with TIDs and positions
+    for (const auto &interval : intervals) {
+      ExonChainMatch match;
+      match.align.pos = interval->pos;
+      match.align.strand = strand;
+      match.align.cigar = std::make_shared<Cigar>();
+      match.ref_consumed = 0;
+      match.total_coverage = 0 + coverage_augment; // same as ref consumed
+      match.total_read_length = cumulative_length + (exon_end - exon_start);
+      match.align.similarity_score = 0;
+      matches[interval->tid] = match;
+
+      if (cumulative_length > 0) {
+        match.align.cigar->add_operation(cumulative_length, BAM_CSOFT_CLIP);
+      }
+    }
+  }
+
+  bool ReadEvaluator::update_matches(std::unordered_map<tid_t, ExonChainMatch> &matches,
+                                    std::vector<std::shared_ptr<IntervalNode>> &intervals, 
+                                    char strand, uint32_t exon_start, uint32_t exon_end, 
+                                    ExonStatus status) {
+    
+    std::unordered_map<tid_t, pos_t> candidate_tids;
+    for (auto &interval : intervals) {
+      candidate_tids[interval->tid] = interval->pos;
+    }
+
+    auto it_m = matches.begin();
+    while (it_m != matches.end()) {
+      auto match = &(it_m->second);
+      match->total_read_length += (exon_end - exon_start);
+
+      if (status == MIDDLE_EXON || status == LAST_EXON) {
+        tid_t tid = (*it_m).first;
+
+        // Only keep tids supported by all exons
+        if (candidate_tids.count(tid)) {
+
+          // For reads on negative strand, need to update
+          // match position at each new exon
+          if (strand == '-') {
+            pos_t pos = candidate_tids[tid];
+            match->align.pos = pos;
+          }
+          ++it_m;
+
+        } else {
+          it_m = matches.erase(it_m);
+        }
+ 
+      } else {
+        ++it_m;
       }
       
     }
     return !matches.empty();
-  }
-
-  void ReadEvaluator::get_prev_intervals(std::vector<IntervalNode *> intervals,
-                                        std::set<tid_t> candidate_tids,
-                                        std::unordered_map<tid_t, IntervalNode *>
-                                        &prev_intervals, char strand) {
-    // Update last seen intervals for each candidate tids
-    // Previous candidate tids not in this interval set 
-    // will simply not be updated
-    for (tid_t tid : candidate_tids) {
-      if (strand == '+') {
-        for (int32_t i = intervals.size() - 1; i >= 0; i--) {
-          IntervalNode* interval = intervals[i];
-          if (interval->tids.count(tid)) {
-            prev_intervals[tid] = interval;
-            break;
-          }
-        }
-      } else { // "-"
-        for (int32_t i = 0; i < intervals.size(); i++) {
-          IntervalNode* interval = intervals[i];
-          if (interval->tids.count(tid)) {
-            prev_intervals[tid] = interval;
-            break;
-          }
-        }
-      }
-      
-    }
-  }
-
-  void ReadEvaluator::get_first_intervals(std::vector<IntervalNode *> intervals,
-                                          std::set<tid_t> candidate_tids,
-                                          char strand,
-                                          std::unordered_map<tid_t, IntervalNode *>
-                                          &first_intervals) {
-    for (tid_t tid : candidate_tids) {
-        for (uint32_t i = 0; i < intervals.size(); i++) {
-          IntervalNode* interval = intervals[i];
-          if (interval->tids.count(tid)) {
-            first_intervals[tid] = interval;
-            break;
-          }
-        }
-
-      // same for '+' and '-'
-    }
   }
 
   int32_t get_rand(uint32_t x) {
@@ -759,17 +366,19 @@ namespace bramble {
     return dis(gen);
   }
 
-  void ReadEvaluator::filter_by_similarity(std::vector<ExonChainMatch> &matches, 
-                                           double similarity_threshold) {
+  void 
+  ReadEvaluator::filter_by_similarity(std::unordered_map<tid_t, ExonChainMatch> &matches, 
+                                      double similarity_threshold) {
 
-    auto it = matches.begin();
-    while (it != matches.end()) {
-      uint32_t total_coverage = it->total_coverage;
-      uint32_t total_read_length = it->total_read_length;
-      double similarity = (total_read_length > 0) ? 
-        ((double)total_coverage / total_read_length) : 0.0;
+    for (auto it = matches.begin(); it != matches.end(); ) {
+      auto& match = it->second;
+
+      double similarity = (match.total_read_length > 0)
+        ? (static_cast<double>(match.total_coverage) / match.total_read_length)
+        : 0.0;
+
       if (similarity > similarity_threshold) {
-        it->align.similarity_score = similarity;
+        match.align.similarity_score = similarity;
         ++it;
       } else {
         it = matches.erase(it);
@@ -778,175 +387,170 @@ namespace bramble {
 
     if (matches.empty()) return;
 
-    ExonChainMatch *best_match;
-    tid_t best_score = -1;
+    auto best_it = matches.end();
+    double best_score = -1.0;
     int32_t hit_index = 1;
-    bool has_best = false;
-    for (auto &match : matches) {
-      match.align.hit_index = hit_index;
-      hit_index++;
-      if (best_score == -1) {
-          best_score = match.align.similarity_score;
-          best_match = &match;
-      } else if (best_score != -1 && match.align.similarity_score > best_score) {
+
+    for (auto it = matches.begin(); it != matches.end(); ++it) {
+      auto& match = it->second;
+      match.align.hit_index = hit_index++;
+
+      if (match.align.similarity_score > best_score) {
         best_score = match.align.similarity_score;
-        best_match = &match;
-        has_best = true;
+        best_it = it;
       }
     }
-    if (has_best) {
-      best_match->align.primary_alignment = true;
+
+    if (best_it != matches.end()) {
+      best_it->second.align.primary_alignment = true;
     } else {
       int32_t rand_idx = get_rand(matches.size());
-      matches[rand_idx].align.primary_alignment = true;
+      auto it = matches.begin();
+      std::advance(it, rand_idx);
+      it->second.align.primary_alignment = true;
     }
-    
   }
 
-  ReadEvaluationResult 
-  ReadEvaluator::evaluate_exon_chains(BundleData *bundle, read_id_t id, 
-                                      g2tTree *g2t, 
+  std::unordered_map<tid_t, ExonChainMatch> 
+  ReadEvaluator::evaluate_exon_chains(CReadAln *read, 
+                                      read_id_t id, g2tTree *g2t, 
                                       ReadEvaluationConfig config) {
-    CReadAln *read = bundle->reads[id];
     GVec<GSeg> read_exons = read->segs;
     uint32_t exon_count = read_exons.Count();
+    refid_t refid = read->refid;
+    std::string read_name = read->brec->name();
 
-    IntervalNode *first_interval = nullptr;
-    IntervalNode *last_interval = nullptr;
-    uint32_t interval_start;
-    uint32_t interval_end;
-
-    std::vector<ExonChainMatch> matches;
-    std::vector<ExonChainMatch> matches_by_strand;
-    std::unordered_map<tid_t, IntervalNode *> prev_intervals;
+    std::unordered_map<tid_t, ExonChainMatch> matches;
+    std::unordered_map<tid_t, ExonChainMatch> matches_by_strand;
+    //std::vector<std::shared_ptr<IntervalNode>> intervals;
+    std::vector<uint32_t> exon_sizes;
+    std::unordered_map<tid_t, uint8_t> exon_id_map;
 
     auto strands_to_check = get_strands_to_check(read);
     for (char strand : strands_to_check) {
       matches.clear();
-      prev_intervals.clear();
+      //intervals.clear();
+      exon_sizes.clear();
+      exon_id_map.clear();
       bool strand_failed = false;
       uint32_t total_exon_matches = exon_count;
       uint32_t cumulative_length = 0;
       uint32_t coverage_augment = 0;
 
       for (uint j = 0; j < exon_count; j++) {
-        auto [exon_start, exon_end] = get_exon_coordinates(bundle, 
-          read_exons[j], strand);
-        bool is_first_exon = (j == 0);
-        bool is_last_exon = (j == exon_count - 1);
+        auto exon = read_exons[j];
+        exon.end++; // make exclusive
+
+        ExonStatus status;
+        if (exon_count == 1) {
+          status = ONLY_EXON;
+        } else if (j == 0) {
+          status = FIRST_EXON;
+        } else if (j < (exon_count - 1)) {
+          status = MIDDLE_EXON;
+        } else {
+          status = LAST_EXON;  
+        }
+
+        bool is_small_exon = (exon.end - exon.start <= config.small_exon_size);
 
         // Find all guide intervals that contain the read exon
-        auto intervals = g2t->getIntervals(exon_start, exon_end, strand);
+        auto intervals = g2t->getIntervals(refid, strand, exon,
+          config, status);
         if (intervals.empty()) {
-          if (config.ignore_small_exons 
-            && (exon_end - exon_start <= config.small_exon_size)) {
-            hide_small_exon(matches, exon_start, exon_end, 
-              is_first_exon, is_last_exon, g2t, strand); 
-            cumulative_length += (exon_end - exon_start);
+          if (config.ignore_small_exons & is_small_exon) {
+            hide_small_exon(matches, exon.start, exon.end, 
+              status, g2t, strand); 
             total_exon_matches--;
-            coverage_augment += (exon_end - exon_start);
+            cumulative_length += (exon.end - exon.start);
+            //coverage_augment += (exon.end - exon.start);
             continue;
           }
           dropped_reads++;
           strand_failed = true;
-          break;
-        }
-
-        // Get candidate tids for this exon
-        std::unordered_map<tid_t, std::shared_ptr<Cigar>> subcigars;
-        auto candidate_tids = get_candidate_tids(intervals, matches, subcigars,
-          exon_start, exon_end, is_first_exon, is_last_exon, g2t);
-        if (candidate_tids.empty()) {
-          strand_failed = true;
-          unresolved_reads++;
-          break;
-        }
-
-        // Store intervals for this exon
-        first_interval = intervals[0];
-        last_interval = intervals[intervals.size() - 1];
-        interval_start = first_interval->start;
-        interval_end = last_interval->end;
-
-        bool used_backwards_overhang = false;
-        std::unordered_map<tid_t, uint32_t> gaps;
-
-        // Boundary checks depending on current exon
-        if (is_first_exon) {
-          strand_failed = !(check_first_exon(exon_start, interval_start,
-            exon_end, interval_end, is_last_exon, config.max_clip_size, 
-            config.boundary_tolerance, config.max_junc_gap, strand));
-        } else if (is_last_exon) {
-           strand_failed = !(check_last_exon(exon_start, interval_start, 
-            exon_end, interval_end, config.max_clip_size, config.boundary_tolerance,
-            config.max_junc_gap, strand));
-        } else {
-          strand_failed = !(check_middle_exon(exon_start, interval_start, 
-            exon_end, interval_end, config.boundary_tolerance, 
-            config.max_junc_gap, strand));
-        }
-        if (strand_failed) {
-          unresolved_reads++;
+          matches.clear();
           break;
         }
 
         // Filter tids
-        if (!is_first_exon) filter_tids(intervals, prev_intervals, 
-          candidate_tids, exon_start, g2t, strand, gaps);
-        if (candidate_tids.empty()) {
+        ensure_continuity(intervals, exon_id_map, status);
+        if (intervals.empty()) {
           strand_failed = true;
+          matches.clear();
+          //printf("Strand failed at filter tids\n");
           unresolved_reads++;
           break;
         }
 
-        std::unordered_map<tid_t, IntervalNode *> first_intervals;
-        get_first_intervals(intervals, candidate_tids, strand, first_intervals);
-
         // Create exon chain matches 
-        if (is_first_exon) {
-          compile_matches(matches, candidate_tids, first_intervals, 
-            strand, g2t, exon_start, exon_end, cumulative_length, 
-            coverage_augment, used_backwards_overhang);
+        if (status == FIRST_EXON || status == ONLY_EXON) {
+          compile_matches(matches, intervals, 
+            strand, exon.start, exon.end, cumulative_length, 
+            coverage_augment);
         }
 
         // Build CIGAR as we process each exon
-        build_exon_cigar(matches, subcigars,
-          is_first_exon, is_last_exon, exon_start, 
-          exon_end, interval_start, interval_end, gaps, g2t, strand);
+        std::unordered_map<tid_t, uint32_t> gaps;
+        build_exon_cigar(matches, status, exon.start, exon.end, 
+          intervals, gaps, g2t, strand);
 
-        strand_failed = !update_matches(matches, 
-          candidate_tids, first_intervals, strand, g2t, 
-          exon_start, exon_end, is_first_exon, gaps, 
-          used_backwards_overhang);
-        if (strand_failed) {
-          unresolved_reads++;
-          break;
+        if (status == MIDDLE_EXON || status == LAST_EXON) {
+          strand_failed = !update_matches(matches, intervals, strand, 
+          exon.start, exon.end, status);
+          if (strand_failed) {
+            matches.clear();
+            //printf("Strand failed at update matches\n");
+            unresolved_reads++;
+            break;
+          }
         }
 
         // Fail if we run out of candidate TIDs
-        if (candidate_tids.empty()) {
+        if (intervals.empty()) {
           unresolved_reads++;
+          // printf("Strand failed at candidate tids empty\n");
           strand_failed = true;
+          matches.clear();
           break;
         }
-
-        if (!is_last_exon) get_prev_intervals(intervals, 
-          candidate_tids, prev_intervals, strand);
 
         // After the last exon, filter matches by similarity
-        if (config.filter_similarity && is_last_exon) 
+        if (config.filter_similarity && 
+          (status == ONLY_EXON || status == LAST_EXON)) 
           filter_by_similarity(matches, config.similarity_threshold);
 
-        if (is_last_exon && matches.empty()) {
+        // if (read_name == "read3599125/CHS.2231.5;mate1:288-388;mate2:288-388") {
+          //printf("tids after filter similarity \n");
+        // for (auto &pair : matches) {
+        //   std::string tid_string = g2t->getTidName(pair.first);
+        //   if (tid_string == "CHS.55407.18" && exon.start == 35682013) {
+        //     printf("read name = %s\n", read_name.c_str());
+        //     printf("tid = %d, %s\n", pair.first, tid_string.c_str());
+        //     printf("pos = %d\n", pair.second.align.pos);
+        //     printf("IDEAL CIGAR: ");
+        //     for (const auto& pair : pair.second.align.cigar->cigar) {
+        //       printf("%u%c ", pair.first, "MIDNSHP=XB"[pair.second]);
+        //     }
+        //     printf("\n\n");
+        //   }
+            
+        //   // }
+        // }
+        
+        if ((status == ONLY_EXON || status == LAST_EXON) 
+          && matches.empty()) {
+          unresolved_reads++;
+          // printf("Strand failed at filter similarity\n");
           strand_failed = true;
+          matches.clear();
           break;
         }
 
-        // Calculate at end for new matches in next exon
-        cumulative_length += (exon_end - exon_start);
+        cumulative_length += (exon.end - exon.start);
         if (total_exon_matches == 0) {
           unresolved_reads++;
           strand_failed = true;
+          matches.clear();
           break;
         }
 
@@ -956,11 +560,11 @@ namespace bramble {
       if (!LONG_READS) {
         // Worked on this strand, so we are done
         if (!strand_failed && !matches.empty()) {
-          return {true, matches};
+          return matches;
         }
         // Stranded read failed -> fail
         if (read->strand != '.') {
-          return config.default_result;
+          return matches;
         }
         // Unstranded: try the opposite strand next
         continue;
@@ -971,33 +575,38 @@ namespace bramble {
         // Stranded long reads: either success or failure
         if (read->strand != '.') {
           if (!strand_failed && !matches.empty()) {
-            return {true, matches};
+            return matches;
           } else {
-            return config.default_result;
+            return matches;
           }
         }
 
         // Unstranded long reads: merge matches across both strands
         if (!strand_failed && !matches.empty()) {
-          matches_by_strand.insert(matches_by_strand.end(), 
-            matches.begin(), matches.end());
+          for (auto &pair : matches) {
+            tid_t tid = pair.first;
+            auto match = pair.second;
+            matches_by_strand[tid] = match;
+          }
         }
 
         // '+' strand: continue to try the other strand
         if (strand == '+') continue;
 
         // '-' strand: finished both, return combined matches
-        return {true, matches_by_strand};
+        return matches_by_strand;
       }
     }
 
     // If this was an unstranded read and both strands fail, 
     // give up
-    return config.default_result;
+    matches.clear();
+    return matches;
   }
 
-  ReadEvaluationResult 
-  ShortReadEvaluator::evaluate(BundleData *bundle, read_id_t id, g2tTree *g2t) {
+  std::unordered_map<tid_t, ExonChainMatch> 
+  ShortReadEvaluator::evaluate(CReadAln * read, 
+                              read_id_t id, g2tTree *g2t) {
 
     uint32_t boundary_tolerance = 25; //5
     uint32_t max_clip = 25; //25
@@ -1016,16 +625,22 @@ namespace bramble {
       similarity_threshold,           // similarity threshold
       false,                          // ignore small exons?
       0,                              // small exon size
-      max_junc_gap,                   // max junction gap
-      {false, {}}                     // default result
+      max_junc_gap                    // max junction gap
     }; 
 
-    ReadEvaluationResult res = evaluate_exon_chains(bundle, id, g2t, config);
-    return res;
+    auto matches = evaluate_exon_chains(read, id, g2t, config);
+    // for (auto &pair : matches) {
+    //   tid_t tid = pair.first;
+    //   auto match = pair.second;
+    //   std::string tid_string = g2t->getTidName(tid);
+    //   printf("match tid = %s\n", tid_string.c_str());
+    // }
+    return matches;
   }
 
-  ReadEvaluationResult 
-  LongReadEvaluator::evaluate(BundleData *bundle, read_id_t id, g2tTree *g2t) {
+  std::unordered_map<tid_t, ExonChainMatch> 
+  LongReadEvaluator::evaluate(CReadAln * read, 
+                              read_id_t id, g2tTree *g2t) {
 
     uint32_t boundary_tolerance = 20;
     uint32_t max_clip = 20;
@@ -1044,12 +659,11 @@ namespace bramble {
       similarity_threshold,           // similarity threshold
       true,                           // ignore small exons?
       SMALL_EXON,                     // small exon size
-      max_junc_gap,                   // max junction gap
-      {false, {}}                     // default result
+      max_junc_gap                    // max junction gap
     };   
 
-    ReadEvaluationResult res = evaluate_exon_chains(bundle, id, g2t, config); 
-    return res;
+    auto matches = evaluate_exon_chains(read, id, g2t, config); 
+    return matches;
   }
 
 } // namespace bramble

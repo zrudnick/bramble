@@ -6,7 +6,6 @@ namespace bramble {
   struct CReadAln;
   struct BamIO;
   struct g2tTree;
-  struct BundleData;
   struct IntervalNode;
 
   // i'll make this a uint32_t* at some point
@@ -63,13 +62,19 @@ namespace bramble {
   };
 
   struct ExonChainMatch {
-    tid_t tid;
     AlignInfo align;
     pos_t secondary_pos;
     uint32_t transcript_length;
     uint32_t ref_consumed;
     uint32_t total_coverage;
     uint32_t total_read_length;
+  };
+
+  enum ExonStatus {
+    FIRST_EXON = 0,
+    MIDDLE_EXON = 1,
+    LAST_EXON = 2,
+    ONLY_EXON = 3
   };
 
   struct ReadOut {
@@ -96,7 +101,7 @@ namespace bramble {
   };
 
   struct ReadInfo {
-    std::vector<ExonChainMatch> matches;
+    std::unordered_map<tid_t, ExonChainMatch> matches;
     bool valid_read;
     bool is_paired;
 
@@ -136,10 +141,10 @@ namespace bramble {
     ~BamInfo() {}
   };
 
-  struct ReadEvaluationResult {
-    bool valid;
-    std::vector<ExonChainMatch> matches;
-  };
+  // struct ReadEvaluationResult {
+  //   bool valid;
+  //   std::unordered_map<tid_t, ExonChainMatch> matches;
+  // };
 
   struct ReadEvaluationConfig {
     uint32_t boundary_tolerance;    // boundary tolerance
@@ -152,7 +157,7 @@ namespace bramble {
     bool ignore_small_exons;        // should we ignore small exons?
     uint32_t small_exon_size;       // size of small exon
     uint32_t max_junc_gap;          // max junc mismatch
-    ReadEvaluationResult default_result;
+    //ReadEvaluationResult default_result;
   };
 
   class ReadEvaluator {
@@ -160,149 +165,99 @@ namespace bramble {
     virtual ~ReadEvaluator();
 
     // Evaluate a single read and return structured result
-    virtual ReadEvaluationResult 
-    evaluate(BundleData *bundle, uint read_index, g2tTree *g2t) = 0;
+    virtual std::unordered_map<tid_t, ExonChainMatch> 
+    evaluate(CReadAln * read, read_id_t id, g2tTree *g2t) = 0;
   
   protected:
     
-    /**
-    * Get the match position for this transcript
-    *
-    * @param interval first interval the read matched to
-    * @param tid transcript id
-    * @param read_strand strand that the read aligned to
-    * @param g2t g2t tree for bundle
-    * @param exon_start start of first read exon
-    * @param used_backwards_overhang did we match backwards to a previous 
-    * interval?
-    * (USE_FASTA mode)
-    */
-    pos_t get_match_pos(IntervalNode *interval, tid_t tid, 
-                        char strand, g2tTree *g2t, 
-                        uint exon_start, bool used_backwards_overhang);
-
-    std::tuple<uint32_t, uint32_t> 
-    get_exon_coordinates(BundleData *bundle, GSeg exon, char strand);
-
     std::string reverse_complement(const std::string &seq);
 
     std::string extract_sequence(char *gseq, uint start, 
                                 uint length, char strand);
-
-    /**
-     * Check if we can match forwards to another interval (USE_FASTA mode)
-     *
-     * @param interval first interval the read matched to
-     */
-    bool search_forward(IntervalNode *interval, uint exon_end,
-                        char read_strand,
-                        std::set<tid_t> &exon_tids, g2tTree *g2t,
-                        BundleData *bundle);
-
-    // Function to check backward overhang (left extension)
-    bool search_backward(IntervalNode *interval, uint exon_start,
-                        char read_strand,
-                        std::set<tid_t> &exon_tids, g2tTree *g2t,
-                        BundleData *bundle);
     
-    std::vector<char> get_strands_to_check(CReadAln* read);
+    std::vector<char> get_strands_to_check(CReadAln * read);
 
-    std::set<tid_t> get_candidate_tids(std::vector<IntervalNode *> intervals,
-                                      std::vector<ExonChainMatch> &matches,
-                                      std::unordered_map<tid_t, std::shared_ptr<Cigar>> &subcigars,
-                                      uint32_t exon_start, uint32_t exon_end,
-                                      bool is_first_exon, bool is_last_exon, g2tTree *g2t);
-
-    void add_operation_for_all(std::vector<ExonChainMatch> &matches,
+    void add_operation_for_all(std::unordered_map<tid_t, ExonChainMatch> &matches,
                               uint32_t length, uint8_t op, g2tTree *g2t, 
                               char strand);
 
-    void hide_small_exon(std::vector<ExonChainMatch> &matches, 
+    void hide_small_exon(std::unordered_map<tid_t, ExonChainMatch> &matches,
                         uint32_t exon_start, uint32_t exon_end,
-                        bool is_first_exon, bool is_last_exon, g2tTree *g2t, char strand);
+                        ExonStatus status, g2tTree *g2t, char strand);
 
-    void filter_tids(std::vector<IntervalNode *> intervals,
-                    std::unordered_map<tid_t, IntervalNode *> prev_intervals,
-                    std::set<tid_t> &candidate_tids, 
-                    uint32_t exon_start, g2tTree* g2t, 
-                    char strand, std::unordered_map<tid_t, uint32_t> &gaps);
+    void ensure_continuity(std::vector<std::shared_ptr<IntervalNode>> &intervals,
+                          std::unordered_map<tid_t, uint8_t> &exon_id_map, 
+                          ExonStatus status);
 
-    bool check_first_exon(uint32_t exon_start, uint32_t interval_start,
-                          uint32_t exon_end, uint32_t interval_end,
-                          bool is_last_exon, uint32_t max_clip_size,
-                          uint32_t tolerance, uint32_t max_junc_gap,
-                          char strand);
+    // bool check_first_exon(std::vector<std::shared_ptr<IntervalNode>> intervals,
+    //                       GSeg exon, bool is_last_exon, uint32_t max_clip_size,
+    //                       uint32_t tolerance, uint32_t max_junc_gap,
+    //                       char strand);
 
-    bool check_middle_exon(uint32_t exon_start, uint32_t interval_start,
-                          uint32_t exon_end, uint32_t interval_end,
-                          uint32_t tolerance, uint32_t max_junc_gap,
-                          char strand);
+    // bool check_middle_exon(uint32_t exon_start, uint32_t interval_start,
+    //                       uint32_t exon_end, uint32_t interval_end,
+    //                       uint32_t tolerance, uint32_t max_junc_gap,
+    //                       char strand);
 
-    bool check_last_exon(uint32_t exon_start, uint32_t interval_start,
-                        uint32_t exon_end, uint32_t interval_end,
-                        uint32_t max_clip_size, uint32_t tolerance, 
-                        uint32_t max_junc_gap, char strand);
+    // bool check_last_exon(uint32_t exon_start, uint32_t interval_start,
+    //                     uint32_t exon_end, uint32_t interval_end,
+    //                     uint32_t max_clip_size, uint32_t tolerance, 
+    //                     uint32_t max_junc_gap, char strand);
 
-    void build_exon_cigar(std::vector<ExonChainMatch> &matches,
-                          std::unordered_map<tid_t, std::shared_ptr<Cigar>> &subcigars,
-                          bool is_first_exon, bool is_last_exon,
-                          uint32_t exon_start, uint32_t exon_end,
-                          uint32_t interval_start, uint32_t interval_end,
+    void build_exon_cigar(std::unordered_map<tid_t, ExonChainMatch> &matches,
+                          ExonStatus status, uint32_t exon_start, uint32_t exon_end,
+                          std::vector<std::shared_ptr<IntervalNode>> &intervals,
                           std::unordered_map<tid_t, uint32_t> &gaps, g2tTree* g2t, char strand);
 
-    void compile_matches(std::vector<ExonChainMatch> &matches,
-                        std::set<tid_t> candidate_tids, 
-                        std::unordered_map<tid_t, IntervalNode *> &first_intervals, 
-                        char strand, g2tTree* g2t, 
-                        uint32_t exon_start, uint32_t exon_end,
-                        uint32_t cumulative_length, uint32_t coverage_augment,
-                        bool used_backwards_overhang);
+    void compile_matches(std::unordered_map<tid_t, ExonChainMatch> &matches,
+                        std::vector<std::shared_ptr<IntervalNode>> &intervals, 
+                        char strand, uint32_t exon_start, uint32_t exon_end,
+                        uint32_t cumulative_length, uint32_t coverage_augment);
 
-    bool update_matches(std::vector<ExonChainMatch> &matches,
-                        std::set<tid_t> candidate_tids, 
-                        std::unordered_map<tid_t, IntervalNode *> &first_intervals, 
-                        char strand, g2tTree* g2t,
-                        uint32_t exon_start, uint32_t exon_end,
-                        bool is_first_exon,
-                        std::unordered_map<tid_t, uint32_t> &gaps,
-                        bool used_backwards_overhang);
+    bool update_matches(std::unordered_map<tid_t, ExonChainMatch> &matches,
+                        std::vector<std::shared_ptr<IntervalNode>> &intervals, 
+                        char strand, uint32_t exon_start, uint32_t exon_end,
+                        ExonStatus status);
 
-    void get_prev_intervals(std::vector<IntervalNode *> intervals,
-                            std::set<tid_t> candidate_tids,
-                            std::unordered_map<tid_t, IntervalNode *> &prev_intervals,
-                            char strand);
+    // void get_prev_intervals(std::vector<IntervalNode> intervals,
+    //                         std::set<tid_t> candidate_tids,
+    //                         std::unordered_map<tid_t, IntervalNode> &prev_intervals,
+    //                         char strand);
 
-    void get_first_intervals(std::vector<IntervalNode *> intervals,
-                            std::set<tid_t> candidate_tids,
-                            char strand,
-                            std::unordered_map<tid_t, IntervalNode *> &first_intervals);
+    // void get_first_intervals(std::vector<IntervalNode> intervals,
+    //                         std::set<tid_t> candidate_tids,
+    //                         char strand,
+    //                         std::unordered_map<tid_t, IntervalNode> &first_intervals);
 
-    void filter_by_similarity(std::vector<ExonChainMatch> &matches,
+    void filter_by_similarity(std::unordered_map<tid_t, ExonChainMatch> &matches,
                               double similarity_threshold);
 
   public:
-    ReadEvaluationResult 
-    evaluate_exon_chains(BundleData *bundle, read_id_t id, g2tTree *g2t,
-                        ReadEvaluationConfig config);
+    std::unordered_map<tid_t, ExonChainMatch> 
+    evaluate_exon_chains(CReadAln *read, read_id_t id, 
+                        g2tTree *g2t, ReadEvaluationConfig config);
   };
 
   class ShortReadEvaluator : public ReadEvaluator {
 
   public:
-    ReadEvaluationResult evaluate(BundleData *bundle, read_id_t id, 
-                                  g2tTree *g2t) override;
+    std::unordered_map<tid_t, ExonChainMatch> 
+    evaluate(CReadAln *read, read_id_t id, g2tTree *g2t) override;
 
   };
 
   class LongReadEvaluator : public ReadEvaluator {
 
   public:
-    ReadEvaluationResult evaluate(BundleData *bundle, read_id_t id, 
-                                  g2tTree *g2t) override;
+    std::unordered_map<tid_t, ExonChainMatch> 
+    evaluate(CReadAln *read, read_id_t id, g2tTree *g2t) override;
   };
 
   // -------- function definitions
 
-  void convert_reads(BundleData *bundle, BamIO *io);
+  void convert_reads(std::vector<CReadAln *> &reads,
+                    std::shared_ptr<g2tTree> g2t, 
+                    std::shared_ptr<ReadEvaluator> evaluator, 
+                    BamIO *io);
 
 }

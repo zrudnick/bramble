@@ -59,6 +59,7 @@ namespace bramble {
   // Read Alignment
   struct CReadAln : public GSeg {
     char strand;                  // 1, 0 (unknown), -1 (reverse)
+    refid_t refid;                // chromosome origin
     short int nh;
     uint32_t len;
     float read_count;             // keeps count for all reads (including paired and unpaired)
@@ -76,10 +77,11 @@ namespace bramble {
     GVec<GSeg> segs;  // "exons"
     GSamRecord *brec; // store BAM record
 
-    CReadAln(char _strand = 0, short int _nh = 0, 
-      int rstart = 0, int rend = 0)
+    CReadAln(char _strand = 0, refid_t id = 0, 
+      short int _nh = 0, int rstart = 0, int rend = 0)
       : GSeg(rstart, rend),
         strand(_strand), 
+        refid(id),
         nh(_nh), 
         len(0), 
         read_count(0), 
@@ -96,6 +98,7 @@ namespace bramble {
     CReadAln(CReadAln &rd) 
       : GSeg(rd.start, rd.end) { // copy contructor
           strand = rd.strand;
+          refid = rd.refid;
           nh = rd.nh;
           len = rd.len;
           read_count = rd.read_count;
@@ -166,28 +169,19 @@ namespace bramble {
 
   // -------- function definitions
 
-  void process_exons(GSamRecord *brec, CReadAln *readaln);
+  void process_exons(GSamRecord *brec, CReadAln *read);
 
-  int add_new_read(BundleData &bundle, CReadAln *readaln, GSamRecord *brec);
+  std::string create_read_id(const char *read_name, int32_t pos, int32_t hi);
 
-  void update_bundle_end(uint bundle_end, BundleData &bundle, int read_end);
+  void add_pair_if_new(CReadAln *read, int pair_id, float read_count);
 
-  float calculate_read_count(GSamRecord *brec);
+  void process_pairs(std::vector<CReadAln *> &reads,
+                    read_id_t id, GSamRecord *brec, int32_t hi, 
+                    float read_count, GHash<int> &hashread);
 
-  std::string create_read_id(const char *read_name, int position, int hi);
-
-  void add_pair_if_new(CReadAln *read_aln, int pair_index, float read_count);
-
-  void establish_pairing(BundleData &bundle, int read1_index, int read2_index,
-                      float read_count);
-
-  void process_paired_reads(BundleData &bundle, int bundle_start, int read_start,
-                          int read_index, GSamRecord *brec, float read_count,
-                          int hi, GHash<int> &hashread);
-
-  void process_read_in(uint bundle_start, uint bundle_end, BundleData &bundle,
-                    GHash<int> &hashread, GSamRecord *brec, char strand, 
-                    int nh, int hi);
+  void process_read_in(std::vector<CReadAln *> &reads, 
+                      read_id_t id, GSamRecord *brec, char strand, 
+                      refid_t refid, int32_t nh, int32_t hi, GHash<int> &hashread);
 
   void build_bundles(BamIO* io, BundleData *bundles, BundleData* bundle, 
                     GPVec<BundleData> *bundle_queue, GVec<GRefData> refguides, 

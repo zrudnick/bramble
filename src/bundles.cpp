@@ -31,7 +31,7 @@
 #include "time.h"
 
 extern bool VERBOSE;     // Verbose, --verbose
-extern bool DEBUG;
+extern bool DEBUG_;
 extern bool LONG_READS;  // BAM file contains long reads, --long
 extern bool FR_STRAND;   // Read 1 is on forward strand, --fr
 extern bool RF_STRAND;   // Read 1 is on reverse strand, --fr
@@ -72,30 +72,16 @@ extern GFastMutex bam_io_mutex;  // Protects BAM io
 
 extern bool no_more_bundles;
 
-uint32_t dropped_reads;
-uint32_t unresolved_reads;
+// uint32_t dropped_reads;
+// uint32_t unresolved_reads;
 
 namespace bramble {
 
-  void process_exons(GSamRecord *brec, CReadAln *readaln) {
+  void process_exons(GSamRecord *brec, CReadAln *read) {
     auto exons = brec->exons;
     for (int i = 0; i < exons.Count(); i++) {
-      readaln->len += exons[i].len();
-      readaln->segs.Add(exons[i]);
-    }
-  }
-
-  int add_new_read(BundleData &bundle, CReadAln *readaln, GSamRecord *brec) {
-    bundle.reads.emplace_back(readaln);
-    int n = static_cast<int>(bundle.reads.size()) - 1;
-    bundle.reads[n]->brec = brec;
-    return n;
-  }
-
-  void update_bundle_end(uint bundle_end, BundleData &bundle, int read_end) {
-    if (read_end > bundle_end) {
-      bundle_end = read_end;
-      bundle.end = bundle_end;
+      read->len += exons[i].len();
+      read->segs.Add(exons[i]);
     }
   }
 
@@ -109,90 +95,62 @@ namespace bramble {
     return read_count;
   }
 
-  std::string create_read_id(const char *read_name, int position, int hi) {
+  std::string 
+  create_read_id(const char *read_name, int32_t pos, int32_t hi) {
     std::string id(read_name);
-    id += '-'; id += position; id += ".="; id += hi;
+    id += '-'; id += pos; id += ".="; id += hi;
     return id;
   }
 
-  void add_pair_if_new(CReadAln *read_aln, int pair_index, float read_count) {
-    // Check if pairing already exists
-    for (int i = 0; i < read_aln->pair_idx.Count(); i++) {
-      if (read_aln->pair_idx[i] == pair_index) {
-        return; // Pairing already exists
+  void add_pair_if_new(CReadAln *read, int pair_id, float read_count) {
+    for (int i = 0; i < read->pair_idx.Count(); i++) {
+      if (read->pair_idx[i] == pair_id) {
+        return; // pairing already exists
       }
     }
 
-    // Add new pairing
-    read_aln->pair_idx.Add(pair_index);
-    read_aln->pair_count.Add(read_count);
+    read->pair_idx.Add(pair_id);
+    read->pair_count.Add(read_count);
   }
 
-  void establish_pairing(BundleData &bundle, int read1_index, int read2_index,
-                        float read_count) {
-
-    // Add pairing information to both reads if not already present
-    add_pair_if_new(bundle.reads[read1_index], read2_index, read_count);
-    add_pair_if_new(bundle.reads[read2_index], read1_index, read_count);
-  }
-
-  void process_paired_reads(BundleData &bundle, int bundle_start, int read_start,
-                            int read_index, GSamRecord *brec, float read_count,
-                            int hi, GHash<int> &hashread) {
+  void process_pairs(std::vector<CReadAln *> &reads, 
+                    read_id_t id, GSamRecord *brec, int32_t hi, 
+                    float read_count, GHash<int> &hashread) {
 
     // Only process pairs on same chromosome/contig
     if (brec->refId() != brec->mate_refId())
       return;
 
-    int mate_start = brec->mate_start();
+    int32_t read_start = reads[id]->start;
+    int32_t mate_start = brec->mate_start();
 
-    // Ignore pairs in previous bundles
-    if (mate_start < bundle_start)
-      return;
-
-    // Handle pair processing based on mate position
     if (mate_start <= read_start) {
       std::string read_id =
-          create_read_id(bundle.reads[read_index]->brec->name(), mate_start, hi);
-
-      const int *mate_index = hashread[read_id.c_str()];
-      if (mate_index) {
-        establish_pairing(bundle, read_index, *mate_index, read_count);
+        create_read_id(reads[id]->brec->name(), mate_start, hi);
+      int *mate_id = hashread[read_id.c_str()];
+      if (mate_id) {
+        add_pair_if_new(reads[id], *mate_id, read_count);
+        add_pair_if_new(reads[*mate_id], id, read_count);
         hashread.Remove(read_id.c_str());
       }
-
     } else {
       std::string read_id = create_read_id(brec->name(), read_start, hi);
-      hashread.Add(read_id.c_str(), read_index);
+      hashread.Add(read_id.c_str(), id);
     }
   }
 
-  void process_read_in(uint bundle_start, uint bundle_end, BundleData &bundle,
-                      GHash<int> &hashread, GSamRecord *brec, char strand, 
-                      int nh, int hi) {
-
-    // Extract alignment information
-    int read_start = brec->start;
+  void process_read_in(std::vector<CReadAln *> &reads, read_id_t id,
+                      GSamRecord *brec, char strand, refid_t refid, 
+                      int32_t nh, int32_t hi, GHash<int> &hashread) {
 
     // Create new read alignment
-    CReadAln *readaln = new CReadAln(strand, nh, brec->start, brec->end);
-    readaln->longread = (LONG_READS || brec->uval);
-
-    // Process exons
-    process_exons(brec, readaln);
-
-    // Add read to bundle
-    int n = add_new_read(bundle, readaln, brec);
-
-    // Update bundle end if necessary
-    update_bundle_end(bundle_end, bundle, brec->end);
-
-    // Calculate read count with multi-mapping correction
+    CReadAln *read = new CReadAln(strand, refid, nh, brec->start, brec->end);
+    read->brec = brec;
+    reads.emplace_back(read);
+    
+    process_exons(brec, read);
     float read_count = calculate_read_count(brec);
-
-    // Handle paired-end reads
-    process_paired_reads(bundle, bundle_start, read_start, n, brec,
-                        read_count, hi, hashread);
+    process_pairs(reads, id, brec, hi, read_count, hashread);
   }
 
   char get_splice_strand(GSamRecord* brec){
@@ -324,10 +282,10 @@ namespace bramble {
     // Track which guides we've already added to avoid duplicates
     int first_guide_in_range = 0;
 
-    uint32_t all_reads = 0;
-    uint32_t unmapped_reads = 0;
-    dropped_reads = 0;
-    unresolved_reads = 0;
+    // uint32_t all_reads = 0;
+    // uint32_t unmapped_reads = 0;
+    // dropped_reads = 0;
+    // unresolved_reads = 0;
 
     while (more_alignments) {
       const char *ref_name = NULL;
@@ -343,10 +301,10 @@ namespace bramble {
       // Get next alignment
       if ((brec = io->next()) != NULL) {
         rec_count += 1;
-        all_reads++;
+        //all_reads++;
         
         if (brec->isUnmapped()) {
-          unmapped_reads++;
+          //unmapped_reads++;
           continue;
         }
 
@@ -362,7 +320,7 @@ namespace bramble {
         new_chromosome = (last_ref_name.is_empty() || last_ref_name != ref_name);
         if (new_chromosome) {
           ref_id = guide_seq_names->gseqs.addName(ref_name);
-          if (ref_id >= n_refguides && DEBUG) {
+          if (ref_id >= n_refguides && DEBUG_) {
             GMessage("WARNING: no reference transcripts found for genomic sequence \"%s\"!\n", ref_name);
           }
           prev_pos = 0;
@@ -421,14 +379,14 @@ namespace bramble {
         }
 
         if (!more_alignments) {
-          wait_for_bundles();
+          //wait_for_bundles();
           break;
         }
 
         #ifndef NOTHREADS
-          int new_bidx = wait_for_data(bundles);
-          if (new_bidx < 0) break;
-          bundle = &(bundles[new_bidx]);
+          //int new_bidx = wait_for_data(bundles);
+          //if (new_bidx < 0) break;
+          //bundle = &(bundles[new_bidx]);
         #endif
 
         // Initialize new bundle with first read
@@ -524,8 +482,8 @@ namespace bramble {
       }
 
       // Process the read
-      process_read_in(bundle_min_pos, bundle_max_pos, *bundle, 
-        hashread, brec, splice_strand, nh, hi);
+      // process_read_in(bundle_min_pos, bundle_max_pos, *bundle, 
+      //   hashread, brec, splice_strand, nh, hi);
     }
 
     // GMessage("#total input reads is:    %d\n", all_reads);

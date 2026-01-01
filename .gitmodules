@@ -1,0 +1,9 @@
+[submodule "external/coitrees"]
+	path = external/coitrees
+	url = https://github.com/dcjones/coitrees
+[submodule "subprojects/nclist"]
+	path = subprojects/nclist
+	url = https://github.com/LTLA/nclist-cpp
+[submodule "subprojects/cgranges"]
+	path = subprojects/cgranges
+	url = https://github.com/lh3/cgranges

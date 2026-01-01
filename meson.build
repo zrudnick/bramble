@@ -6,7 +6,7 @@ cc = meson.get_compiler('cpp')
 base_flags = [
   '-Wall', '-Wextra', '-fsigned-char',
   '-D_FILE_OFFSET_BITS=64', '-D_LARGEFILE_SOURCE',
-  '-fno-strict-aliasing', '-fno-rtti',
+  '-fno-strict-aliasing', '-fno-rtti'
 ]
 
 if get_option('buildtype') == 'debug'
@@ -32,6 +32,7 @@ gclib_dir = 'gclib'
 #htslib_sp = subproject('htslib')
 htslib_inc = subproject('htslib').get_variable('htslib_inc')
 htslib_lib = subproject('htslib').get_variable('htslib_lib')
+cgranges_dep = subproject('cgranges').get_variable('cgranges_dep')
 gclib_dep = declare_dependency(
   include_directories: gclib_dir,
   dependencies: [htslib_dep]
@@ -59,7 +60,7 @@ gclib_srcs = files(
   'gclib/GFaSeqGet.cpp', 'gclib/gff.cpp', 'gclib/GThreads.cpp'
 )
 
-main_srcs = files('src/bramble.cpp', 'src/bam.cpp', 'src/bundles.cpp', 'src/threads.cpp',
+main_srcs = files('src/bramble.cpp', 'src/bam.cpp', 'src/bundles.cpp',
 'src/core.cpp', 'src/mates.cpp', 'src/evaluate.cpp', 'src/g2t.cpp')
 
 # Optional sanitizers
@@ -93,9 +94,7 @@ if get_option('static_cpp')
   add_project_link_arguments(['-static-libstdc++', '-static-libgcc'], language: 'cpp')
 endif
 
-
 executable('bramble', gclib_srcs + main_srcs + gclib_target,
   include_directories: inc_dirs,
-  dependencies: [htslib_dep, quill_dep, gclib_dep] + libs,
-  # link_args : ['-fsanitize=address']
+  dependencies: [htslib_dep, quill_dep, gclib_dep, cgranges_dep] + libs,
 )
