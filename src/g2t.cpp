@@ -66,38 +66,54 @@ namespace bramble {
   IntervalTree::findOverlapping(uint32_t qstart, uint32_t qend, 
                                 char strand, ReadEvaluationConfig config, 
                                 ExonStatus status) {
-    
+    //printf("NEW QUERY\n");
     std::vector<std::shared_ptr<IntervalNode>> intervals;
     std::vector<size_t> hits;
+    // printf("iit = %p\n", iit);
     iit->overlap(qstart, qend, hits);
     if (hits.empty()) {
-      // printf("hits are empty\n");
+      //printf("hits are empty\n");
       return intervals;
+    }
+
+    if (config.print) {
+      printf("qstart = %d, qend = %d, strand = %d\n", qstart, qend, strand);
+      for (size_t idx : hits) {
+        uint32_t s = iit->start(idx);
+        uint32_t e = iit->end(idx);
+        printf("s = %d, e = %d\n", s, e);
+      }
     }
 
     for (size_t idx : hits) {
       uint32_t s = iit->start(idx);
       uint32_t e = iit->end(idx);
 
-      if (qstart < s && e < qend) continue;
+      if (qstart < s && e < qend) {
+        if (config.print) {
+          printf("general problem 1\n");
+          printf("s - qstart = %d, qend - e = %d\n", s - qstart, qend - e);
+        }
+        
+        continue;
+      }
       if ((!SOFT_CLIPS || STRICT) && (qstart < s || e < qend)) continue;
       const IITData& data = iit->data(idx);
 
       auto interval = std::make_shared<IntervalNode>(s, e);
       interval->tid = data.tid;
 
-      // if (interval->tid == 14172) {
-      //   printf("New exon\n");
-      //   printf("s = %d, e = %d\n", s, e);
-      //   printf("qs = %d, qe = %d\n", qstart, qend);
-      // }
-
       if (strand == '+') {
-        if (s < qstart) {
+        if (s <= qstart) {
           interval->pos = (qstart - s) + data.cum_len;
           if (e < qend) {
             interval->right_clip = qend - e;
             if (interval->right_clip > config.max_clip_size) {
+              if (config.print) {
+                printf("right side clip problem 1\n");
+                printf("proposed right clip: %d\n", interval->right_clip);
+              }
+              
               continue;
             }
           }
@@ -105,32 +121,38 @@ namespace bramble {
           interval->pos = data.cum_len;
           interval->left_clip = s - qstart;
           if (interval->left_clip > config.max_clip_size) {
+            if (config.print) {
+              printf("left side clip problem 1\n");
+              printf("proposed left clip: %d\n", interval->left_clip);
+            }
+            
             continue;
           }
         }
 
       } else {
-        if (qend < e) {
+        if (qend <= e) {
           interval->pos = (e - qend) + data.cum_len;
-          //interval->pos = ()
-          // if (interval->tid == 14172) {
-          //   printf("qend < e\n");
-          //   printf("pos = %d, cum_len = %d\n", interval->pos, data.cum_len);
-          // }
           if (qstart < s) {
             interval->left_clip = s - qstart;
             if (interval->left_clip > config.max_clip_size) {
+              if (config.print) {
+                printf("left side clip problem 2\n");
+                printf("proposed left clip: %d\n", interval->left_clip);
+              }
+              
               continue;
             }
           }
         } else {
           interval->pos = data.cum_len;
-          // if (interval->tid == 14172) {
-          //   printf("e <= qend\n");
-          //   printf("pos = %d, cum_len = %d\n", interval->pos, data.cum_len);
-          // }
           interval->right_clip = qend - e;
           if (interval->right_clip > config.max_clip_size) {
+            if (config.print) {
+              printf("right side clip problem 2\n");
+              printf("proposed right clip: %d\n", interval->right_clip);
+            }
+            
             continue;
           }
         }
@@ -140,12 +162,22 @@ namespace bramble {
       if ((status == FIRST_EXON || status == MIDDLE_EXON) 
           && (qend < e)) { // right side
         if (e - qend > config.max_junc_gap) {
+          if (config.print) {
+            printf("right side splice junction problem\n");
+            printf("e - qend: %d\n", e - qend);
+          }
+          
           continue;
         }
       }
       if ((status == MIDDLE_EXON || status == LAST_EXON) 
           && (s < qstart)) { // left side
-        if (qstart - e > config.max_junc_gap) {
+        if (qstart - s > config.max_junc_gap) {
+          if (config.print) {
+            printf("left side splice junction problem\n");
+            printf("qstart - s: %d\n", qstart - s);
+          }
+          
           continue;
         }
       }
@@ -156,12 +188,15 @@ namespace bramble {
       intervals.emplace_back(interval);
     }
 
-    //printf("intervals are compiled!\n");
-    // for (auto &interval : intervals) {
-    //   if (interval->tid == 14172) {
-    //     printf("tid = %d\n", interval->tid);
-    //   }
-    // }
+    if (config.print) {
+      if (!(intervals.empty())) {
+        printf("found at least 1 interval\n");
+      } else {
+        printf("no intervals\n");
+      }
+      printf("\n");
+    }
+    
 
     return intervals;
 

@@ -14,6 +14,8 @@
 namespace bramble {
 
   struct BamIO;
+  struct g2tTree;
+  struct ReadEvaluator;
 
   // Collect all refguide transcripts for a single genomic sequence
   struct GRefData {
@@ -114,57 +116,36 @@ namespace bramble {
   // Bundle data structure, holds input data parsed from BAM file
   struct BundleData {
     BundleStatus status; // bundle status
-
     int idx; // index in the main bundles array
-    int start; // bundle start
-    int end; // bundle end
-    unsigned long num_reads; // number of reads in this bundle
-
-    GStr refseq;           // reference sequence name
-    char* gseq;            // genomic sequence for the bundle
-    GPVec<GffObj> guides;  // all guides in bundle
     std::vector<CReadAln *> reads; // all reads in bundle
+
+    g2tTree *g2t;
+    ReadEvaluator *evaluator;
 
     BundleData()
       : status(BundleStatus::BUNDLE_STATUS_CLEAR), 
-        idx(0), 
-        start(0), 
-        end(0), 
-        refseq(), 
-        gseq(NULL), 
-        guides(false),
-        reads() {}
+        idx(0),
+        reads(),
+        g2t(),
+        evaluator() {}
   
     // Called when the bundle is valid and ready to be processed
-    void getReady(int curr_start, int curr_end) {
-      start = curr_start;
-      end = curr_end;
+    void getReady() {
       status = BundleStatus::BUNDLE_STATUS_READY;
     }
 
-    void keepGuide(GffObj *t) {
-      guides.Add(t);
-    }
-
     void Clear() {
-
-      guides.Clear();
-
       // delete each CReadAln*
       for (auto &aln : reads) {
         delete aln;
       }
       reads.clear();
-
-      // TODO: Think about managing this with a unique_ptr
-      GFREE(gseq); 
-
-      start = 0;
-      end = 0;
       status = BundleStatus::BUNDLE_STATUS_CLEAR;
     }
 
-    ~BundleData() { Clear(); }
+    ~BundleData() { 
+      Clear(); 
+    }
   };
 
   // -------- function definitions
@@ -183,9 +164,11 @@ namespace bramble {
                       read_id_t id, GSamRecord *brec, char strand, 
                       refid_t refid, int32_t nh, int32_t hi, GHash<int> &hashread);
 
-  void build_bundles(BamIO* io, BundleData *bundles, BundleData* bundle, 
-                    GPVec<BundleData> *bundle_queue, GVec<GRefData> refguides, 
-                    int n_refguides, std::shared_ptr<GffNames> guide_seq_names);
+  void push_bundle(BundleData *bundle, GPVec<BundleData> *bundle_queue);
+
+  // void build_bundles(BamIO* io, BundleData *bundles, BundleData* bundle, 
+  //                   GPVec<BundleData> *bundle_queue, GVec<GRefData> refguides, 
+  //                   int n_refguides, std::shared_ptr<GffNames> guide_seq_names);
 
 }
 

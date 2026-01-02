@@ -158,6 +158,7 @@ namespace bramble {
     uint32_t small_exon_size;       // size of small exon
     uint32_t max_junc_gap;          // max junc mismatch
     //ReadEvaluationResult default_result;
+    bool print;
   };
 
   class ReadEvaluator {
@@ -187,7 +188,7 @@ namespace bramble {
 
     void ensure_continuity(std::vector<std::shared_ptr<IntervalNode>> &intervals,
                           std::unordered_map<tid_t, uint8_t> &exon_id_map, 
-                          ExonStatus status);
+                          ExonStatus status, char strand);
 
     // bool check_first_exon(std::vector<std::shared_ptr<IntervalNode>> intervals,
     //                       GSeg exon, bool is_last_exon, uint32_t max_clip_size,
@@ -256,8 +257,7 @@ namespace bramble {
   // -------- function definitions
 
   void convert_reads(std::vector<CReadAln *> &reads,
-                    std::shared_ptr<g2tTree> g2t, 
-                    std::shared_ptr<ReadEvaluator> evaluator, 
+                    g2tTree *g2t, ReadEvaluator *evaluator, 
                     BamIO *io);
 
 }

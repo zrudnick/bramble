@@ -60,7 +60,7 @@ Options:\n\
 // --rf       : assume stranded library fw-secondstrand\n\
 
 bool VERBOSE = false;     // Verbose, --verbose
-bool DEBUG_ = false;
+bool BRAMBLE_DEBUG = false;
 bool LONG_READS = false;  // BAM file contains long reads, --long
 bool FR_STRAND = true;   // Read 1 is on forward strand, --fr
 bool RF_STRAND = false;   // Read 1 is on reverse strand, --fr
@@ -109,19 +109,6 @@ bool no_more_bundles = false;
 uint32_t dropped_reads;
 uint32_t unresolved_reads;
 
-std::tuple<uint32_t, uint32_t> 
-get_guide_coordinates(GffExon *g, char strand, uint32_t chr_end) {
-  uint32_t g_start, g_end;
-  // if (strand == '+') {
-    g_start = g->start;
-    g_end = (g->end + 1);
-  // } else {
-  //   g_start = chr_end - (g->end + 1);
-  //   g_end = chr_end - g->start;  
-  // }
-  return std::make_tuple(g_start, g_end);
-}
-
 struct GuideStruct {
   GVec<GRefData> refguides;
   int n_refguides;
@@ -139,7 +126,7 @@ GuideStruct guide_stuff(FILE *header_file) {
   // GffReader: transcripts only, sort by location
   GffReader *gffreader = new GffReader(f, true, true); // loading only recognizable transcript features
   gffreader->setRefAlphaSorted(); // alphabetical sorting of RefSeq IDs
-  gffreader->showWarnings(DEBUG_);
+  gffreader->showWarnings(BRAMBLE_DEBUG);
 
   // keep attributes, merge close exons, no exon attributes
   // merge_close_exons must be false for correct transcriptome header
@@ -168,7 +155,7 @@ GuideStruct guide_stuff(FILE *header_file) {
 
     // Sanity check: make sure there are no exonless "genes" or other
     if (guide->exons.Count() == 0) {
-      if (DEBUG_)
+      if (BRAMBLE_DEBUG)
         // LOG_WARNING(logger, "Warning: exonless GFF {} feature with ID {} found, added "
         //          "implicit exon {}-{}.\n",
         //          guide->getFeatureName(), guide->getID(), guide->start,
@@ -231,9 +218,8 @@ std::shared_ptr<g2tTree> build_g2t_tree(GuideStruct guideStuff, BamIO *io) {
         if (strand == '-') {
           idx = exon_count - k - 1;
         } else idx = k;
-        auto coords = get_guide_coordinates(guide->exons[idx], strand, ref_len);
-        uint32_t g_start = std::get<0>(coords);
-        uint32_t g_end = std::get<1>(coords);
+        uint32_t g_start = guide->exons[idx]->start;
+        uint32_t g_end = guide->exons[idx]->end + 1;
         
         g2t->addInterval(refid, g_start, g_end, tid, (uint8_t)k, 
           cum_len, strand);
@@ -283,7 +269,10 @@ char get_strand(GSamRecord* brec) {
 }
 
 void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io, 
-                  std::shared_ptr<GffNames> guide_seq_names) {
+                  std::shared_ptr<GffNames> guide_seq_names, 
+                  BundleData *bundles, BundleData* bundle, 
+                  GPVec<BundleData> *bundle_queue) {
+
   std::shared_ptr<ReadEvaluator> evaluator;
   if (LONG_READS) {
     evaluator = std::make_shared<LongReadEvaluator>();
@@ -303,22 +292,18 @@ void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,
   GHash<int> hashread;
 
   read_id_t id = 0;
-  uint32_t chunk_size = 50000;
+  uint32_t chunk_size = 1000000;
 
   std::string prev_read_name;
   std::string read_name;
   bool new_read_name;
 
-  auto flush = [&]() {
-    convert_reads(reads, g2t, evaluator, io);
-    for (auto &read : reads) {
-      delete read;
-    }
-    reads.clear();
-    id = 0;
-  };
-
   while (more_alignments) { 
+    bool new_bundle = false;
+    char strand;
+    const char *ref_name;
+    refid_t refid;
+
     if ((brec = io->next()) != NULL) {
       all_reads++;
       if (brec->isUnmapped()) {
@@ -327,36 +312,63 @@ void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,
       }
 
       read_name = brec->name();
+      strand = get_strand(brec);
+      ref_name = brec->refName();
+      refid = guide_seq_names->gseqs.addName(ref_name);
+
       if (id == 0) {
         new_read_name = true;
       } else {
-        new_read_name = (read_name != prev_read_name);
+        if (read_name != prev_read_name) {
+          new_read_name = true;
+        } else {
+          new_read_name = false;
+        }
       }
 
-      if (id > chunk_size && new_read_name) {
-        flush();
+      if (id >= chunk_size && new_read_name) {
+        new_bundle = true;
       }
-
-      id += 1;
-      char strand = get_strand(brec);
-      const char *ref_name = brec->refName();
-      refid_t refid = guide_seq_names->gseqs.addName(ref_name);
-      process_read_in(reads, id, brec, strand, refid, 
-        brec->tag_int("NH"), brec->tag_int("HI"), hashread);
 
     } else {
       // No more alignments
       more_alignments = false;
-      flush();
+      new_bundle = true;
     }
+
+    if (new_bundle) {
+      hashread.Clear();
+      bundle->g2t = g2t.get();
+      bundle->evaluator = evaluator.get();
+
+      // Push completed bundle
+      push_bundle(bundle, bundle_queue);
+      id = 0;
+
+      if (!more_alignments) {
+        wait_for_bundles();
+        break;
+      }
+
+#ifndef NOTHREADS
+      int new_bidx = wait_for_data(bundles);
+      if (new_bidx < 0) break;
+      bundle = &(bundles[new_bidx]);
+#endif
+    }
+
+    // this_refid is an index into whatever array
+    // refid is the actual refid for the specific read
+    process_read_in(bundle->reads, id++, brec, strand, refid, 
+      brec->tag_int("NH"), brec->tag_int("HI"), hashread);
 
     prev_read_name = read_name;
   }
 
   GMessage("#total input reads is:    %d\n", all_reads);
-  GMessage("#unmapped reads is: %d\n", unmapped_reads);
-  GMessage("#dropped reads is: %d\n", dropped_reads);
-  GMessage("#unresolved reads is: %d\n\n", unresolved_reads);
+  GMessage("#unmapped reads is:       %d\n", unmapped_reads);
+  GMessage("#dropped reads is:        %d\n", dropped_reads);
+  GMessage("#unresolved reads is:     %d\n\n", unresolved_reads);
 }
 
 int main(int argc, char *argv[]) {
@@ -409,7 +421,7 @@ int main(int argc, char *argv[]) {
     GError("Error creating file: %s\n", header_path.chars());
   fprintf(header_file, "@HD\tVN:1.0\tSO:coordinate\n");
 
-  if (VERBOSE || DEBUG_) {
+  if (VERBOSE || BRAMBLE_DEBUG) {
     // print logo
     GMessage("   __                  __   __   \n");
     GMessage("  / /  _______ ___ _  / /  / /__ \n");
@@ -421,7 +433,7 @@ int main(int argc, char *argv[]) {
     
   GuideStruct guideStuff = guide_stuff(header_file);
 
-  if (VERBOSE || DEBUG_) {
+  if (VERBOSE || BRAMBLE_DEBUG) {
     GMessage("Reference annotation loaded! We found %d unique transcripts\n\n", guideStuff.gffreader->gflst.Count());
   
     if (LONG_READS) {
@@ -438,7 +450,62 @@ int main(int argc, char *argv[]) {
 
   auto g2t = build_g2t_tree(guideStuff, io);
   free_guides(guideStuff);
-  process_reads(g2t, io, guideStuff.guide_seq_names);
+
+  #ifndef NOTHREADS
+
+#define DEF_TSTACK_SIZE 8388608
+  size_t def_stack_size = DEF_TSTACK_SIZE;
+
+#ifdef _GTHREADS_POSIX_
+  size_t tstack_size = GThread::defaultStackSize();
+  if (tstack_size < DEF_TSTACK_SIZE)
+    def_stack_size = DEF_TSTACK_SIZE;
+  if (BRAMBLE_DEBUG) {
+    if (tstack_size < def_stack_size) {
+      GMessage("Default stack size for threads: %d (increased to %d)\n",
+               tstack_size, def_stack_size);
+    } else
+      GMessage("Default stack size for threads: %d\n", tstack_size);
+  }
+#endif
+
+  GThread *threads = new GThread[n_threads]; // threads for processing bundles
+  GPVec<BundleData> bundle_queue(false);
+  BundleData *bundles =
+      new BundleData[n_threads + 1];         // redef with more bundles
+
+  clear_data_pool.setCapacity(n_threads + 1);
+
+  WorkerArgs worker_args(&bundle_queue, io);
+
+  // Start worker threads
+  for (int b = 0; b < n_threads; b++) {
+    threads[b].kickStart(worker_thread, (void *)&worker_args, def_stack_size);
+    bundles[b + 1].idx = b + 1;
+    clear_data_pool.Push(b);
+  }
+  BundleData* bundle = &(bundles[n_threads]);
+
+#else
+
+  // Just put everything into the same bundle
+  BundleData bundles[1];
+  BundleData *bundle = &(bundles[0]);
+#endif
+
+  process_reads(g2t, io, guideStuff.guide_seq_names, bundles, bundle, &bundle_queue);
+
+   // Delete thread and bundle arrays
+#ifndef NOTHREADS
+  for (int t = 0; t < n_threads; t++) {
+    threads[t].join();
+  }
+  if (BRAMBLE_DEBUG) {
+    // LOG_INFO(logger, " All threads finished.\n");
+  }
+  delete[] threads;
+  delete[] bundles;
+#endif
 
   io->stop(); // close BAM reader & writer
   delete io;

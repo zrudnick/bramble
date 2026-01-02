@@ -158,10 +158,10 @@ namespace bramble {
   void 
   ReadEvaluator::ensure_continuity(std::vector<std::shared_ptr<IntervalNode>> &intervals,
                                   std::unordered_map<tid_t, uint8_t> &exon_id_map,
-                                  ExonStatus status) {
+                                  ExonStatus status, char strand) {
     
     // Keep only TIDs with correct continuity
-    if (!(status == FIRST_EXON || status == ONLY_EXON)) {
+    if (status == MIDDLE_EXON || status == LAST_EXON) {
       auto it_i = intervals.begin();
       while (it_i != intervals.end()) {
         auto interval = *it_i;
@@ -177,7 +177,10 @@ namespace bramble {
 
         uint8_t prev_exon_id = exon_id_map[tid];
         uint8_t curr_exon_id = interval->exon_id;
-        if (curr_exon_id != (prev_exon_id + 1)) {
+
+        if (strand == '+' && curr_exon_id != (prev_exon_id + 1)) {
+          it_i = intervals.erase(it_i);
+        } else if (strand == '-' && curr_exon_id != (prev_exon_id - 1)) {
           it_i = intervals.erase(it_i);
         } else {
           ++it_i;
@@ -426,6 +429,8 @@ namespace bramble {
     std::vector<uint32_t> exon_sizes;
     std::unordered_map<tid_t, uint8_t> exon_id_map;
 
+    // printf("read_name = %s\n", read_name.c_str());
+
     auto strands_to_check = get_strands_to_check(read);
     for (char strand : strands_to_check) {
       matches.clear();
@@ -440,6 +445,13 @@ namespace bramble {
       for (uint j = 0; j < exon_count; j++) {
         auto exon = read_exons[j];
         exon.end++; // make exclusive
+
+        // if (read_name == "read85009325/CHS.44955.2;mate1:613-713;mate2:613-713") {
+        //   printf("exon.start = %d, exon.end = %d\n", exon.start, exon.end);
+        //   config.print = true;
+        // } else {
+        //   config.print = false;
+        // }
 
         ExonStatus status;
         if (exon_count == 1) {
@@ -458,6 +470,12 @@ namespace bramble {
         auto intervals = g2t->getIntervals(refid, strand, exon,
           config, status);
         if (intervals.empty()) {
+          // printf("INTERVALS EMPTY\n");
+          // printf("read_name == %s\n", read_name.c_str());
+          // printf("exon_i = %d\n", j);
+          // printf("refid = %d\n", refid);
+          // printf("exon.start = %d, exon.end = %d\n", exon.start, exon.end);
+          // printf("\n");
           if (config.ignore_small_exons & is_small_exon) {
             hide_small_exon(matches, exon.start, exon.end, 
               status, g2t, strand); 
@@ -473,13 +491,24 @@ namespace bramble {
         }
 
         // Filter tids
-        ensure_continuity(intervals, exon_id_map, status);
+        ensure_continuity(intervals, exon_id_map, status, strand);
         if (intervals.empty()) {
           strand_failed = true;
           matches.clear();
-          //printf("Strand failed at filter tids\n");
+          if (config.print) {
+            printf("Strand failed at filter tids\n");
+          }
+          
           unresolved_reads++;
           break;
+        }
+
+        if (config.print) {
+          for (auto &pair : exon_id_map) {
+            tid_t tid = pair.first;
+            uint8_t ei = pair.second;
+            printf("tid = %d, ei = %d\n", tid, ei);
+          }
         }
 
         // Create exon chain matches 
@@ -499,7 +528,10 @@ namespace bramble {
           exon.start, exon.end, status);
           if (strand_failed) {
             matches.clear();
-            //printf("Strand failed at update matches\n");
+            if (config.print) { 
+              printf("Strand failed at update matches\n");
+            }
+            
             unresolved_reads++;
             break;
           }
@@ -508,7 +540,10 @@ namespace bramble {
         // Fail if we run out of candidate TIDs
         if (intervals.empty()) {
           unresolved_reads++;
-          // printf("Strand failed at candidate tids empty\n");
+          if (config.print) {
+            printf("Strand failed at candidate tids empty\n");
+          }
+          
           strand_failed = true;
           matches.clear();
           break;
@@ -540,7 +575,10 @@ namespace bramble {
         if ((status == ONLY_EXON || status == LAST_EXON) 
           && matches.empty()) {
           unresolved_reads++;
-          // printf("Strand failed at filter similarity\n");
+          if (config.print) {
+            printf("Strand failed at filter similarity\n");
+          }
+          
           strand_failed = true;
           matches.clear();
           break;
@@ -608,12 +646,12 @@ namespace bramble {
   ShortReadEvaluator::evaluate(CReadAln * read, 
                               read_id_t id, g2tTree *g2t) {
 
-    uint32_t boundary_tolerance = 25; //5
-    uint32_t max_clip = 25; //25
+    uint32_t boundary_tolerance = 5; //5
+    uint32_t max_clip = 5; //25
     uint32_t max_ins = 5;
     uint32_t max_gap = 5;
     uint32_t max_junc_gap = 0;
-    double similarity_threshold = 0.75; // 0.90
+    double similarity_threshold = 0.90; // 0.90
 
     ReadEvaluationConfig config = {
       boundary_tolerance,             // boundary tolerance
@@ -625,7 +663,8 @@ namespace bramble {
       similarity_threshold,           // similarity threshold
       false,                          // ignore small exons?
       0,                              // small exon size
-      max_junc_gap                    // max junction gap
+      max_junc_gap,                   // max junction gap
+      false                           // print debug statements
     }; 
 
     auto matches = evaluate_exon_chains(read, id, g2t, config);
@@ -659,7 +698,8 @@ namespace bramble {
       similarity_threshold,           // similarity threshold
       true,                           // ignore small exons?
       SMALL_EXON,                     // small exon size
-      max_junc_gap                    // max junction gap
+      max_junc_gap,                   // max junction gap
+      false                           // print debug statements
     };   
 
     auto matches = evaluate_exon_chains(read, id, g2t, config); 

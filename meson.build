@@ -60,7 +60,7 @@ gclib_srcs = files(
   'gclib/GFaSeqGet.cpp', 'gclib/gff.cpp', 'gclib/GThreads.cpp'
 )
 
-main_srcs = files('src/bramble.cpp', 'src/bam.cpp', 'src/bundles.cpp',
+main_srcs = files('src/bramble.cpp', 'src/bam.cpp', 'src/bundles.cpp', 'src/threads.cpp',
 'src/core.cpp', 'src/mates.cpp', 'src/evaluate.cpp', 'src/g2t.cpp')
 
 # Optional sanitizers

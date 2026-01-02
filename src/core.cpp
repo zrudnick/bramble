@@ -184,8 +184,7 @@ namespace bramble {
   }
 
   void convert_reads(std::vector<CReadAln *> &reads,
-                    std::shared_ptr<g2tTree> g2t, 
-                    std::shared_ptr<ReadEvaluator> evaluator, 
+                    g2tTree* g2t, ReadEvaluator* evaluator, 
                     BamIO *io) {
 
     // Chunk buffer for BAM output
@@ -213,7 +212,7 @@ namespace bramble {
       if (seen.count(id)) continue; // already processed as a mate
 
       ReadInfo* this_read = process_read_out(reads[id], 
-        id, g2t.get(), evaluator.get());
+        id, g2t, evaluator);
       int n_mates = reads[id]->pair_idx.Count();
 
       // Unpaired reads
@@ -232,7 +231,7 @@ namespace bramble {
         if (seen.count(mate_id)) continue;
 
         ReadInfo* mate_read = process_read_out(reads[mate_id], 
-          mate_id, g2t.get(), evaluator.get());
+          mate_id, g2t, evaluator);
         process_mate_pair(this_read, mate_read, emit_pair);
         delete mate_read;
         seen.insert(mate_id);
