@@ -6,9 +6,10 @@
 #include <algorithm>
 #include <memory>
 #include <cstdlib>
+#include <cmath>
+#include <random>
 
 #include "types.h"
-#include "bundles.h"
 #include "bramble.h"
 #include "g2t.h"
 #include "evaluate.h"
@@ -19,289 +20,498 @@
 #include "GThreads.h"
 #endif
 
-extern double similarity_threshold;
 extern bool LONG_READS;
 
 namespace bramble {
 
-  // Expand CIGAR into single per-base operations
-  void expand_cigars(uint32_t* real_cigar, uint32_t n_cigar,
-                    const Cigar& ideal_cigar,
-                    std::vector<char> &real_expanded,
-                    std::vector<char> &ideal_expanded,
-                    uint32_t real_front_soft_clip,
-                    uint32_t real_front_hard_clip) {
+  // ============================================================================
+  // STEP 1: Merge adjacent I and D into M
+  // ============================================================================
 
-    // ------ Real cigar
-
-    uint req = 0;
-    for (uint32_t k = 0; k < n_cigar; k++) {
-      uint32_t op = real_cigar[k] & BAM_CIGAR_MASK;
-      uint32_t len = real_cigar[k] >> BAM_CIGAR_SHIFT;
+  Cigar merge_indels(const Cigar& ideal_cigar) {
+    Cigar result;
+    if (ideal_cigar.cigar.empty()) return result;
+    
+    int32_t i_count = 0;
+    int32_t d_count = 0;
+    
+    auto flush_indels = [&]() {
+      if (i_count == 0 && d_count == 0) return;
       
-      if (op == BAM_CREF_SKIP) continue; // skip introns
-      
-      char op_char = "MIDNSHP=XB"[op];
-      for (uint32_t i = 0; i < len; i++) {
-        real_expanded.push_back(op_char);
+      // Convert overlapping I and D to M
+      int32_t overlap = std::min(i_count, d_count);
+      if (overlap > 0) {
+        result.cigar.push_back({(uint32_t)overlap, BAM_CMATCH});
+        i_count -= overlap;
+        d_count -= overlap;
       }
-      if (k == 0 && op_char == 'H') req += 1;
-    }
-
-    // ------ Ideal cigar
-
-    // Pad ideal with '_' to match real's front hard clip
-    for (uint32_t i = 0; i < real_front_hard_clip; i++) {
-      ideal_expanded.push_back('_');
-    }
-
-    // Pad ideal with '_' to match real's front soft clip
-    for (uint32_t i = 0; i < real_front_soft_clip; i++) {
-      ideal_expanded.push_back('_');
-    }
-
-    uint32_t n_pad = real_front_hard_clip + real_front_soft_clip;
-    uint32_t j = 0;
-    uint32_t n_d = 0;
+      
+      // Add remaining I or D
+      if (i_count > 0) {
+        result.cigar.push_back({(uint32_t)i_count, BAM_CINS});
+        i_count = 0;
+      }
+      if (d_count > 0) {
+        result.cigar.push_back({(uint32_t)d_count, BAM_CDEL});
+        d_count = 0;
+      }
+    };
+    
     for (const auto& pair : ideal_cigar.cigar) {
       uint32_t len = pair.first;
       uint32_t op = pair.second;
       
-      char op_char = "MIDNSHP=XB"[op];
-
-      uint32_t i = 0;
-      while (i < len) {
-        // Pad with '_' where real has an 'I'
-        if (((j+n_pad-n_d) < real_expanded.size())
-          && real_expanded[j+n_pad-n_d] == 'I') {
-          ideal_expanded.push_back('_');
-          j++;
-        } else if (op_char == 'D') {
-          ideal_expanded.push_back(op_char);
-          i++; j++; n_d++;
-        } else {
-          ideal_expanded.push_back(op_char);
-          i++; j++;
-        }
+      if (op == BAM_CINS) {
+        i_count += len;
+      } else if (op == BAM_CDEL) {
+        d_count += len;
+      } else {
+        flush_indels();
+        result.cigar.push_back({len, op});
       }
     }
+    
+    flush_indels();
+    return result;
+  }
 
-    // Pad real_expanded with '_' where ideal has 'D'
-    if (n_d > 0) {
-      uint32_t j = 0;
-      for (uint32_t i = 0; i < ideal_expanded.size(); i++) {
-        if (ideal_expanded[i] == 'D') {
-          real_expanded.insert(real_expanded.begin() + j, '_');
-        }
-        j++;
+  // ============================================================================
+  // STEP 2: Convert CIGAR to character arrays
+  // ============================================================================
+
+  // Expand packed BAM CIGAR (uint32_t array)
+  void expand_cigar_simple(uint32_t* cigar, uint32_t n_cigar,
+                          std::vector<char>& expanded) {
+    for (uint32_t k = 0; k < n_cigar; k++) {
+      uint32_t op = cigar[k] & BAM_CIGAR_MASK;
+      uint32_t len = cigar[k] >> BAM_CIGAR_SHIFT;
+      
+      // Skip introns (N operations)
+      if (op == BAM_CREF_SKIP) continue;
+      
+      char op_char = "MIDNSHP=XB,./;"[op];
+      for (uint32_t i = 0; i < len; i++) {
+        expanded.push_back(op_char);
       }
     }
   }
 
-  // Rules for choosing ops
+  // Expand Cigar struct (vector of pairs)
+  void expand_cigar_struct(const Cigar& cigar, std::vector<char>& expanded) {
+    for (const auto& pair : cigar.cigar) {
+      uint32_t len = pair.first;
+      uint32_t op = pair.second;
+      
+      char op_char = "MIDNSHP=XB,./;"[op];
+      for (uint32_t i = 0; i < len; i++) {
+        expanded.push_back(op_char);
+      }
+    }
+  }
+
+  // ============================================================================
+  // STEP 3: Pad ideal CIGAR to match real's leading clips
+  // ============================================================================
+
+  void pad_ideal_for_leading_clips(std::vector<char>& ideal_exp,
+                                  uint32_t front_hard_clip,
+                                  uint32_t front_soft_clip) {
+    // Total padding needed at the front
+    uint32_t total_padding = front_hard_clip + front_soft_clip;
+    if (total_padding == 0) return;
+    
+    std::vector<char> padded;
+
+    for (uint32_t i = 0; i < front_hard_clip; i++) {
+      padded.push_back('_');
+    }
+    
+    // Add padding at the front, but check if ideal has ,./ overrides
+    // that should replace the padding at those positions
+    for (uint32_t i = front_hard_clip; i < front_soft_clip; i++) {
+      if (i < ideal_exp.size() && 
+          (ideal_exp[i] == ',' || ideal_exp[i] == '.' 
+          || ideal_exp[i] == '/' || ideal_exp[i] == ';')) {
+        // do nothing
+      } else {
+        padded.push_back('_');
+      }
+    }
+    
+    for (uint32_t i = 0; i < ideal_exp.size(); i++) {
+      padded.push_back(ideal_exp[i]);
+    }
+    
+    ideal_exp = std::move(padded);
+  }
+
+  // ============================================================================
+  // STEP 4: Align two expanded CIGARs by inserting padding characters
+  // ============================================================================
+
+
+  void align_expanded_cigars(std::vector<char>& real_exp,
+                          std::vector<char>& ideal_exp) {
+    // Build new aligned vectors instead of inserting (avoids iterator invalidation)
+    std::vector<char> aligned_real;
+    std::vector<char> aligned_ideal;
+    
+    size_t real_pos = 0;
+    size_t ideal_pos = 0;
+    
+    // Safety counter to prevent infinite loops
+    size_t max_iterations = (real_exp.size() + ideal_exp.size()) * 2;
+    size_t iterations = 0;
+    
+    while (real_pos < real_exp.size() || ideal_pos < ideal_exp.size()) {
+      // Safety check
+      if (++iterations > max_iterations) {
+        fprintf(stderr, "ERROR: align_expanded_cigars exceeded max iterations, possible infinite loop\n");
+        break;
+      }
+      
+      // Handle edge cases where one is exhausted
+      if (real_pos >= real_exp.size()) {
+        // Real is done, pad it to match remaining ideal
+        aligned_real.push_back('_');
+        aligned_ideal.push_back(ideal_exp[ideal_pos]);
+        ideal_pos++;
+        continue;
+      }
+      if (ideal_pos >= ideal_exp.size()) {
+        // Ideal is done, pad it to match remaining real
+        aligned_real.push_back(real_exp[real_pos]);
+        aligned_ideal.push_back('_');
+        real_pos++;
+        continue;
+      }
+      
+      char r = real_exp[real_pos];
+      char i = ideal_exp[ideal_pos];
+      
+      // Special case: ideal has '.' (deletion override)
+      // This means ideal wants to insert here, so pad real
+      if (i == '.') {
+        aligned_real.push_back('_');
+        aligned_ideal.push_back(i);
+        ideal_pos++;
+        // Note: real_pos is NOT incremented
+      }
+      // Insertions in real = deletions in ideal's perspective
+      // Add padding to ideal AND keep repeating the current ideal character
+      else if (r == 'I') {
+        aligned_real.push_back(r);
+        aligned_ideal.push_back('_');
+        real_pos++;
+        // Note: ideal_pos is NOT incremented - same char gets used next iteration
+      }
+      // Deletions in ideal = insertions in real's perspective
+      // Add padding to real AND keep repeating the current real character
+      else if (i == 'D') {
+        aligned_real.push_back('_');
+        aligned_ideal.push_back(i);
+        ideal_pos++;
+        // Note: real_pos is NOT incremented - same char gets used next iteration
+      }
+      // Both advance normally
+      else {
+        aligned_real.push_back(r);
+        aligned_ideal.push_back(i);
+        real_pos++;
+        ideal_pos++;
+      }
+    }
+    
+    // Replace original vectors with aligned versions
+    real_exp = std::move(aligned_real);
+    ideal_exp = std::move(aligned_ideal);
+  }
+
+  // ============================================================================
+  // STEP 5: Merge operations with clear priority rules
+  // ============================================================================
+
   char merge_ops(char real_op, char ideal_op) {
+    // PRIORITY 1: Special case - real insertion with ideal padding
     if (real_op == 'I' && ideal_op == '_') {
       return 'I';
     }
+    
+    // PRIORITY 2: Special overrides - ideal's ,./ override real's soft clips
+    // ; = soft clip override (should become S)
+    // , = match override (should become M)
+    // . = deletion override (should become D)
+    // / = insertion override (should become I)
+    if ((real_op == 'M' || real_op == 'S') && ideal_op == ';') {
+      return 'S';
+    }
+    if ((real_op == 'M' || real_op == 'S') && ideal_op == ',') {
+      return 'M';
+    }
+    if ((real_op == 'M' || real_op == 'S') && ideal_op == '/') {
+      return 'I';
+    }
+    if ((real_op == 'M' || real_op == 'S') && ideal_op == '.') {
+      return 'D';
+    }
 
-    // Added for end soft/hard clips
+    if (real_op == 'D' && ideal_op == ';') {
+      return '_';
+    }
+    if (real_op == 'D' && ideal_op == ',') {
+      return 'D';
+    }
+    if (real_op == 'D' && ideal_op == '/') {
+      return '_';
+    }
+    if (real_op == 'D' && ideal_op == '.') {
+      return '_';   // doesn't happen
+    }
+
+    if (real_op == 'I' && ideal_op == ';') {
+      return 'S';
+    }
+    if (real_op == 'I' && ideal_op == ',') {
+      return 'I';
+    }
+    if (real_op == 'D' && ideal_op == '/') {
+      return '_';
+    }
+    if (real_op == 'I' && ideal_op == '.') {
+      return '_';   // doesn't happen
+    }
+
+    if (ideal_op == ';') {
+      return 'S';
+    }
+    if (ideal_op == ',') {
+      return 'M';
+    }
+    if (ideal_op == '/') {
+      return 'I';
+    }
+    if (ideal_op == '.') { // this takes care of the '_' and '.' case, rest may be unnecessary
+      return 'D';
+    }
+    
+    // PRIORITY 3: Handle end soft/hard clips (padding markers)
     if (ideal_op == '*') {
       return real_op;
     }
-    // Unused
     if (real_op == '*') {
       return ideal_op;
     }
+    
+    // PRIORITY 4: Hard clips always win
     if (real_op == 'H') {
       return 'H';
     }
-    // If real D and ideal S, 
-    // add '_' to avoid adding extra sequence
-    // allow everything on the left to shift right
-    // because whatever, it doens't matter anymore
+    
+    // PRIORITY 5: Special edge cases
+    // Real D and ideal S - add padding to avoid extra sequence
     if (real_op == 'D' && ideal_op == 'S') {
       return '_';
     }
+    // Real I and ideal S - use S
     if (real_op == 'I' && ideal_op == 'S') {
       return 'S';
     }
+    // Real D and ideal I - use padding
     if (real_op == 'D' && ideal_op == 'I') {
       return '_';
     }
-    // If ideal has S, D, or I, use it
+    
+    // PRIORITY 6: If ideal has S, D, or I, use it
     if (ideal_op == 'S' || ideal_op == 'D' || ideal_op == 'I') {
       return ideal_op;
     }
-    // If real has S, D, or I, use it
+    
+    // PRIORITY 7: If real has S, D, or I, use it
     if (real_op == 'S' || real_op == 'D' || real_op == 'I') {
       return real_op;
     }
-    // Otherwise use M (or =/X)
+    
+    // PRIORITY 8: Matches (M, =, X all become M)
     if (ideal_op == 'M' || ideal_op == '=' || ideal_op == 'X') {
       return 'M';
     }
     if (real_op == 'M' || real_op == '=' || real_op == 'X') {
       return 'M';
     }
+    
+    // PRIORITY 9: Padding from alignment
+    if (real_op == '_') return ideal_op;
+    if (ideal_op == '_') return real_op;
+    
     // Fallback
     return real_op != '*' ? real_op : ideal_op;
   }
 
-  // Compress expanded CIGAR back to standard format
-  uint32_t* compress_cigar(const std::vector<char>& expanded, 
-                          uint32_t* new_n_cigar, CigarMem& mem, int32_t &nm) {
+  // ============================================================================
+  // STEP 5: Compress expanded CIGAR back to standard format
+  // ============================================================================
+
+  Cigar compress_cigar(const std::vector<char>& expanded, int32_t& nm) {
+    Cigar result;
+    
     if (expanded.empty()) {
-      *new_n_cigar = 0;
-      return nullptr;
+      return result;
     }
     
-    std::vector<char> processed = expanded;
-    size_t size = processed.size();
-    uint32_t num_runs = 0;
-    char prev_op = '\0';
+    // First pass: clean up S-I-S patterns (convert middle I to S)
+    std::vector<char> cleaned = expanded;
+    for (size_t i = 1; i < cleaned.size() - 1; i++) {
+      if (cleaned[i] == 'I') {
+        // Look backward for S
+        bool has_s_before = false;
+        for (size_t j = i; j > 0; j--) {
+          if (cleaned[j-1] == 'S') {
+            has_s_before = true;
+            break;
+          }
+          if (cleaned[j-1] != 'I') break;
+        }
+        
+        // Look forward for S
+        bool has_s_after = false;
+        for (size_t j = i; j < cleaned.size() - 1; j++) {
+          if (cleaned[j+1] == 'S') {
+            has_s_after = true;
+            break;
+          }
+          if (cleaned[j+1] != 'I') break;
+        }
+        
+        // If I is sandwiched between S operations, convert to S
+        if (has_s_before && has_s_after) {
+          cleaned[i] = 'S';
+        }
+      }
+    }
     
-    for (size_t i = 0; i < size; ) {
-      char curr = processed[i];
-      
-      if (curr == '_') {
+    // Run-length encode into Cigar struct
+    size_t i = 0;
+    while (i < cleaned.size()) {
+      // Skip padding characters
+      if (cleaned[i] == '_') {
         i++;
         continue;
       }
       
-      if (curr == 'S') {
-        while (i < size && processed[i] == 'S') i++;
-        
-        if (i < size && processed[i] == 'I') {
-          size_t i_start = i;
-          while (i < size && processed[i] == 'I') i++;
-          
-          if (i < size && processed[i] == 'S') {
-            for (size_t j = i_start; j < i; j++) {
-              processed[j] = 'S';
-            }
-          }
-        }
-        
-        if (prev_op != 'S') {
-          num_runs++;
-          prev_op = 'S';
-        }
-      } else {
-        if (curr != prev_op) {
-          num_runs++;
-          prev_op = curr;
-        }
+      char op_char = cleaned[i];
+      uint32_t run_len = 0;
+      
+      // Count consecutive identical operations
+      while (i < cleaned.size() && (cleaned[i] == op_char || cleaned[i] == '_')) {
+        if (cleaned[i] == op_char) run_len++;
         i++;
       }
-    }
-    
-    uint32_t* new_cigar = mem.get_mem(expanded.size());
-    uint32_t new_idx = 0;
-    
-    char current_op = processed[0];
-    uint32_t run_len = 1;
-    
-    auto add_op = [&](char op_char, uint32_t len) {
-      if (len == 0) return;
+      
+      if (run_len == 0) continue;
+      
+      // Convert to BAM operation code
       uint32_t op;
       switch(op_char) {
         case 'M': case '=': case 'X': op = BAM_CMATCH; break;
-        case 'I': op = BAM_CINS; nm++; break;
-        case 'D': op = BAM_CDEL; nm++; break;
+        case 'I': op = BAM_CINS; nm += run_len; break;
+        case 'D': op = BAM_CDEL; nm += run_len; break;
         case 'S': op = BAM_CSOFT_CLIP; break;
-        case 'H': return;
-        case '_': return;
-        default: nm++; return;
+        case 'H': op = BAM_CHARD_CLIP; break;
+        case 'N': op = BAM_CREF_SKIP; break;
+        case 'P': op = BAM_CPAD; break;
+        default: continue; // Skip unknown operations
       }
-      new_cigar[new_idx++] = (len << BAM_CIGAR_SHIFT) | op;
-    };
-    
-    for (size_t i = 1; i < size; i++) {
-      if (processed[i] == '_') {
-        // do nothing
-      }
-      else if (processed[i] == current_op) {
-        run_len++;
-      } else {
-        add_op(current_op, run_len);
-        current_op = processed[i];
-        run_len = 1;
-      }
+      
+      result.cigar.push_back({run_len, op});
     }
-    add_op(current_op, run_len);
     
-    *new_n_cigar = new_idx;
-    return new_cigar;
+    return result;
   }
 
+
+  // ============================================================================
+  // MAIN FUNCTION: Merge real and ideal CIGARs
+  // ============================================================================
+
   uint32_t* get_new_cigar(uint32_t* real_cigar, uint32_t n_real_cigar,
-                        const Cigar& ideal_cigar, uint32_t* new_n_cigar, 
-                        CigarMem& mem, int32_t &nm) {
+                        const Cigar& ideal_cigar, uint32_t* new_n_cigar,
+                        CigarMem& mem, int32_t& nm) {
     
-    // Get front clip length from real cigar
+    Cigar merged_ideal = merge_indels(ideal_cigar);
+
+    // Step 2: Expand both CIGARs to character arrays
+    std::vector<char> real_expanded;
+    std::vector<char> ideal_expanded;
+    
+    expand_cigar_simple(real_cigar, n_real_cigar, real_expanded);
+    expand_cigar_struct(merged_ideal, ideal_expanded);  // Use struct version!
+
     uint32_t real_front_hard_clip = 0;
     uint32_t real_front_soft_clip = 0;
     uint32_t cigar_idx = 0;
-
+    
     // Check for leading hard clip
     if (n_real_cigar > 0 && 
-      ((real_cigar[0] & BAM_CIGAR_MASK) == BAM_CHARD_CLIP)) {
+        ((real_cigar[0] & BAM_CIGAR_MASK) == BAM_CHARD_CLIP)) {
       real_front_hard_clip = real_cigar[0] >> BAM_CIGAR_SHIFT;
       cigar_idx++;
     }
     
     // Check for leading soft clip (after potential hard clip)
     if (cigar_idx < n_real_cigar && 
-      ((real_cigar[cigar_idx] & BAM_CIGAR_MASK) == BAM_CSOFT_CLIP)) {
+        ((real_cigar[cigar_idx] & BAM_CIGAR_MASK) == BAM_CSOFT_CLIP)) {
       real_front_soft_clip = real_cigar[cigar_idx] >> BAM_CIGAR_SHIFT;
     }
 
-    // Expand both cigars
-    std::vector<char> real_expanded;
-    std::vector<char> ideal_expanded;
-    expand_cigars(real_cigar, n_real_cigar, ideal_cigar,
-      real_expanded, ideal_expanded, real_front_soft_clip,
-      real_front_hard_clip);
-    
-    // Merge position by position
-    size_t max_len = std::max(real_expanded.size(), ideal_expanded.size());
+    pad_ideal_for_leading_clips(ideal_expanded, real_front_hard_clip, real_front_soft_clip);
+    align_expanded_cigars(real_expanded, ideal_expanded);
+
     std::vector<char> merged;
-    
+    size_t max_len = std::max(real_expanded.size(), ideal_expanded.size());
+
     for (size_t i = 0; i < max_len; i++) {
       char real_op = (i < real_expanded.size()) ? real_expanded[i] : '*';
       char ideal_op = (i < ideal_expanded.size()) ? ideal_expanded[i] : '*';
       merged.push_back(merge_ops(real_op, ideal_op));
     }
     
-    // Compress back to CIGAR
-    uint32_t* result = compress_cigar(merged, new_n_cigar, mem, nm);
+    Cigar compressed = compress_cigar(merged, nm);
+    Cigar final_cigar = merge_indels(compressed);
+    
+    uint32_t* final_result = mem.get_mem(final_cigar.cigar.size());
+    for (size_t k = 0; k < final_cigar.cigar.size(); k++) {
+      uint32_t len = final_cigar.cigar[k].first;
+      uint32_t op = final_cigar.cigar[k].second;
+      final_result[k] = (len << BAM_CIGAR_SHIFT) | op;
+    }
+    *new_n_cigar = final_cigar.cigar.size();
 
-    // Print debug info
+    // Debug output
     // fprintf(stderr, "REAL CIGAR: ");
     // for (uint32_t k = 0; k < n_real_cigar; k++) {
-    //     uint32_t op = real_cigar[k] & BAM_CIGAR_MASK;
-    //     uint32_t len = real_cigar[k] >> BAM_CIGAR_SHIFT;
-    //     fprintf(stderr, "%u%c", len, "MIDNSHP=XB"[op]);
+    //   uint32_t op = real_cigar[k] & BAM_CIGAR_MASK;
+    //   uint32_t len = real_cigar[k] >> BAM_CIGAR_SHIFT;
+    //   fprintf(stderr, "%u%c", len, "MIDNSHP=XB,./;"[op]);
     // }
     // fprintf(stderr, "\nIDEAL CIGAR: ");
     // for (const auto& pair : ideal_cigar.cigar) {
-    //     fprintf(stderr, "%u%c ", pair.first, "MIDNSHP=XB"[pair.second]);
+    //   fprintf(stderr, "%u%c ", pair.first, "MIDNSHP=XB,./;"[pair.second]);
     // }
-    // // fprintf(stderr, "\nREAL EXPANDED:  ");
-    // // for (char c : real_expanded) fprintf(stderr, "%c", c);
-    // // fprintf(stderr, "\nIDEAL EXPANDED: ");
-    // // for (char c : ideal_expanded) fprintf(stderr, "%c", c);
-    // // fprintf(stderr, "\nMERGED:         ");
-    // // for (char c : merged) fprintf(stderr, "%c", c);
+    // fprintf(stderr, "\nREAL EXPANDED:  ");
+    // for (char c : real_expanded) fprintf(stderr, "%c", c);
+    // fprintf(stderr, "\nIDEAL EXPANDED: ");
+    // for (char c : ideal_expanded) fprintf(stderr, "%c", c);
+    // fprintf(stderr, "\nMERGED:         ");
+    // for (char c : merged) fprintf(stderr, "%c", c);
     // fprintf(stderr, "\nNEW CIGAR: ");
     // for (uint32_t k = 0; k < *new_n_cigar; k++) {
-    //     uint32_t op = result[k] & BAM_CIGAR_MASK;
-    //     uint32_t len = result[k] >> BAM_CIGAR_SHIFT;
-    //     fprintf(stderr, "%u%c", len, "MIDNSHP=XB"[op]);
+    //   uint32_t op = final_result[k] & BAM_CIGAR_MASK;
+    //   uint32_t len = final_result[k] >> BAM_CIGAR_SHIFT;
+    //   fprintf(stderr, "%u%c", len, "MIDNSHP=XB,./;"[op]);
     // }
     // fprintf(stderr, "\n--------------------\n");
-
-    return result;
+    
+    return final_result;
   }
 
   // Copy CIGAR memory for intron removal
@@ -377,15 +587,8 @@ namespace bramble {
     }
       
     // Get match tid and position
-    int32_t tid;
-    int32_t pos;
-    if (first_read) {
-      tid = (int32_t)this_pair->m_tid;
-      pos = (int32_t)this_pair->m_align.pos;
-    } else {
-      tid = (int32_t)this_pair->r_tid;
-      pos = (int32_t)this_pair->r_align.pos;
-    }
+    int32_t tid = b->core.tid;
+    int32_t pos = b->core.pos;
     
     // Set basic paired flags
     b->core.flag |= BAM_FPAIRED;
@@ -459,15 +662,22 @@ namespace bramble {
     bam_aux_append(b, "XS", 'A', 1, &new_xs);
   }
 
-  void set_as_tag(bam1_t* b, double similarity_score) {
+  void set_as_tag(bam1_t* b, AlignInfo &align, uint8_t qual) {
     uint8_t* as = bam_aux_get(b, "AS");
+    int32_t gn_as = 0;
+    if (as) gn_as = bam_aux2i(as);
     if (as) bam_aux_del(b, as);
 
     double score;
-    if (!LONG_READS) score = std::pow(1.0+(similarity_score - similarity_threshold), 3.0)*100.0;
-    else score = similarity_score*1000.0;
-    // int32_t new_as = static_cast<int32_t>(score);
-    // bam_aux_append(b, "AS", 'i', sizeof(int32_t), (uint8_t*)&new_as);
+    if (!LONG_READS) {
+      score = std::pow(1.0 + align.similarity_score, 3.0) * 100.0;
+    } else {
+      double x = align.similarity_score;
+      double y = static_cast<double>(align.clip_score);
+      score = (static_cast<double>(gn_as) + y) * x;
+    }
+    int32_t new_as = static_cast<int32_t>(score);
+    bam_aux_append(b, "AS", 'i', sizeof(int32_t), (uint8_t*)&new_as);
   }
 
   void remove_extra_tags(bam1_t* b) {
@@ -507,35 +717,35 @@ namespace bramble {
     // Each byte holds two bases
     std::vector<uint8_t> tmp((len + 1) / 2);
     for (int i = 0; i < len; ++i) {
-        uint8_t nt = bam_seqi(seq, len - 1 - i);
-        uint8_t nt_complement;
-        switch (nt) {
-            case 1: nt_complement = 8; break; // A -> T
-            case 2: nt_complement = 4; break; // C -> G
-            case 4: nt_complement = 2; break; // G -> C
-            case 8: nt_complement = 1; break; // T -> A
-            default: nt_complement = 15; break; // N or others -> N
-        }
-        bam_set_seqi(tmp, i, nt_complement);
+      uint8_t nt = bam_seqi(seq, len - 1 - i);
+      uint8_t nt_complement;
+      switch (nt) {
+        case 1: nt_complement = 8; break; // A -> T
+        case 2: nt_complement = 4; break; // C -> G
+        case 4: nt_complement = 2; break; // G -> C
+        case 8: nt_complement = 1; break; // T -> A
+        default: nt_complement = 15; break; // N or others -> N
+      }
+      bam_set_seqi(tmp, i, nt_complement);
     }
 
     memcpy(seq, tmp.data(), (len + 1) / 2);
 
     if (qual && qual[0] != 0xff) { // qualities exist - need to be reversed as well
-        for (int i = 0; i < len / 2; ++i) {
-            uint8_t qtmp = qual[i];
-            qual[i] = qual[len - 1 - i];
-            qual[len - 1 - i] = qtmp;
-        }
+      for (int i = 0; i < len / 2; ++i) {
+        uint8_t qtmp = qual[i];
+        qual[i] = qual[len - 1 - i];
+        qual[len - 1 - i] = qtmp;
+      }
     }
 
     // reverse cigar operations
     uint32_t n_cigar = b->core.n_cigar;
     uint32_t *cigar = bam_get_cigar(b);
     for (uint32_t i = 0; i < n_cigar / 2; i++) {
-        uint32_t temp = cigar[i];
-        cigar[i] = cigar[n_cigar - 1 - i];
-        cigar[n_cigar - 1 - i] = temp;
+      uint32_t temp = cigar[i];
+      cigar[i] = cigar[n_cigar - 1 - i];
+      cigar[n_cigar - 1 - i] = temp;
     }
 
     // flip the reverse flag

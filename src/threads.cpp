@@ -20,12 +20,11 @@
 #include "time.h"
 
 #include "types.h"
-#include "bundles.h"
 #include "bramble.h"
 #include "evaluate.h"
 
 extern bool VERBOSE;
-extern bool DEBUG;
+extern bool BRAMBLE_DEBUG;
 
 extern uint8_t n_threads;    // Threads, -p
 
@@ -183,5 +182,62 @@ namespace bramble {
     data_mutex.unlock();
 
     return idx;
+  }
+
+  // Process reads in previous bundle
+  void push_bundle(BundleData *bundle, GPVec<BundleData> *bundle_queue) {
+
+    if (bundle->reads.size() > 0) {
+      bundle->getReady();
+
+#ifndef NOTHREADS
+
+      // Push this in the bundle queue where it'll be picked up by the threads
+      int queue_count = 0;
+
+      queue_mutex.lock();
+      bundle_queue->Push(bundle);
+      bundle_work |= 0x02; // set bit 1 to 1
+      queue_count = bundle_queue->Count();
+      queue_mutex.unlock();
+
+      wait_mutex.lock();
+      while (threads_waiting == 0) {
+        have_threads.wait(wait_mutex);
+      }
+      wait_mutex.unlock();
+      have_bundles.notify_one();
+
+      current_thread::yield();
+
+      queue_mutex.lock();
+      while (bundle_queue->Count() == queue_count) {
+        queue_mutex.unlock();
+        have_bundles.notify_one();
+        current_thread::yield();
+        queue_mutex.lock();
+      }
+      queue_mutex.unlock();
+
+#else // NOTHREADS = true
+
+      // Just process single bundle
+      process_bundle(bundle, io);
+#endif
+    }
+
+    // Clear bundle (no more alignments)
+    else {
+      #ifndef NOTHREADS
+        data_mutex.lock();
+      #endif
+
+      bundle->Clear();
+
+      #ifndef NOTHREADS
+        clear_data_pool.Push(bundle->idx);
+        data_mutex.unlock();
+      #endif
+    }
   }
 }

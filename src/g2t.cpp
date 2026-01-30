@@ -11,30 +11,32 @@
 
 #include <IITree.h>
 #include "types.h"
-#include "bundles.h"
 #include "bramble.h"
 #include "evaluate.h"
 #include "g2t.h"
+#include "sw.h"
 
 extern bool SOFT_CLIPS;
 extern bool STRICT;
+extern bool USE_FASTA;
+
+extern GFastaDb *gfasta;  // FASTA file, -S
 
 namespace bramble {
 
-  IITData::IITData(tid_t t, uint8_t ei, uint32_t cl)
-    : tid(t), 
-      exon_id(ei),
-      cum_len(cl) {}
+  IITData::IITData() {}
 
-  IntervalNode::IntervalNode(uint32_t s = 0, uint32_t e = 0)
+  GuideExon::GuideExon(uint32_t s = 0, uint32_t e = 0)
     : start(s),
       end(e),
       pos(0),
-      tid(0),
-      cum_len(0),
+      pos_start(0),
       exon_id(0),
-      left_clip(0),
-      right_clip(0) {}
+      left_ins(0),
+      right_ins(0),
+      left_gap(0),
+      right_gap(0),
+      seq() {}
 
   IntervalTree::IntervalTree() {
     iit = new IITree<int, IITData>();
@@ -45,11 +47,31 @@ namespace bramble {
   }
 
   // Add guide exon with TID and transcript start
-  void IntervalTree::addInterval(uint32_t start, uint32_t end,
-                                const tid_t &tid, uint8_t ei, 
-                                uint32_t cl) {
-    IITData node = IITData(tid, ei, cl);
-    iit->add(start, end, node);
+  void IntervalTree::addInterval(const tid_t &tid, IntervalData interval, 
+                                const char* ref_name) {
+    IITData node = IITData();
+    node.tid = tid;
+    node.exon_id = interval.idx;
+    node.pos_start = interval.pos_start;
+
+    node.has_prev = interval.has_prev;
+    node.has_next = interval.has_next;
+    node.prev_start = interval.prev_start;
+    node.prev_end = interval.prev_end;
+    node.next_start = interval.next_start;
+    node.next_end = interval.next_end;
+
+    node.transcript_len = interval.transcript_len;
+
+    // could just grab this later when necessary
+    if (USE_FASTA) {
+      GFaSeqGet* faseq = gfasta->fetch(ref_name);
+      std::string seq = faseq->copyRange(interval.start, 
+        interval.end - 1, false, true);
+      node.seq = seq;
+    }
+
+    iit->add(interval.start, interval.end, node);
   }
 
   void IntervalTree::indexTree() {
@@ -62,144 +84,263 @@ namespace bramble {
     IITData data;
   };
 
-  std::vector<std::shared_ptr<IntervalNode>>
-  IntervalTree::findOverlapping(uint32_t qstart, uint32_t qend, 
-                                char strand, ReadEvaluationConfig config, 
-                                ExonStatus status) {
-    //printf("NEW QUERY\n");
-    std::vector<std::shared_ptr<IntervalNode>> intervals;
+  std::shared_ptr<GuideExon>
+  IntervalTree::findOverlappingForTid(uint32_t qstart, uint32_t qend, tid_t tid) {
+    
+    if (qstart == 0 && qend == 0) return nullptr;
     std::vector<size_t> hits;
-    // printf("iit = %p\n", iit);
     iit->overlap(qstart, qend, hits);
-    if (hits.empty()) {
-      //printf("hits are empty\n");
-      return intervals;
-    }
-
-    if (config.print) {
-      printf("qstart = %d, qend = %d, strand = %d\n", qstart, qend, strand);
-      for (size_t idx : hits) {
-        uint32_t s = iit->start(idx);
-        uint32_t e = iit->end(idx);
-        printf("s = %d, e = %d\n", s, e);
-      }
-    }
 
     for (size_t idx : hits) {
       uint32_t s = iit->start(idx);
       uint32_t e = iit->end(idx);
 
-      if (qstart < s && e < qend) {
-        if (config.print) {
-          printf("general problem 1\n");
-          printf("s - qstart = %d, qend - e = %d\n", s - qstart, qend - e);
-        }
-        
+      const IITData& data = iit->data(idx);
+      if (data.tid == tid) {
+        auto exon = std::make_shared<GuideExon>(s, e);
+        exon->transcript_len = data.transcript_len;
+        exon->pos_start = data.pos_start;
+        exon->exon_id = data.exon_id;
+        exon->has_prev = data.has_prev;
+        exon->has_next = data.has_next;
+        exon->prev_start = data.prev_start;
+        exon->prev_end = data.prev_end;
+        exon->next_start = data.next_start;
+        exon->next_end = data.next_end;
+        exon->seq = data.seq; // not sure if this has to be cleared
+
+        return exon;
+      }
+    }
+
+    return nullptr;
+  }
+
+  std::unordered_map<tid_t, std::shared_ptr<GuideExon>>
+  IntervalTree::findOverlapping(uint32_t qstart, uint32_t qend, 
+                                char strand, ReadEvaluationConfig config, 
+                                ExonStatus status, bool has_left_clip,
+                                bool has_right_clip) {
+    std::unordered_map<tid_t, std::shared_ptr<GuideExon>> exons;
+    std::vector<size_t> hits;
+    
+    iit->overlap(qstart, qend, hits);
+    if (hits.empty()) {
+      if (config.print) {
+        printf("=== QUERY FAILED ===\n");
+        printf("Query range: [%u, %u], strand: %c\n", qstart, qend, strand);
+        printf("Reason: No overlapping intervals found in tree\n\n");
+      }
+      return exons;
+    }
+
+    // Track rejection reasons for debugging
+    std::vector<std::string> rejection_reasons;
+
+    for (size_t idx : hits) {
+      uint32_t s = iit->start(idx);
+      uint32_t e = iit->end(idx);
+
+      if (config.print) printf("tid = %d\n", iit->data(idx).tid);
+
+      // Check soft clip conditions
+      if ((!SOFT_CLIPS || STRICT) && (qstart < s || e < qend)) {
+        rejection_reasons.push_back(
+          "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
+          "] rejected by soft clip policy"
+        );
         continue;
       }
-      if ((!SOFT_CLIPS || STRICT) && (qstart < s || e < qend)) continue;
-      const IITData& data = iit->data(idx);
 
-      auto interval = std::make_shared<IntervalNode>(s, e);
-      interval->tid = data.tid;
+      const IITData& data = iit->data(idx);
+      auto exon = std::make_shared<GuideExon>(s, e);
+
+      bool rejected = false;
+      std::string reject_reason;
 
       if (strand == '+') {
         if (s <= qstart) {
-          interval->pos = (qstart - s) + data.cum_len;
+          // Left junction gap: query starts after interval starts
+          exon->pos = (qstart - s) + data.pos_start;
+          exon->left_gap = qstart - s;
+          if (status == MIDDLE_EXON || status == LAST_EXON) {
+            if (exon->left_gap > config.max_junc_gap) {
+              reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
+                            "] left junction gap too large: " + std::to_string(exon->left_gap) + 
+                            " (max: " + std::to_string(config.max_junc_gap) + ")";
+              rejected = true;
+            }
+          }
+        } else {
+          exon->pos = data.pos_start;
+          // Left clip: query extends before interval
+          exon->left_ins = s - qstart;
+          if (status == MIDDLE_EXON || status == LAST_EXON) {
+            if (exon->left_ins > config.max_ins) {
+              reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
+                            "] left insertion too large: " + std::to_string(exon->left_ins) + 
+                            " (max: " + std::to_string(config.max_clip) + ")";
+              rejected = true;
+            }
+          } else {
+            if (exon->left_ins > config.max_clip) {
+              reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
+                            "] left clip too large: " + std::to_string(exon->left_ins) + 
+                            " (max: " + std::to_string(config.max_clip) + ")";
+              rejected = true;
+            }
+          }
+        }
+
+        if (!rejected) {
+          // Check right side
           if (e < qend) {
-            interval->right_clip = qend - e;
-            if (interval->right_clip > config.max_clip_size) {
-              if (config.print) {
-                printf("right side clip problem 1\n");
-                printf("proposed right clip: %d\n", interval->right_clip);
+            // Right clip: query extends past interval
+            exon->right_ins = qend - e;
+            if (status == FIRST_EXON || status == MIDDLE_EXON) {
+              if (exon->right_ins > config.max_ins) {
+                reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
+                              "] right insertion too large: " + std::to_string(exon->right_ins) + 
+                              " (max: " + std::to_string(config.max_clip) + ")";
+                rejected = true;
               }
-              
-              continue;
+            } else {
+              if (exon->right_ins > config.max_clip) {
+                reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
+                              "] right clip too large: " + std::to_string(exon->right_ins) + 
+                              " (max: " + std::to_string(config.max_clip) + ")";
+                rejected = true;
+              }
             }
-          }
-        } else {
-          interval->pos = data.cum_len;
-          interval->left_clip = s - qstart;
-          if (interval->left_clip > config.max_clip_size) {
-            if (config.print) {
-              printf("left side clip problem 1\n");
-              printf("proposed left clip: %d\n", interval->left_clip);
+          } else if (qend < e) {
+            // Right junction gap: query ends before interval ends
+            exon->right_gap = e - qend;
+            if (status == FIRST_EXON || status == MIDDLE_EXON) {
+              if (exon->right_gap > config.max_junc_gap) {
+                reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
+                              "] right junction gap too large: " + std::to_string(exon->right_gap) + 
+                              " (max: " + std::to_string(config.max_junc_gap) + ")";
+                rejected = true;
+              }
             }
-            
-            continue;
           }
         }
 
-      } else {
+      } else {  // strand == '-'
         if (qend <= e) {
-          interval->pos = (e - qend) + data.cum_len;
-          if (qstart < s) {
-            interval->left_clip = s - qstart;
-            if (interval->left_clip > config.max_clip_size) {
-              if (config.print) {
-                printf("left side clip problem 2\n");
-                printf("proposed left clip: %d\n", interval->left_clip);
-              }
-              
-              continue;
+          exon->pos = (e - qend) + data.pos_start;
+          exon->right_gap = e - qend;
+          // Right junction gap: query ends before interval ends
+          if (status == FIRST_EXON || status == MIDDLE_EXON) {
+            if (exon->right_gap > config.max_junc_gap) {
+              reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
+                            "] right junction gap too large: " + std::to_string(exon->right_gap) + 
+                            " (max: " + std::to_string(config.max_junc_gap) + ")";
+              rejected = true;
             }
           }
         } else {
-          interval->pos = data.cum_len;
-          interval->right_clip = qend - e;
-          if (interval->right_clip > config.max_clip_size) {
-            if (config.print) {
-              printf("right side clip problem 2\n");
-              printf("proposed right clip: %d\n", interval->right_clip);
+          exon->pos = data.pos_start;
+          // Right clip: query extends past interval
+          exon->right_ins = qend - e;
+          if (status == FIRST_EXON || MIDDLE_EXON) {
+            if (exon->right_ins > config.max_ins) {
+              reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
+                            "] right clip too large: " + std::to_string(exon->right_ins) + 
+                            " (max: " + std::to_string(config.max_clip) + ")";
+              rejected = true;
+            }
+          } else {
+            if (exon->right_ins > config.max_clip) {
+              reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
+                            "] right clip too large: " + std::to_string(exon->right_ins) + 
+                            " (max: " + std::to_string(config.max_clip) + ")";
+              rejected = true;
+            }
+          }
+        }
+
+        if (!rejected) {
+          // Check left side
+          if (qstart < s) {
+            // Left clip: query extends before interval
+            exon->left_ins = s - qstart;
+            if (status == MIDDLE_EXON || status == LAST_EXON) {
+              if (exon->left_ins > config.max_ins) {
+                reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
+                              "] left clip too large: " + std::to_string(exon->left_ins) + 
+                              " (max: " + std::to_string(config.max_clip) + ")";
+                rejected = true;
+              }
+            } else {
+              if (exon->left_ins > config.max_clip) {
+                reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
+                              "] left clip too large: " + std::to_string(exon->left_ins) + 
+                              " (max: " + std::to_string(config.max_clip) + ")";
+                rejected = true;
+              }
             }
             
-            continue;
+          } else if (s < qstart) {
+            exon->left_gap = qstart - s;
+            // Left junction gap: query starts after interval starts
+            if (status == MIDDLE_EXON || status == LAST_EXON) {
+              if (exon->left_gap > config.max_junc_gap) {
+                reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
+                              "] left junction gap too large: " + std::to_string(exon->left_gap) + 
+                              " (max: " + std::to_string(config.max_junc_gap) + ")";
+                rejected = true;
+              }
+            }
           }
         }
       }
 
-      // Ensure correct splice junctions
-      if ((status == FIRST_EXON || status == MIDDLE_EXON) 
-          && (qend < e)) { // right side
-        if (e - qend > config.max_junc_gap) {
-          if (config.print) {
-            printf("right side splice junction problem\n");
-            printf("e - qend: %d\n", e - qend);
-          }
-          
-          continue;
-        }
-      }
-      if ((status == MIDDLE_EXON || status == LAST_EXON) 
-          && (s < qstart)) { // left side
-        if (qstart - s > config.max_junc_gap) {
-          if (config.print) {
-            printf("left side splice junction problem\n");
-            printf("qstart - s: %d\n", qstart - s);
-          }
-          
-          continue;
-        }
+      if (rejected) {
+        rejection_reasons.push_back(reject_reason);
+        continue;
       }
 
-      interval->cum_len = data.cum_len;
-      interval->exon_id = data.exon_id;
+      exon->pos_start = data.pos_start;
+      exon->exon_id = data.exon_id;
 
-      intervals.emplace_back(interval);
+      exon->has_prev = data.has_prev;
+      exon->has_next = data.has_next;
+      exon->prev_start = data.prev_start;
+      exon->prev_end = data.prev_end;
+      exon->next_start = data.next_start;
+      exon->next_end = data.next_end;
+
+      exon->transcript_len = data.transcript_len;
+      exon->seq = data.seq; // not sure if this has to be cleared
+
+      exons[data.tid] = exon;
     }
 
+    // Only print diagnostics if no intervals were found and printing is enabled
+    // if (config.print && intervals.empty()) {
     if (config.print) {
-      if (!(intervals.empty())) {
-        printf("found at least 1 interval\n");
-      } else {
-        printf("no intervals\n");
+      //printf("=== QUERY FAILED ===\n");
+      printf("Query range: [%u, %u], strand: %c, status: %d\n", 
+             qstart, qend, strand, static_cast<int>(status));
+      // printf("Found %zu overlapping intervals in tree, but all were rejected:\n\n", 
+      //        hits.size());
+      printf("Found %zu overlapping intervals in tree\n\n", 
+             hits.size());
+
+      for (size_t idx : hits) {
+        uint32_t s = iit->start(idx);
+        uint32_t e = iit->end(idx);
+        printf("s = %d, e = %d\n", s, e);
+      }
+      
+      for (size_t i = 0; i < rejection_reasons.size(); i++) {
+        printf("  %zu. %s\n", i + 1, rejection_reasons[i].c_str());
       }
       printf("\n");
     }
-    
 
-    return intervals;
-
+    return exons;
   }
 
   g2tTree::g2tTree() = default;
@@ -257,15 +398,11 @@ namespace bramble {
   }
 
   // Add guide exon with TID and transcript start
-  void g2tTree::addInterval(refid_t refid, uint32_t start, uint32_t end,
-                            const tid_t &tid, uint8_t ei, uint32_t cl, char strand) {
+  void g2tTree::addInterval(refid_t refid, const tid_t &tid, 
+                            IntervalData interval, char strand,
+                            const char* ref_name) {
     IntervalTree *tree = getTreeForStrand(refid, strand);
-    IITData node = IITData(tid, ei, cl);
-    tree->addInterval(start, end, tid, ei, cl);
-  }
-
-  void g2tTree::addRefLen(refid_t refid, uint32_t ref_len) {
-    ref_len_map[refid] = ref_len;
+    tree->addInterval(tid, interval, ref_name);
   }
 
   // Index tree after guides have been added
@@ -276,13 +413,21 @@ namespace bramble {
     rc_tree->indexTree();
   }
 
+  std::shared_ptr<GuideExon> 
+  g2tTree::getGuideExonForTid(uint8_t refid, char strand, tid_t tid, 
+                              uint32_t start, uint32_t end) {
+    IntervalTree *tree = getTreeForStrand(refid, strand);
+    return tree->findOverlappingForTid(start, end, tid);
+  }
+
   // Find all guide TIDs that overlap with a read exon
-  std::vector<std::shared_ptr<IntervalNode>>
-  g2tTree::getIntervals(uint8_t refid, char strand, GSeg exon, 
-                        ReadEvaluationConfig config, ExonStatus status) {
+  std::unordered_map<tid_t, std::shared_ptr<GuideExon>>
+  g2tTree::getGuideExons(uint8_t refid, char strand, GSeg exon, 
+                        ReadEvaluationConfig config, ExonStatus status,
+                        bool has_left_clip, bool has_right_clip) {
     IntervalTree *tree = getTreeForStrand(refid, strand);
     return tree->findOverlapping(exon.start, exon.end, strand, 
-      config, status);
+      config, status, has_left_clip, has_right_clip);
   }
   
 };

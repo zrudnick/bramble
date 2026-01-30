@@ -8,7 +8,6 @@
 #include <functional>
 
 #include "types.h"
-#include "bundles.h"
 #include "bramble.h"
 #include "g2t.h"
 #include "evaluate.h"

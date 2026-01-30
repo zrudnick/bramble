@@ -1,13 +1,12 @@
 
 #pragma once
 
-using namespace bramble;
-
 namespace bramble {
 
   struct BamInfo;
   struct BamIO;
   struct Cigar;
+  struct AlignInfo;
 
   struct CigarMem {
     uint32_t* ptr = nullptr;
@@ -69,8 +68,8 @@ namespace bramble {
 
   void remove_extra_tags(bam1_t* b);
 
-  void set_as_tag(bam1_t* b, double similarity_score);
+  void set_as_tag(bam1_t* b, AlignInfo &align, uint8_t qual);
 
-  int reverse_complement_bam(bam1_t* b);
+  int reverse_complement_bam(bam1_t *b);
 
 }

@@ -17,4 +17,6 @@ namespace bramble {
   void worker_thread(GThreadData &td);
 
   int wait_for_data(BundleData *bundles);
+
+  void push_bundle(BundleData *bundle, GPVec<BundleData> *bundle_queue);
 }
