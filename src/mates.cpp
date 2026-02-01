@@ -4,7 +4,6 @@
 #include <set>
 #include <string>
 #include <vector>
-#include <unordered_set>
 #include <functional>
 
 #include "types.h"
@@ -27,11 +26,11 @@ namespace bramble {
    * @param mate_case mate pairing case
    * @param emit_pair function to add bam_info to write queue
    */
-  void add_mate_info(const std::unordered_set<tid_t> &final_transcripts,
-                    const std::unordered_set<tid_t> &read_transcripts,
-                    const std::unordered_set<tid_t> &mate_transcripts,
-                    const std::unordered_map<tid_t, AlignInfo> &read_alignments,
-                    const std::unordered_map<tid_t, AlignInfo> &mate_alignments,
+  void add_mate_info(const unordered_set<tid_t> &final_transcripts,
+                    const unordered_set<tid_t> &read_transcripts,
+                    const unordered_set<tid_t> &mate_transcripts,
+                    const unordered_map<tid_t, AlignInfo> &read_alignments,
+                    const unordered_map<tid_t, AlignInfo> &mate_alignments,
                     ReadInfo* this_read, ReadInfo* mate_read, uint8_t mate_case, 
                     std::function<void(BamInfo*, bool)> emit_pair) {
 
@@ -127,9 +126,9 @@ namespace bramble {
    * @param final_transcripts tids to keep for this read
    */
   void update_read_matches(ReadInfo *this_read,
-                          const std::unordered_set<tid_t> &final_transcripts) {
+                          const unordered_set<tid_t> &final_transcripts) {
 
-    std::unordered_map<tid_t, ExonChainMatch> new_matches;
+    unordered_map<tid_t, ExonChainMatch> new_matches;
 
     for (const auto &pair : this_read->matches) {
       const tid_t &tid = pair.first;
@@ -159,8 +158,8 @@ namespace bramble {
     // Read is unpaired
     if (mate_read == nullptr) {
 
-      std::unordered_set<tid_t> read_transcripts;
-      std::unordered_map<tid_t, AlignInfo> read_alignments;
+      unordered_set<tid_t> read_transcripts;
+      unordered_map<tid_t, AlignInfo> read_alignments;
 
       for (auto& pair : this_read->matches) {
         const tid_t tid = pair.first;
@@ -180,10 +179,10 @@ namespace bramble {
     // Get transcript information for both mates
     // *^*^*^ *^*^*^ *^*^*^ *^*^*^
 
-    std::unordered_set<tid_t> read_transcripts;
-    std::unordered_set<tid_t> mate_transcripts;
-    std::unordered_map<tid_t, AlignInfo> read_alignments;
-    std::unordered_map<tid_t, AlignInfo> mate_alignments;
+    unordered_set<tid_t> read_transcripts;
+    unordered_set<tid_t> mate_transcripts;
+    unordered_map<tid_t, AlignInfo> read_alignments;
+    unordered_map<tid_t, AlignInfo> mate_alignments;
 
     for (auto& pair : this_read->matches) {
       const tid_t tid = pair.first;
@@ -205,7 +204,7 @@ namespace bramble {
     // Determine mate case
     // *^*^*^ *^*^*^ *^*^*^ *^*^*^
 
-    std::unordered_set<tid_t> common_transcripts;
+    unordered_set<tid_t> common_transcripts;
     // Choose smaller set to iterate over for efficiency
     const auto& smaller = (read_transcripts.size() <= mate_transcripts.size()) 
                           ? read_transcripts : mate_transcripts;
@@ -218,7 +217,7 @@ namespace bramble {
         }
     }
 
-    std::unordered_set<tid_t> final_transcripts;
+    unordered_set<tid_t> final_transcripts;
 
     if (!common_transcripts.empty()) {
       // Case 1: Mates share some transcripts - keep only shared ones

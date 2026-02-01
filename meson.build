@@ -18,6 +18,7 @@ add_project_arguments(base_flags, language: 'cpp')
 # External static libraries
 htslib_dep = dependency('', fallback: ['htslib', 'htslib_dep'])
 quill_dep = dependency('quill', fallback: ['quill', 'quill_dep'])
+unordered_dense_dep = dependency('unordered_dense', fallback: ['unordered_dense', 'unordered_dense_dep'])
 zlib_dep = dependency('zlib', fallback: ['zlib', 'zlib_dep'])
 # Use cc.find_library as fallback for bzip2 when dependency() fails
 bz2_dep = dependency('bzip2', required: false)
@@ -104,5 +105,5 @@ endif
 
 executable('bramble', gclib_srcs + main_srcs + gclib_target,
   include_directories: inc_dirs,
-  dependencies: [htslib_dep, quill_dep, gclib_dep, cgranges_dep] + libs,
+  dependencies: [htslib_dep, quill_dep, gclib_dep, cgranges_dep, unordered_dense_dep] + libs,
 )

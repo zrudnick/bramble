@@ -166,7 +166,7 @@ namespace bramble {
   };
 
   struct ReadInfo {
-    std::unordered_map<tid_t, ExonChainMatch> matches;
+    unordered_map<tid_t, ExonChainMatch> matches;
     bool valid_read;
     bool is_paired;
 
@@ -225,7 +225,7 @@ namespace bramble {
     virtual ~ReadEvaluator();
 
     // Evaluate a single read and return structured result
-    virtual std::unordered_map<tid_t, ExonChainMatch> 
+    virtual unordered_map<tid_t, ExonChainMatch> 
     evaluate(CReadAln * read, read_id_t id, std::shared_ptr<g2tTree> g2t,
             uint8_t *seq, int seq_len) = 0;
   
@@ -242,7 +242,7 @@ namespace bramble {
                   bool &has_left_clip, bool &has_right_clip,
                   uint32_t &n_left_clip, uint32_t &n_right_clip);
 
-    void get_intervals(std::unordered_map<tid_t, TidData> &data,
+    void get_intervals(unordered_map<tid_t, TidData> &data,
                       CReadAln *read, uint32_t j, uint32_t exon_count,
                       ReadEvaluationConfig &config, std::shared_ptr<g2tTree> g2t,
                       refid_t refid, char strand, bool has_left_clip,
@@ -266,7 +266,7 @@ namespace bramble {
                           uint32_t n_right_ins, ReadEvaluationConfig &config, 
                           CReadAln *read, uint8_t *seq, int seq_len);
 
-    void create_match(std::unordered_map<tid_t, TidData> &data, 
+    void create_match(unordered_map<tid_t, TidData> &data, 
                                   std::shared_ptr<GuideExon> gexon, tid_t tid,
                                   char strand, char read_strand, bool has_gexon,
                                   uint32_t ins_exon_len, ReadEvaluationConfig config);
@@ -284,11 +284,11 @@ namespace bramble {
     void build_cigar_clip(Segment &segment, TidData &tid_data,
                           ExonChainMatch &match, ReadEvaluationConfig &config);
 
-    void filter_by_similarity(std::unordered_map<tid_t, ExonChainMatch> &matches,
+    void filter_by_similarity(unordered_map<tid_t, ExonChainMatch> &matches,
                               std::shared_ptr<g2tTree> g2t, ReadEvaluationConfig config);
 
   public:
-    std::unordered_map<tid_t, ExonChainMatch> 
+    unordered_map<tid_t, ExonChainMatch> 
     evaluate_exon_chains(CReadAln *read, read_id_t id, 
                         std::shared_ptr<g2tTree> g2t, ReadEvaluationConfig config,
                         uint8_t *seq, int seq_len);
@@ -297,7 +297,7 @@ namespace bramble {
   class ShortReadEvaluator : public ReadEvaluator {
 
   public:
-    std::unordered_map<tid_t, ExonChainMatch> 
+    unordered_map<tid_t, ExonChainMatch> 
     evaluate(CReadAln *read, read_id_t id, std::shared_ptr<g2tTree> g2t,
             uint8_t *seq, int seq_len) override;
 
@@ -306,7 +306,7 @@ namespace bramble {
   class LongReadEvaluator : public ReadEvaluator {
 
   public:
-    std::unordered_map<tid_t, ExonChainMatch> 
+    unordered_map<tid_t, ExonChainMatch> 
     evaluate(CReadAln *read, read_id_t id, std::shared_ptr<g2tTree> g2t,
             uint8_t *seq, int seq_len) override;
   };
