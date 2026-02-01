@@ -3,5 +3,5 @@
 # Setup cgranges submodule first
 ./setup_cgranges.sh
 
-meson setup build --buildtype=debug #--buildtype=release 
+meson setup build --buildtype=release #--buildtype=release 
 ninja -C build -v
