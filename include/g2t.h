@@ -62,7 +62,7 @@ namespace bramble {
     uint32_t transcript_len;
     std::string seq;
       
-    GuideExon(uint32_t s, uint32_t e);
+    GuideExon(uint32_t s=0, uint32_t e=0);
   };
 
   class IntervalTree {

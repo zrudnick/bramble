@@ -558,11 +558,13 @@ int main(int argc, char *argv[]) {
 
   auto g2t = build_g2t_tree(refguides, n_refguides, io);
 
+  /*
   // Delete gffreader data
   for (int i = 0; i < gffreader->gflst.Count(); i++) {
     GffObj *guide = gffreader->gflst[i];
     delete guide;
   }
+  */
   delete gffreader;
 
   #ifndef NOTHREADS
