@@ -123,3 +123,5 @@ dkms.conf
 *.app
 
 # End of https://mrkandreev.name/snippets/gitignore-generator/#C,C++
+build/
+subprojects/.wraplock

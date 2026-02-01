@@ -69,6 +69,12 @@ namespace bramble {
       }
     }
 
+    void write(bam1_t *b) {
+      if (writer && b != nullptr) {
+        writer->write(b);
+      }
+    }
+
     int32_t get_tid(const char *transcript_id) {
       return writer->get_tid(transcript_id);
     }

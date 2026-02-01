@@ -1,6 +1,7 @@
 
 #include <numeric>
 #include <algorithm>
+#include <atomic>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -94,7 +95,7 @@ char bundle_work =
        // yet) Bit 1 set if there are Bundles ready in the queue
 
 GMutex wait_mutex;       // Controls threads_waiting (idle threads counter)
-uint8_t threads_waiting; // Idle worker threads
+std::atomic<uint8_t> threads_waiting; // Idle worker threads
 GConditionVar
     have_threads; // Will notify the bundle loader when a thread
                   // Is available to process the currently loaded bundle

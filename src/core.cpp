@@ -55,7 +55,7 @@ namespace bramble {
     // Write out evaluation result
     auto this_read = new ReadInfo;
 
-    this_read->matches = matches;
+    this_read->matches = std::move(matches);  // move assignment
     this_read->valid_read = true;
     this_read->is_paired = (read->brec->flags() & BAM_FPAIRED);
     this_read->read = std::make_shared<ReadOut>();
@@ -197,9 +197,7 @@ namespace bramble {
 #endif
 
     for (auto* b_ : to_write) {
-      GSamRecord *rec = new GSamRecord(b_);
-      io->write(rec);
-      delete rec;
+      io->write(b_);
     }
 
 #ifndef NOTHREADS

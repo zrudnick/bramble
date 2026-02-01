@@ -19,8 +19,16 @@ add_project_arguments(base_flags, language: 'cpp')
 htslib_dep = dependency('', fallback: ['htslib', 'htslib_dep'])
 quill_dep = dependency('quill', fallback: ['quill', 'quill_dep'])
 zlib_dep = dependency('zlib', fallback: ['zlib', 'zlib_dep'])
-bz2_dep = dependency('bzip2', fallback: ['bzip2', 'bzip2_dep'])
-lzma_dep = dependency('liblzma', required: true)
+# Use cc.find_library as fallback for bzip2 when dependency() fails
+bz2_dep = dependency('bzip2', required: false)
+if not bz2_dep.found()
+  bz2_dep = cc.find_library('bz2', required: true)
+endif
+# Use cc.find_library as fallback for liblzma when dependency() fails
+lzma_dep = dependency('liblzma', required: false)
+if not lzma_dep.found()
+  lzma_dep = cc.find_library('lzma', required: true)
+endif
 curl_dep = dependency('libcurl', required: true)
 libdeflate_dep = dependency('libdeflate', fallback: ['libdeflate', 'libdeflate_dep'], required: true)
 
