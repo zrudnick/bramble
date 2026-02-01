@@ -24,7 +24,7 @@ namespace bramble {
 
   IITData::IITData() {}
 
-  GuideExon::GuideExon(uint32_t s = 0, uint32_t e = 0)
+  GuideExon::GuideExon(uint32_t s, uint32_t e)
     : start(s),
       end(e),
       pos(0),
