@@ -26,9 +26,9 @@ namespace bramble {
    * @param mate_case mate pairing case
    * @param emit_pair function to add bam_info to write queue
    */
-  void add_mate_info(const unordered_set<tid_t> &final_transcripts,
-                    const unordered_set<tid_t> &read_transcripts,
-                    const unordered_set<tid_t> &mate_transcripts,
+  void add_mate_info(const std::vector<tid_t> &final_transcripts,
+                    const std::vector<tid_t> &read_transcripts,
+                    const std::vector<tid_t> &mate_transcripts,
                     const unordered_map<tid_t, AlignInfo> &read_alignments,
                     const unordered_map<tid_t, AlignInfo> &mate_alignments,
                     ReadInfo* this_read, ReadInfo* mate_read, uint8_t mate_case, 
@@ -105,8 +105,8 @@ namespace bramble {
 
       // each mate maps to exactly one transcript, but not the same one
       if (read_transcripts.size() == 1 && mate_transcripts.size() == 1) {
-        tid_t r_tid = *read_transcripts.begin();
-        tid_t m_tid = *mate_transcripts.begin();
+        tid_t r_tid = read_transcripts[0];
+        tid_t m_tid = mate_transcripts[0];
         auto r_align = read_alignments.find(r_tid)->second;
         auto m_align = mate_alignments.find(m_tid)->second;
 
@@ -126,14 +126,15 @@ namespace bramble {
    * @param final_transcripts tids to keep for this read
    */
   void update_read_matches(ReadInfo *this_read,
-                          const unordered_set<tid_t> &final_transcripts) {
+                          const std::vector<tid_t> &final_transcripts) {
 
     unordered_map<tid_t, ExonChainMatch> new_matches;
 
     for (const auto &pair : this_read->matches) {
       const tid_t &tid = pair.first;
       const auto match = pair.second;
-      if (final_transcripts.find(tid) != final_transcripts.end()) {
+      // Check if tid is in final_transcripts vector (sorted, so could use binary_search)
+      if (std::find(final_transcripts.begin(), final_transcripts.end(), tid) != final_transcripts.end()) {
         new_matches[tid] = match;
       }
     }
@@ -158,16 +159,20 @@ namespace bramble {
     // Read is unpaired
     if (mate_read == nullptr) {
 
-      unordered_set<tid_t> read_transcripts;
+      std::vector<tid_t> read_transcripts;
       unordered_map<tid_t, AlignInfo> read_alignments;
 
+      read_transcripts.reserve(this_read->matches.size());
       for (auto& pair : this_read->matches) {
         const tid_t tid = pair.first;
         const auto match = pair.second;
         AlignInfo align = match.align;
-        read_transcripts.insert(tid);
+        read_transcripts.push_back(tid);
         read_alignments[tid] = align;
       }
+      // Sort for consistency
+      std::sort(read_transcripts.begin(), read_transcripts.end());
+      
       add_mate_info({}, read_transcripts, {}, read_alignments, {}, 
                     this_read, nullptr, mate_case, emit_pair);
       return;
@@ -179,85 +184,68 @@ namespace bramble {
     // Get transcript information for both mates
     // *^*^*^ *^*^*^ *^*^*^ *^*^*^
 
-    unordered_set<tid_t> read_transcripts;
-    unordered_set<tid_t> mate_transcripts;
+    // Use sorted vectors instead of unordered_sets to enable well-defined std::set_intersection
+    std::vector<tid_t> read_transcripts;
+    std::vector<tid_t> mate_transcripts;
     unordered_map<tid_t, AlignInfo> read_alignments;
     unordered_map<tid_t, AlignInfo> mate_alignments;
 
+    read_transcripts.reserve(this_read->matches.size());
     for (auto& pair : this_read->matches) {
       const tid_t tid = pair.first;
       const auto match = pair.second;
       AlignInfo align = match.align;
-      read_transcripts.insert(tid);
+      read_transcripts.push_back(tid);
       read_alignments[tid] = align;
     }
+    // Sort to enable std::set_intersection
+    std::sort(read_transcripts.begin(), read_transcripts.end());
 
+    mate_transcripts.reserve(mate_read->matches.size());
     for (auto& pair : mate_read->matches) {
       const tid_t tid = pair.first;
       const auto match = pair.second;
       AlignInfo align = match.align;
-      mate_transcripts.insert(tid);
+      mate_transcripts.push_back(tid);
       mate_alignments[tid] = align;
     }
+    // Sort to enable std::set_intersection
+    std::sort(mate_transcripts.begin(), mate_transcripts.end());
 
     // *^*^*^ *^*^*^ *^*^*^ *^*^*^
     // Determine mate case
     // *^*^*^ *^*^*^ *^*^*^ *^*^*^
 
-    unordered_set<tid_t> common_transcripts;
+    std::vector<tid_t> common_transcripts;
     
     // ============================================================================
-    // OPTIMIZED SET INTERSECTION - Well-defined and efficient
+    // WELL-DEFINED SET INTERSECTION using sorted vectors
     // ============================================================================
     //
-    // This implementation avoids undefined behavior while maintaining good
-    // performance through several key optimizations:
+    // By using sorted std::vector instead of unordered_set, we can use
+    // std::set_intersection which is:
+    //   - Well-defined (requires sorted ranges per C++ standard)
+    //   - Highly optimized by compilers
+    //   - Cache-friendly (vectors have better locality than hash tables)
+    //   - Simpler code with no undefined behavior
     //
-    // 1. RESERVE CAPACITY: Pre-allocate space to avoid rehashing during insertion
-    //    - Upper bound is size of smaller set (can't have more common elements)
-    //    - Avoids expensive rehashing operations during iteration
+    // The cost of sorting is amortized because:
+    //   - Sets are typically small (few matching transcripts per read)
+    //   - Modern sort is O(n log n) but with excellent constants
+    //   - Sorting happens once, intersection benefits immediately
+    //   - No hash table overhead (insertions, lookups, collisions)
     //
-    // 2. ITERATE SMALLER SET: Only iterate through the smaller of the two sets
-    //    - Minimizes number of hash lookups required
-    //    - O(min(n,m)) iterations instead of O(n+m)
-    //
-    // 3. SINGLE HASH LOOKUP: Use find() instead of count() + insert()
-    //    - Avoids redundant hash lookups
-    //
-    // 4. ANKERL OPTIMIZATIONS: Take advantage of unordered_dense characteristics
-    //    - Faster than std::unordered_set due to better cache locality
-    //    - Open addressing with backward shift deletion
-    //    - Robin Hood hashing for better performance
-    //
-    // Performance measurements on test data (subset.gtf + subset.gn.sorted.bam):
-    //   - Unoptimized iteration:                      ~1.48s
-    //   - Optimized iteration (this implementation):  ~1.38s (7% faster than unoptimized)
-    //   - std::set_intersection (undefined behavior): ~1.18s (17% faster, but UB)
-    //
-    // The 17% performance difference vs UB is acceptable given:
-    //   - This code is well-defined and portable
-    //   - Won't break with compiler/stdlib updates
-    //   - Still 7% faster than the naive implementation
-    //   - Correctness and maintainability outweigh small performance cost
+    // Performance measurements will determine if this is faster than the
+    // optimized iteration approach with unordered_set.
     // ============================================================================
     
-    // Reserve space to avoid rehashing during insertion
     common_transcripts.reserve(std::min(read_transcripts.size(), mate_transcripts.size()));
-    
-    // Choose smaller set to iterate over for efficiency
-    const auto& smaller = (read_transcripts.size() <= mate_transcripts.size()) 
-                          ? read_transcripts : mate_transcripts;
-    const auto& larger = (read_transcripts.size() <= mate_transcripts.size()) 
-                         ? mate_transcripts : read_transcripts;
+    std::set_intersection(
+        read_transcripts.begin(), read_transcripts.end(),
+        mate_transcripts.begin(), mate_transcripts.end(),
+        std::back_inserter(common_transcripts));
 
-    // Find common elements - single pass through smaller set
-    for (const auto& tid : smaller) {
-        if (larger.find(tid) != larger.end()) {
-            common_transcripts.insert(tid);
-        }
-    }
-
-    unordered_set<tid_t> final_transcripts;
+    std::vector<tid_t> final_transcripts;
 
     if (!common_transcripts.empty()) {
       // Case 1: Mates share some transcripts - keep only shared ones
@@ -266,8 +254,8 @@ namespace bramble {
 
     } else if (read_transcripts.size() == 1 && mate_transcripts.size() == 1) {
       // Case 2: Each mate maps to exactly one transcript, but different ones
-      final_transcripts.insert(*read_transcripts.begin());
-      final_transcripts.insert(*mate_transcripts.begin());
+      final_transcripts.push_back(read_transcripts[0]);
+      final_transcripts.push_back(mate_transcripts[0]);
       mate_case = 2;
 
     } else if (read_transcripts.size() == 1 && mate_transcripts.empty()) {
