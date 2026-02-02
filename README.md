@@ -26,6 +26,12 @@ not found on the system).
 
 Also, to build you will need to have `meson`, `ninja`, and `autotools` installed.
 
+**Important**: Before building, run the setup script to initialize the cgranges submodule:
+
+```
+> ./setup_cgranges.sh
+```
+
 To build you can either run `build.sh` directly, or do the following:
 
 

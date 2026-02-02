@@ -4,7 +4,6 @@
 #include <set>
 #include <string>
 #include <vector>
-#include <unordered_set>
 
 #include "types.h"
 #include "bramble.h"
@@ -47,7 +46,7 @@ namespace bramble {
                             uint8_t *seq, int seq_len) {
 
     // Evaluate read group to find matches
-    std::unordered_map<tid_t, ExonChainMatch> matches = 
+    unordered_map<tid_t, ExonChainMatch> matches = 
       evaluator->evaluate(read, id, g2t, seq, seq_len);
 
     if (matches.empty()) return nullptr;
@@ -55,7 +54,7 @@ namespace bramble {
     // Write out evaluation result
     auto this_read = new ReadInfo;
 
-    this_read->matches = matches;
+    this_read->matches = std::move(matches);  // move assignment
     this_read->valid_read = true;
     this_read->is_paired = (read->brec->flags() & BAM_FPAIRED);
     this_read->read = std::make_shared<ReadOut>();
@@ -68,7 +67,7 @@ namespace bramble {
   }
 
   void write_to_bam(BamIO *io, std::vector<BamInfo *>& bam_info) {
-    std::unordered_set<read_id_t> seen;
+    unordered_set<read_id_t> seen;
     CigarMem cigar_mem; // reuse space in memory
     std::vector<bam1_t*> to_write;  // collect finished records
 
@@ -197,9 +196,7 @@ namespace bramble {
 #endif
 
     for (auto* b_ : to_write) {
-      GSamRecord *rec = new GSamRecord(b_);
-      io->write(rec);
-      delete rec;
+      io->write(b_);
     }
 
 #ifndef NOTHREADS
@@ -217,7 +214,7 @@ namespace bramble {
     bam_info.reserve(CHUNK_SIZE*1.2);
 
     // Buffer for grouping by read name before filtering
-    std::unordered_map<std::string, std::vector<BamInfo*>> pairs_by_name;
+    unordered_map<std::string, std::vector<BamInfo*>> pairs_by_name;
     uint32_t n_pairs;
 
     auto flush = [&]() {
@@ -256,7 +253,7 @@ namespace bramble {
     };
 
     // Track seen reads
-    std::unordered_set<read_id_t> seen;
+    unordered_set<read_id_t> seen;
     seen.reserve(reads.size() * 1.2);
 
     for (read_id_t id = 0; id < reads.size(); ) {

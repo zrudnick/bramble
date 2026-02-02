@@ -5,8 +5,6 @@
 #include <map>
 #include <memory>
 #include <set>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include <IITree.h>
@@ -26,7 +24,7 @@ namespace bramble {
 
   IITData::IITData() {}
 
-  GuideExon::GuideExon(uint32_t s = 0, uint32_t e = 0)
+  GuideExon::GuideExon(uint32_t s, uint32_t e)
     : start(s),
       end(e),
       pos(0),
@@ -116,12 +114,12 @@ namespace bramble {
     return nullptr;
   }
 
-  std::unordered_map<tid_t, std::shared_ptr<GuideExon>>
+  unordered_map<tid_t, std::shared_ptr<GuideExon>>
   IntervalTree::findOverlapping(uint32_t qstart, uint32_t qend, 
                                 char strand, ReadEvaluationConfig config, 
                                 ExonStatus status, bool has_left_clip,
                                 bool has_right_clip) {
-    std::unordered_map<tid_t, std::shared_ptr<GuideExon>> exons;
+    unordered_map<tid_t, std::shared_ptr<GuideExon>> exons;
     std::vector<size_t> hits;
     
     iit->overlap(qstart, qend, hits);
@@ -421,7 +419,7 @@ namespace bramble {
   }
 
   // Find all guide TIDs that overlap with a read exon
-  std::unordered_map<tid_t, std::shared_ptr<GuideExon>>
+  unordered_map<tid_t, std::shared_ptr<GuideExon>>
   g2tTree::getGuideExons(uint8_t refid, char strand, GSeg exon, 
                         ReadEvaluationConfig config, ExonStatus status,
                         bool has_left_clip, bool has_right_clip) {

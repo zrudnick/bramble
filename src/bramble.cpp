@@ -1,12 +1,11 @@
 
 #include <numeric>
 #include <algorithm>
+#include <atomic>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <set>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "CLI/CLI11.hpp"
@@ -94,7 +93,7 @@ char bundle_work =
        // yet) Bit 1 set if there are Bundles ready in the queue
 
 GMutex wait_mutex;       // Controls threads_waiting (idle threads counter)
-uint8_t threads_waiting; // Idle worker threads
+std::atomic<uint8_t> threads_waiting; // Idle worker threads
 GConditionVar
     have_threads; // Will notify the bundle loader when a thread
                   // Is available to process the currently loaded bundle
@@ -558,11 +557,7 @@ int main(int argc, char *argv[]) {
 
   auto g2t = build_g2t_tree(refguides, n_refguides, io);
 
-  // Delete gffreader data
-  for (int i = 0; i < gffreader->gflst.Count(); i++) {
-    GffObj *guide = gffreader->gflst[i];
-    delete guide;
-  }
+  // GffReader destructor will handle cleanup of GffObj objects via freeUnused()
   delete gffreader;
 
   #ifndef NOTHREADS

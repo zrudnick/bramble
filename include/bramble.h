@@ -5,8 +5,6 @@
 #include <map>
 #include <memory>
 #include <set>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 #include <functional>
 
@@ -66,6 +64,12 @@ namespace bramble {
     void write(GSamRecord *rec) {
       if (writer && rec != nullptr) {
         writer->write(rec);
+      }
+    }
+
+    void write(bam1_t *b) {
+      if (writer && b != nullptr) {
+        writer->write(b);
       }
     }
 

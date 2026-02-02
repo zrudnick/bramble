@@ -1,11 +1,10 @@
 #include <numeric>
 #include <algorithm>
+#include <atomic>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <set>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #ifndef NOTHREADS
@@ -43,7 +42,7 @@ extern char bundle_work; // Bit 0 set if bundles are still being prepared (BAM f
        // yet) Bit 1 set if there are Bundles ready in the queue
 
 extern GMutex wait_mutex;       // Controls threads_waiting (idle threads counter)
-extern uint8_t threads_waiting; // Idle worker threads
+extern std::atomic<uint8_t> threads_waiting; // Idle worker threads
 extern GConditionVar
     have_threads; // Will notify the bundle loader when a thread
                   // Is available to process the currently loaded bundle
@@ -81,17 +80,13 @@ namespace bramble {
 
     bool are_threads_waiting = true;
     while (are_threads_waiting) {
-      wait_mutex.lock();
-      are_threads_waiting = (threads_waiting > 0);
-      wait_mutex.unlock();
+      are_threads_waiting = (threads_waiting.load(std::memory_order_relaxed) > 0);
 
       if (are_threads_waiting) {
         have_bundles.notify_all();
         current_thread::sleep_for(1);
 
-        wait_mutex.lock();
-        are_threads_waiting = (threads_waiting > 0);
-        wait_mutex.unlock();
+        are_threads_waiting = (threads_waiting.load(std::memory_order_relaxed) > 0);
 
         current_thread::sleep_for(1);
       }
@@ -109,9 +104,7 @@ namespace bramble {
 
   // Check that there aren't any threads waiting
   bool no_threads_waiting() {
-    wait_mutex.lock();
-    int threads = threads_waiting;
-    wait_mutex.unlock();
+    int threads = threads_waiting.load(std::memory_order_relaxed);
     return (threads < 1);
   }
 
@@ -125,11 +118,11 @@ namespace bramble {
     queue_mutex.lock(); // enter wait-for-notification loop
 
     while (bundle_work) {
-      wait_mutex.lock();
-      threads_waiting++;
+      threads_waiting.fetch_add(1, std::memory_order_relaxed);
       queue_mutex.unlock();
-      wait_mutex.unlock();
+      wait_mutex.lock();
       have_threads.notify_one(); // in case main thread is waiting
+      wait_mutex.unlock();
       current_thread::yield();
       queue_mutex.lock();
       while (bundle_work && bundle_queue->Count() == 0) {
@@ -138,10 +131,8 @@ namespace bramble {
         have_bundles.wait(queue_mutex);
       }
 
-      wait_mutex.lock();
-      if (threads_waiting > 0)
-      threads_waiting--;
-      wait_mutex.unlock();
+      if (threads_waiting.load(std::memory_order_relaxed) > 0)
+        threads_waiting.fetch_sub(1, std::memory_order_relaxed);
 
       BundleData *readyBundle = NULL;
       if ((bundle_work & 0x02) != 0) {
@@ -202,7 +193,7 @@ namespace bramble {
       queue_mutex.unlock();
 
       wait_mutex.lock();
-      while (threads_waiting == 0) {
+      while (threads_waiting.load(std::memory_order_relaxed) == 0) {
         have_threads.wait(wait_mutex);
       }
       wait_mutex.unlock();
