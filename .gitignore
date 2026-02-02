@@ -127,3 +127,4 @@ build/
 subprojects/.wraplock
 subprojects/v4.4.0.tar.gz
 subprojects/unordered_dense-4.4.0/
+test_output/*.bam
