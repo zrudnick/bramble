@@ -129,6 +129,7 @@ std::shared_ptr<g2tTree> build_g2t_tree(GVec<GRefData> refguides,
       GffObj *guide = (*guides)[j];
       char strand = guide->strand;
       const char *tid_string = guide->getID();
+      // todo: validate that these are contiguous
       
 #ifndef NOTHREADS
       bam_io_mutex.lock();

@@ -864,9 +864,9 @@ namespace bramble {
                                       ExonChainMatch &match, ReadEvaluationConfig &config) {
 
     std::shared_ptr<Cigar> cigar = match.align.cigar;
-    for (auto &pair : segment.cigar.cigar) {
-      auto len = pair.first;
-      auto op = pair.second;
+    for (auto &cig : segment.cigar.cigar) {
+      uint8_t op = cig & BAM_CIGAR_MASK;
+      uint32_t len = cig >> BAM_CIGAR_SHIFT;
       cigar->add_operation(len, op);
       
       if (op == BAM_CMATCH_OVERRIDE 
@@ -1321,8 +1321,9 @@ namespace bramble {
           printf("fwpos = %d\n", pair.second.align.fwpos);
           printf("rcpos = %d\n", pair.second.align.rcpos);
           printf("IDEAL CIGAR: ");
-          for (const auto& cig : pair.second.align.cigar->cigar) {
-            printf("%u%c ", cig.first, "MIDNSHP=XB,./;"[cig.second]);
+          for (const auto &cig : pair.second.align.cigar->cigar) {
+            printf("%u%c ", cig >> BAM_CIGAR_SHIFT, 
+              "MIDNSHP=XB,./;"[cig & BAM_CIGAR_MASK]);
           }
           printf("\n\n");
         }

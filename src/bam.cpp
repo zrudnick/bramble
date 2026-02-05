@@ -41,25 +41,25 @@ namespace bramble {
       // Convert overlapping I and D to M
       int32_t overlap = std::min(i_count, d_count);
       if (overlap > 0) {
-        result.cigar.push_back({(uint32_t)overlap, BAM_CMATCH});
+        result.add_operation((uint32_t)overlap, BAM_CMATCH);
         i_count -= overlap;
         d_count -= overlap;
       }
       
       // Add remaining I or D
       if (i_count > 0) {
-        result.cigar.push_back({(uint32_t)i_count, BAM_CINS});
+        result.add_operation((uint32_t)i_count, BAM_CINS);
         i_count = 0;
       }
       if (d_count > 0) {
-        result.cigar.push_back({(uint32_t)d_count, BAM_CDEL});
+        result.add_operation((uint32_t)d_count, BAM_CDEL);
         d_count = 0;
       }
     };
     
-    for (const auto& pair : ideal_cigar.cigar) {
-      uint32_t len = pair.first;
-      uint32_t op = pair.second;
+    for (const auto &cig : ideal_cigar.cigar) {
+      uint8_t op = cig & BAM_CIGAR_MASK;
+      uint32_t len = cig >> BAM_CIGAR_SHIFT;
       
       if (op == BAM_CINS) {
         i_count += len;
@@ -67,7 +67,7 @@ namespace bramble {
         d_count += len;
       } else {
         flush_indels();
-        result.cigar.push_back({len, op});
+        result.add_operation(len, op);
       }
     }
     
@@ -83,7 +83,7 @@ namespace bramble {
   void expand_cigar_simple(uint32_t* cigar, uint32_t n_cigar,
                           std::vector<char>& expanded) {
     for (uint32_t k = 0; k < n_cigar; k++) {
-      uint32_t op = cigar[k] & BAM_CIGAR_MASK;
+      uint8_t op = cigar[k] & BAM_CIGAR_MASK;
       uint32_t len = cigar[k] >> BAM_CIGAR_SHIFT;
       
       // Skip introns (N operations)
@@ -98,9 +98,9 @@ namespace bramble {
 
   // Expand Cigar struct (vector of pairs)
   void expand_cigar_struct(const Cigar& cigar, std::vector<char>& expanded) {
-    for (const auto& pair : cigar.cigar) {
-      uint32_t len = pair.first;
-      uint32_t op = pair.second;
+    for (const auto &cig : cigar.cigar) {
+      uint8_t op = cig & BAM_CIGAR_MASK;
+      uint32_t len = cig >> BAM_CIGAR_SHIFT;
       
       char op_char = "MIDNSHP=XB,./;"[op];
       for (uint32_t i = 0; i < len; i++) {
@@ -422,7 +422,7 @@ namespace bramble {
         default: continue; // Skip unknown operations
       }
       
-      result.cigar.push_back({run_len, op});
+      result.add_operation(run_len, op);
     }
     
     return result;
@@ -480,8 +480,8 @@ namespace bramble {
     
     uint32_t* final_result = mem.get_mem(final_cigar.cigar.size());
     for (size_t k = 0; k < final_cigar.cigar.size(); k++) {
-      uint32_t len = final_cigar.cigar[k].first;
-      uint32_t op = final_cigar.cigar[k].second;
+      uint32_t len = final_cigar.cigar[k] >> BAM_CIGAR_SHIFT;
+      uint8_t op = final_cigar.cigar[k] & BAM_CIGAR_MASK;
       final_result[k] = (len << BAM_CIGAR_SHIFT) | op;
     }
     *new_n_cigar = final_cigar.cigar.size();
@@ -494,8 +494,9 @@ namespace bramble {
     //   fprintf(stderr, "%u%c", len, "MIDNSHP=XB,./;"[op]);
     // }
     // fprintf(stderr, "\nIDEAL CIGAR: ");
-    // for (const auto& pair : ideal_cigar.cigar) {
-    //   fprintf(stderr, "%u%c ", pair.first, "MIDNSHP=XB,./;"[pair.second]);
+    // for (const auto& cig : ideal_cigar.cigar) {
+    //   fprintf(stderr, "%u%c ", cig >> BAM_CIGAR_SHIFT, 
+    //     "MIDNSHP=XB,./;"[cig & BAM_CIGAR_MASK]);
     // }
     // fprintf(stderr, "\nREAL EXPANDED:  ");
     // for (char c : real_expanded) fprintf(stderr, "%c", c);
