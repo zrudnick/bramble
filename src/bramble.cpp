@@ -107,6 +107,8 @@ GFastMutex bam_io_mutex;  // Protects BAM io
 #endif
 
 bool no_more_bundles = false;
+uint32_t total_reads;
+uint32_t unmapped_reads;
 uint32_t dropped_reads;
 uint32_t unresolved_reads;
 
@@ -311,12 +313,12 @@ void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,
 
   auto guide_seq_names = std::shared_ptr<GffNames>(GffObj::names);
 
+  unmapped_reads = 0;
+  total_reads = 0;
   dropped_reads = 0;
   unresolved_reads = 0;
-  int all_reads = 0;
 
   bool more_alignments = true;
-  uint32_t unmapped_reads = 0;
 
   GSamRecord *brec = nullptr;
   std::vector<CReadAln *> reads;
@@ -336,7 +338,7 @@ void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,
     refid_t refid;
 
     if ((brec = io->next()) != NULL) {
-      all_reads++;
+      total_reads++;
       if (brec->isUnmapped()) {
         unmapped_reads++;
         continue;
@@ -395,11 +397,6 @@ void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,
 
     prev_read_name = read_name;
   }
-
-  GMessage("#total input reads is:    %d\n", all_reads);
-  GMessage("#unmapped reads is:       %d\n", unmapped_reads);
-  GMessage("#dropped reads is:        %d\n", dropped_reads);
-  GMessage("#unresolved reads is:     %d\n\n", unresolved_reads);
 }
 
 int main(int argc, char *argv[]) {
@@ -628,6 +625,12 @@ int main(int argc, char *argv[]) {
   io->stop(); // close BAM reader & writer
   delete io;
   delete gfasta;
+
+  printf("Final report:\n");
+  printf("Total input reads:    %d\n", total_reads);
+  printf("Unmapped reads:       %d\n", unmapped_reads);
+  printf("Dropped reads:        %d\n", dropped_reads);
+  printf("Unresolved reads:     %d\n\n", unresolved_reads);
   
   f_out = stdout;
   if (!QUIET || BRAMBLE_DEBUG)

@@ -439,7 +439,7 @@ namespace bramble {
     
     Cigar merged_ideal = merge_indels(ideal_cigar);
 
-    // Step 2: Expand both CIGARs to character arrays
+    // Expand both CIGARs to character arrays
     std::vector<char> real_expanded;
     std::vector<char> ideal_expanded;
     

@@ -86,8 +86,7 @@ namespace bramble {
     // Find intervals that overlap with the given range
     std::unordered_map<tid_t, std::shared_ptr<GuideExon>>
     findOverlapping(uint32_t start, uint32_t end, char strand,
-                    ReadEvaluationConfig config, ExonStatus status,
-                    bool has_left_clip, bool has_right_clip);
+                    ReadEvaluationConfig config, ExonStatus status);
 
   };
 
@@ -136,8 +135,7 @@ namespace bramble {
     // Find all guide exons that overlap with a read exon
     std::unordered_map<tid_t, std::shared_ptr<GuideExon>> 
     getGuideExons(uint8_t refid, char strand, GSeg exon, 
-                 ReadEvaluationConfig config, ExonStatus status,
-                 bool has_left_clip, bool has_right_clip);
+                 ReadEvaluationConfig config, ExonStatus status);
 
   };
 

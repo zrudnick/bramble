@@ -135,13 +135,24 @@ namespace bramble {
           // If read is being reversed - reverse-complement the sequence and quality strings
           bool align_reverse = (pair->r_align.is_reverse);
           bool current_reverse = (b->core.flag & BAM_FREVERSE);
-          if (current_reverse == 0 && align_reverse == 1) {
-            // update to allow * for sequence
-            int rc_res = reverse_complement_bam(b);
-            if (rc_res != 0) {
-              GError("Error: reverse_complement_bam failed with code %d\n", rc_res);
+          //printf("current reverse = %d, align reverse = %d\n", current_reverse, align_reverse);
+          if (LONG_READS) {
+            if (current_reverse == 0 && align_reverse == 1) {
+              // update to allow * for sequence
+              int rc_res = reverse_complement_bam(b);
+              if (rc_res != 0) {
+                GError("Error: reverse_complement_bam failed with code %d\n", rc_res);
+              }
             }
-          } 
+          } else {
+            if (b->core.flag & BAM_FREVERSE) {
+              // update to allow * for sequence
+              int rc_res = reverse_complement_bam(b);
+              if (rc_res != 0) {
+                GError("Error: reverse_complement_bam failed with code %d\n", rc_res);
+              }
+            }
+          }
 
           if (strand == '+') { // pos depends only on transcript strand
                                // not on read orientation or reverse status
@@ -157,15 +168,26 @@ namespace bramble {
           if (pair->m_align.primary_alignment) b->core.flag &= ~BAM_FSECONDARY; // mark primary
           else b->core.flag |= BAM_FSECONDARY; // default secondary
           // If read is being reversed - reverse-complement the sequence and quality strings
-          bool align_reverse = (pair->m_align.is_reverse);
-          bool current_reverse = (b->core.flag & BAM_FREVERSE);
-          if (current_reverse == 0 && align_reverse == 1) {
-            // update to allow * for sequence
-            int rc_res = reverse_complement_bam(b);
-            if (rc_res != 0) {
-              GError("Error: reverse_complement_bam failed with code %d\n", rc_res);
+          if (LONG_READS) {
+            bool align_reverse = (pair->m_align.is_reverse);
+            bool current_reverse = (b->core.flag & BAM_FREVERSE);
+            if (current_reverse == 0 && align_reverse == 1) {
+              // update to allow * for sequence
+              int rc_res = reverse_complement_bam(b);
+              if (rc_res != 0) {
+                GError("Error: reverse_complement_bam failed with code %d\n", rc_res);
+              }
+            }
+          } else {
+            if (b->core.flag & BAM_FREVERSE) {
+              // update to allow * for sequence
+              int rc_res = reverse_complement_bam(b);
+              if (rc_res != 0) {
+                GError("Error: reverse_complement_bam failed with code %d\n", rc_res);
+              }
             }
           }
+          
 
           if (strand == '+') { // pos depends only on transcript strand
                                // not on read orientation or reverse status
@@ -261,59 +283,53 @@ namespace bramble {
 
     for (read_id_t id = 0; id < reads.size(); ) {
 
-    // ---- group reads with identical name ----
-    read_id_t start = id;
-    const std::string& name = reads[id]->brec->name();
+      // Group reads with identical read names
+      read_id_t start = id;
+      const std::string& name = reads[id]->brec->name();
 
-    while (id < reads.size() && reads[id]->brec->name() == name) {
-      id++;
-    }
-    read_id_t end = id; // [start, end)
+      while (id < reads.size() && reads[id]->brec->name() == name) {
+        id++;
+      }
+      read_id_t end = id; // [start, end)
 
-    // ---- grab seq/qual from first read ----
-    CReadAln* first = reads[start];
+      CReadAln* first = reads[start];
+      bam1_t* b = first->brec->get_b();
+      int seq_len = b->core.l_qseq;
+      uint8_t *seq = bam_get_seq(b);
 
-    // for (read_id_t i = start + 1; i < end; i++) {
-    //   //copy_seq_qual(reads[i], first);
-    // }
-    auto brec = first->brec;
-    bam1_t* b = first->brec->get_b();
-    int seq_len = b->core.l_qseq;  // Total length of the sequence
-    uint8_t *seq = bam_get_seq(b);
+      // Process read groups
+      for (read_id_t i = start; i < end; i++) {
+        if (seen.count(i)) continue;
 
-    // ---- now process ALL reads in the group normally ----
-    for (read_id_t i = start; i < end; i++) {
-      if (seen.count(i)) continue;
+        ReadInfo* this_read = process_read_out(
+          reads[i], i, g2t, evaluator, seq, seq_len);
 
-      ReadInfo* this_read = process_read_out(
-        reads[i], i, g2t, evaluator, seq, seq_len);
+        int n_mates = reads[i]->pair_idx.Count();
 
-      int n_mates = reads[i]->pair_idx.Count();
+        if (n_mates == 0) {
+          process_mate_pair(this_read, nullptr, emit_pair);
+          delete this_read;
+          seen.insert(i);
+          continue;
+        }
 
-      if (n_mates == 0) {
-        process_mate_pair(this_read, nullptr, emit_pair);
+        for (uint32_t m = 0; m < n_mates; m++) {
+          int mate_id = reads[i]->pair_idx[m];
+          if (mate_id < 0 || mate_id >= reads.size()) continue;
+          if (seen.count(mate_id)) continue;
+
+          ReadInfo* mate_read = process_read_out(
+            reads[mate_id], mate_id, g2t, evaluator, seq, seq_len);
+
+          process_mate_pair(this_read, mate_read, emit_pair);
+          delete mate_read;
+          seen.insert(mate_id);
+        }
+
         delete this_read;
         seen.insert(i);
-        continue;
       }
-
-      for (uint32_t m = 0; m < n_mates; m++) {
-        int mate_id = reads[i]->pair_idx[m];
-        if (mate_id < 0 || mate_id >= reads.size()) continue;
-        if (seen.count(mate_id)) continue;
-
-        ReadInfo* mate_read = process_read_out(
-          reads[mate_id], mate_id, g2t, evaluator, seq, seq_len);
-
-        process_mate_pair(this_read, mate_read, emit_pair);
-        delete mate_read;
-        seen.insert(mate_id);
-      }
-
-      delete this_read;
-      seen.insert(i);
     }
-  }
 
     if (!pairs_by_name.empty()) flush();
   }
