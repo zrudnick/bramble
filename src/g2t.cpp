@@ -119,10 +119,10 @@ namespace bramble {
   std::unordered_map<tid_t, std::shared_ptr<GuideExon>>
   IntervalTree::findOverlapping(uint32_t qstart, uint32_t qend, 
                                 char strand, ReadEvaluationConfig config, 
-                                ExonStatus status, bool has_left_clip,
-                                bool has_right_clip) {
+                                ExonStatus status) {
     std::unordered_map<tid_t, std::shared_ptr<GuideExon>> exons;
     std::vector<size_t> hits;
+    //config.print = true;
     
     iit->overlap(qstart, qend, hits);
     if (hits.empty()) {
@@ -131,6 +131,7 @@ namespace bramble {
         printf("Query range: [%u, %u], strand: %c\n", qstart, qend, strand);
         printf("Reason: No overlapping intervals found in tree\n\n");
       }
+      config.print = false;
       return exons;
     }
 
@@ -340,6 +341,7 @@ namespace bramble {
       printf("\n");
     }
 
+    config.print = false;
     return exons;
   }
 
@@ -423,11 +425,10 @@ namespace bramble {
   // Find all guide TIDs that overlap with a read exon
   std::unordered_map<tid_t, std::shared_ptr<GuideExon>>
   g2tTree::getGuideExons(uint8_t refid, char strand, GSeg exon, 
-                        ReadEvaluationConfig config, ExonStatus status,
-                        bool has_left_clip, bool has_right_clip) {
+                        ReadEvaluationConfig config, ExonStatus status) {
     IntervalTree *tree = getTreeForStrand(refid, strand);
     return tree->findOverlapping(exon.start, exon.end, strand, 
-      config, status, has_left_clip, has_right_clip);
+      config, status);
   }
   
 };

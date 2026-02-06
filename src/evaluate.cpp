@@ -152,8 +152,8 @@ namespace bramble {
     bool data_empty = data.empty();
 
     // Find all guide exons that contain the query exon
-    auto guide_exons = g2t->getGuideExons(refid, strand, qexon,
-      config, status, has_left_clip, has_right_clip);
+    auto guide_exons = g2t->getGuideExons(refid, strand, 
+      qexon, config, status);
 
     std::set<tid_t> candidate_tids;
     if (!guide_exons.empty()) {
@@ -263,20 +263,14 @@ namespace bramble {
       //   end_ignore.is_small_exon = true;
       // }
       } else {
-        dropped_reads++;
         failure = true;
         return;
       }
 
       return; // move on to next query exon
-    } else {
-      dropped_reads++;
-      failure = true;
-      return;
     }
 
     // no resolution; give up on read
-    dropped_reads++;
     failure = true;
     return;
   }
@@ -337,10 +331,11 @@ namespace bramble {
           return;
         }
 
-        auto prev_exon = g2t->getGuideExonForTid(refid, strand, tid, gap_start, gap_end);
+        auto prev_exon = g2t->getGuideExonForTid(refid, strand, tid, 
+          gap_start, gap_end);
         if (!prev_exon) {
-            tid_data.elim = true;
-            return;
+          tid_data.elim = true;
+          return;
         }
 
         Segment gap_seg;
@@ -348,7 +343,8 @@ namespace bramble {
         gap_seg.gexon = prev_exon;
         gap_seg.has_gexon = true;
         gap_seg.status = GAP_EXON;
-        gap_seg.is_small_exon = (prev_exon->end - prev_exon->start <= config.small_exon_size);
+        gap_seg.is_small_exon = (prev_exon->end - prev_exon->start 
+          <= config.small_exon_size);
         
         it_s = tid_data.segments.emplace(it_s, gap_seg);
         ++it_s;
@@ -868,9 +864,9 @@ namespace bramble {
                                       ExonChainMatch &match, ReadEvaluationConfig &config) {
 
     std::shared_ptr<Cigar> cigar = match.align.cigar;
-    for (auto &pair : segment.cigar.cigar) {
-      auto len = pair.first;
-      auto op = pair.second;
+    for (auto &cig : segment.cigar.cigar) {
+      uint8_t op = cig & BAM_CIGAR_MASK;
+      uint32_t len = cig >> BAM_CIGAR_SHIFT;
       cigar->add_operation(len, op);
       
       if (op == BAM_CMATCH_OVERRIDE 
@@ -1019,8 +1015,10 @@ namespace bramble {
     //config.print = true;
     //GMessage("read name = %s\n", config.name.c_str());
 
-    get_clips(read, config, failure, has_left_clip, has_right_clip,
-      n_left_clip, n_right_clip);
+    if (LONG_READS) {
+      get_clips(read, config, failure, has_left_clip, has_right_clip,
+        n_left_clip, n_right_clip);
+    }
 
     std::unordered_map<tid_t, TidData> data;
 
@@ -1102,82 +1100,85 @@ namespace bramble {
       }
 
       // Add soft clip segments for each tid
-      for (auto &pair : data) {
-        tid_t tid = pair.first;
-        auto &tid_data = pair.second;
-
-        if (tid_data.elim) continue;
-
-        // if (start_ignore.is_valid) {
-        //   if (config.print) printf("start ignore is valid\n");
-        //   //tid_data.segments.emplace(tid_data.segments.begin(), start_ignore);
-        //   n_left_clip += (start_ignore.qexon.end - start_ignore.qexon.start);
-        // }
-
-        // if (end_ignore.is_valid) {
-        //   if (config.print) printf("end ignore is valid\n");
-        //   //tid_data.segments.emplace_back(end_ignore);
-        //   n_right_clip += (end_ignore.qexon.end - end_ignore.qexon.start);
-        // }
-
-        if (tid_data.has_left_ins && USE_FASTA) {
-          if (config.print) printf("has_left_ins\n");
-          if (n_left_clip >= 5) {
-            left_clip_rescue(tid_data, start_ignore, strand, g2t, refid, 
-              tid, n_left_clip, tid_data.n_left_ins, config, read, 
-              seq, seq_len);
-          } else {
-            tid_data.has_left_clip = false;
-          }
-        }
-        else if (tid_data.has_left_clip && USE_FASTA) {
-          if (n_left_clip >= 5) {
-            left_clip_rescue(tid_data, start_ignore, strand, g2t, refid,
-              tid, n_left_clip, 0, config, read, seq, seq_len);
-          } else {
-            tid_data.has_left_clip = false;
-          }
-        }
-
-        if (tid_data.has_right_ins && USE_FASTA) {
-          if (config.print) printf("has_right_ins\n");
-          if (n_right_clip >= 5) {
-            right_clip_rescue(tid_data, end_ignore, strand, g2t, refid,
-              tid, n_right_clip, tid_data.n_right_ins, config, read, 
-              seq, seq_len);
-          } else {
-            tid_data.has_right_clip = false;
-          }
-        }
-        else if (tid_data.has_right_clip && USE_FASTA) {
-          if (n_right_clip >= 5) {
-            right_clip_rescue(tid_data, end_ignore, strand, g2t, refid,
-              tid, n_right_clip, 0, config, read, seq, seq_len);
-          } else {
-            tid_data.has_right_clip = false;
-          }
-        }
-      }  
-
-      if (config.print) {
-        printf("\n=== AFTER CLIP RESCUE ===\n");
+      if (LONG_READS) {
         for (auto &pair : data) {
           tid_t tid = pair.first;
           auto &tid_data = pair.second;
 
           if (tid_data.elim) continue;
 
-          printf("TID %d (%s), elim=%d\n",
-                tid,
-                g2t->getTidName(tid).c_str(),
-                tid_data.elim);
+          // if (start_ignore.is_valid) {
+          //   if (config.print) printf("start ignore is valid\n");
+          //   //tid_data.segments.emplace(tid_data.segments.begin(), start_ignore);
+          //   n_left_clip += (start_ignore.qexon.end - start_ignore.qexon.start);
+          // }
 
-          int k = 0;
-          for (auto &s : tid_data.segments) {
-            print_segment(s, k++);
+          // if (end_ignore.is_valid) {
+          //   if (config.print) printf("end ignore is valid\n");
+          //   //tid_data.segments.emplace_back(end_ignore);
+          //   n_right_clip += (end_ignore.qexon.end - end_ignore.qexon.start);
+          // }
+
+          if (tid_data.has_left_ins && USE_FASTA) {
+            if (config.print) printf("has_left_ins\n");
+            if (n_left_clip >= 5) {
+              left_clip_rescue(tid_data, start_ignore, strand, g2t, refid, 
+                tid, n_left_clip, tid_data.n_left_ins, config, read, 
+                seq, seq_len);
+            } else {
+              tid_data.has_left_clip = false;
+            }
           }
+          else if (tid_data.has_left_clip && USE_FASTA) {
+            if (n_left_clip >= 5) {
+              left_clip_rescue(tid_data, start_ignore, strand, g2t, refid,
+                tid, n_left_clip, 0, config, read, seq, seq_len);
+            } else {
+              tid_data.has_left_clip = false;
+            }
+          }
+
+          if (tid_data.has_right_ins && USE_FASTA) {
+            if (config.print) printf("has_right_ins\n");
+            if (n_right_clip >= 5) {
+              right_clip_rescue(tid_data, end_ignore, strand, g2t, refid,
+                tid, n_right_clip, tid_data.n_right_ins, config, read, 
+                seq, seq_len);
+            } else {
+              tid_data.has_right_clip = false;
+            }
+          }
+          else if (tid_data.has_right_clip && USE_FASTA) {
+            if (n_right_clip >= 5) {
+              right_clip_rescue(tid_data, end_ignore, strand, g2t, refid,
+                tid, n_right_clip, 0, config, read, seq, seq_len);
+            } else {
+              tid_data.has_right_clip = false;
+            }
+          }
+          
         }
-        printf("\n");
+
+        if (config.print) {
+          printf("\n=== AFTER CLIP RESCUE ===\n");
+          for (auto &pair : data) {
+            tid_t tid = pair.first;
+            auto &tid_data = pair.second;
+
+            if (tid_data.elim) continue;
+
+            printf("TID %d (%s), elim=%d\n",
+                  tid,
+                  g2t->getTidName(tid).c_str(),
+                  tid_data.elim);
+
+            int k = 0;
+            for (auto &s : tid_data.segments) {
+              print_segment(s, k++);
+            }
+          }
+          printf("\n");
+        }
       }
 
       // Calculate matches using segments
@@ -1320,8 +1321,9 @@ namespace bramble {
           printf("fwpos = %d\n", pair.second.align.fwpos);
           printf("rcpos = %d\n", pair.second.align.rcpos);
           printf("IDEAL CIGAR: ");
-          for (const auto& cig : pair.second.align.cigar->cigar) {
-            printf("%u%c ", cig.first, "MIDNSHP=XB,./;"[cig.second]);
+          for (const auto &cig : pair.second.align.cigar->cigar) {
+            printf("%u%c ", cig >> BAM_CIGAR_SHIFT, 
+              "MIDNSHP=XB,./;"[cig & BAM_CIGAR_MASK]);
           }
           printf("\n\n");
         }
@@ -1329,8 +1331,13 @@ namespace bramble {
 
     } // end of strands to check
 
-    filter_by_similarity(matches_by_strand, g2t, config);
-    //matches_by_strand.clear();
+    if (!matches_by_strand.empty()) {
+      filter_by_similarity(matches_by_strand, g2t, config);
+    } else {
+      if (failure)
+        dropped_reads++;
+      else unresolved_reads++;
+    }
     return matches_by_strand;
   }
 
@@ -1341,7 +1348,7 @@ namespace bramble {
                               uint8_t *seq,
                               int seq_len) {
 
-    uint32_t max_clip = 5; //25
+    uint32_t max_clip = 25;
     uint32_t max_ins = 5;
     uint32_t max_gap = 5;
     uint32_t max_junc_gap = 0;

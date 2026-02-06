@@ -11,31 +11,55 @@ namespace bramble {
   struct GuideExon;
 
   struct Cigar {
-    std::vector<std::pair<uint32_t, uint8_t>> cigar;
+    //std::vector<std::pair<uint32_t, uint8_t>> cigar;
+    std::vector<uint32_t> cigar;
 
-    void add_operation(uint32_t length, uint8_t op) {
-      if (length == 0) return;
-      if (!cigar.empty() && cigar.back().second == op) {
-        cigar.back().first += length;
+    void add_operation(uint32_t len, uint8_t op) {
+      if (cigar.empty()) {
+        uint32_t new_cig = (len << BAM_CIGAR_SHIFT) || op;
+        cigar.emplace_back(new_cig);
+        return;
+      } 
+      
+      uint32_t &prev_cig = cigar.back();
+      uint8_t prev_op = prev_cig & BAM_CIGAR_MASK;
+      uint32_t prev_len = prev_cig >> BAM_CIGAR_SHIFT;
+
+      if (prev_op == op) {
+        prev_cig = ((prev_len + len) << BAM_CIGAR_SHIFT) || op;
       } else {
-        cigar.emplace_back(length, op);
+        uint32_t new_cig = (len << BAM_CIGAR_SHIFT) || op;
+        cigar.emplace_back(new_cig);
       }
     }
 
-    void prepend_operation(uint32_t length, uint8_t op) {
-      if (length == 0) return;
-      if (!cigar.empty() && cigar.front().second == op) {
-        cigar.front().first += length;
+    void prepend_operation(uint32_t len, uint8_t op) {
+      if (cigar.empty()) {
+        uint32_t new_cig = (len << BAM_CIGAR_SHIFT) || op;
+        cigar.insert(cigar.begin(), new_cig);
+        return;
+      }
+
+      uint32_t &front_cig = cigar.front();
+      uint8_t front_op = front_cig & BAM_CIGAR_MASK;
+      uint32_t front_len = front_cig >> BAM_CIGAR_SHIFT;
+
+      if (front_op == op) {
+        front_cig = ((front_len + len) << BAM_CIGAR_SHIFT) || op;
       } else {
-        cigar.insert(cigar.begin(), std::make_pair(length, op));
+        uint32_t new_cig = (len << BAM_CIGAR_SHIFT) || op;
+        cigar.insert(cigar.begin(), new_cig);
       }
     }
 
     // for debugging
     std::string to_string() const {
       std::string result;
-      for (const auto& [length, op] : cigar) {
-        result += std::to_string(length);
+      for (const auto &cig : cigar) {
+        uint8_t op = cig & BAM_CIGAR_MASK;
+        uint32_t len = cig >> BAM_CIGAR_SHIFT;
+
+        result += std::to_string(len);
         // Convert BAM op code to CIGAR character
         switch(op) {
           case BAM_CMATCH: result += 'M'; break;
@@ -47,6 +71,10 @@ namespace bramble {
           case BAM_CPAD: result += 'P'; break;
           case BAM_CEQUAL: result += '='; break;
           case BAM_CDIFF: result += 'X'; break;
+          case 9: result += ','; break;
+          case 10: result += '.'; break;
+          case 11: result += '/'; break;
+          case 12: result += ';'; break;
           default: result += '?'; break;
         }
       }
