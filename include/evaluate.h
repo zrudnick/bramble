@@ -16,7 +16,7 @@ namespace bramble {
 
     void add_operation(uint32_t len, uint8_t op) {
       if (cigar.empty()) {
-        uint32_t new_cig = (len << BAM_CIGAR_SHIFT) || op;
+        uint32_t new_cig = (len << BAM_CIGAR_SHIFT) | op;
         cigar.emplace_back(new_cig);
         return;
       } 
@@ -26,16 +26,16 @@ namespace bramble {
       uint32_t prev_len = prev_cig >> BAM_CIGAR_SHIFT;
 
       if (prev_op == op) {
-        prev_cig = ((prev_len + len) << BAM_CIGAR_SHIFT) || op;
+        prev_cig = ((prev_len + len) << BAM_CIGAR_SHIFT) | op;
       } else {
-        uint32_t new_cig = (len << BAM_CIGAR_SHIFT) || op;
+        uint32_t new_cig = (len << BAM_CIGAR_SHIFT) | op;
         cigar.emplace_back(new_cig);
       }
     }
 
     void prepend_operation(uint32_t len, uint8_t op) {
       if (cigar.empty()) {
-        uint32_t new_cig = (len << BAM_CIGAR_SHIFT) || op;
+        uint32_t new_cig = (len << BAM_CIGAR_SHIFT) | op;
         cigar.insert(cigar.begin(), new_cig);
         return;
       }
@@ -45,9 +45,9 @@ namespace bramble {
       uint32_t front_len = front_cig >> BAM_CIGAR_SHIFT;
 
       if (front_op == op) {
-        front_cig = ((front_len + len) << BAM_CIGAR_SHIFT) || op;
+        front_cig = ((front_len + len) << BAM_CIGAR_SHIFT) | op;
       } else {
-        uint32_t new_cig = (len << BAM_CIGAR_SHIFT) || op;
+        uint32_t new_cig = (len << BAM_CIGAR_SHIFT) | op;
         cigar.insert(cigar.begin(), new_cig);
       }
     }
