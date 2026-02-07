@@ -1006,11 +1006,11 @@ namespace bramble {
 
     bool failure = false;
 
-    // if (config.name == "NM_001023_5_aligned_2418083_F_4_480_27") {
-    //   config.print = true;
-    // } else {
-    //   config.print = false;
-    // }
+    if (config.name == "NM_021109_166_aligned_3877359_F_1_377_4") {
+      config.print = true;
+    } else {
+      config.print = false;
+    }
     //printf("read name = %s\n", config.name.c_str());
     //config.print = true;
     //GMessage("read name = %s\n", config.name.c_str());

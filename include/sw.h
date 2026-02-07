@@ -11,13 +11,6 @@ namespace bramble {
     END = 2     // alignment must be near end of seq2
   };
 
-  enum CustomCigarOps {
-    BAM_CMATCH_OVERRIDE = 10,
-    BAM_CDEL_OVERRIDE = 11,
-    BAM_CINS_OVERRIDE = 12,
-    BAM_CLIP_OVERRIDE = 13
-  };
-
   struct AlignmentResult {
     int score;
     Cigar cigar;

@@ -231,120 +231,201 @@ namespace bramble {
   // STEP 5: Merge operations with clear priority rules
   // ============================================================================
 
+  // char merge_ops(char real_op, char ideal_op) {
+  //   // PRIORITY 1: Special case - real insertion with ideal padding
+  //   if (real_op == 'I' && ideal_op == '_') {
+  //     return 'I';
+  //   }
+    
+  //   // PRIORITY 2: Special overrides - ideal's ,./ override real's soft clips
+  //   // ; = soft clip override (should become S)
+  //   // , = match override (should become M)
+  //   // . = deletion override (should become D)
+  //   // / = insertion override (should become I)
+  //   if ((real_op == 'M' || real_op == 'S') && ideal_op == ';') {
+  //     return 'S';
+  //   }
+  //   if ((real_op == 'M' || real_op == 'S') && ideal_op == ',') {
+  //     return 'M';
+  //   }
+  //   if ((real_op == 'M' || real_op == 'S') && ideal_op == '/') {
+  //     return 'I';
+  //   }
+  //   if ((real_op == 'M' || real_op == 'S') && ideal_op == '.') {
+  //     return 'D';
+  //   }
+
+  //   if (real_op == 'D' && ideal_op == ';') {
+  //     return '_';
+  //   }
+  //   if (real_op == 'D' && ideal_op == ',') {
+  //     return 'D';
+  //   }
+  //   if (real_op == 'D' && ideal_op == '/') {
+  //     return '_';
+  //   }
+  //   if (real_op == 'D' && ideal_op == '.') {
+  //     return '_';   // doesn't happen
+  //   }
+
+  //   if (real_op == 'I' && ideal_op == ';') {
+  //     return 'S';
+  //   }
+  //   if (real_op == 'I' && ideal_op == ',') {
+  //     return 'I';
+  //   }
+  //   if (real_op == 'D' && ideal_op == '/') {
+  //     return '_';
+  //   }
+  //   if (real_op == 'I' && ideal_op == '.') {
+  //     return '_';   // doesn't happen
+  //   }
+
+  //   if (ideal_op == ';') {
+  //     return 'S';
+  //   }
+  //   if (ideal_op == ',') {
+  //     return 'M';
+  //   }
+  //   if (ideal_op == '/') {
+  //     return 'I';
+  //   }
+  //   if (ideal_op == '.') { // this takes care of the '_' and '.' case, rest may be unnecessary
+  //     return 'D';
+  //   }
+    
+  //   // PRIORITY 3: Handle end soft/hard clips (padding markers)
+  //   if (ideal_op == '*') {
+  //     return real_op;
+  //   }
+  //   if (real_op == '*') {
+  //     return ideal_op;
+  //   }
+    
+  //   // PRIORITY 4: Hard clips always win
+  //   if (real_op == 'H') {
+  //     return 'H';
+  //   }
+    
+  //   // PRIORITY 5: Special edge cases
+  //   // Real D and ideal S - add padding to avoid extra sequence
+  //   if (real_op == 'D' && ideal_op == 'S') {
+  //     return '_';
+  //   }
+  //   // Real I and ideal S - use S
+  //   if (real_op == 'I' && ideal_op == 'S') {
+  //     return 'S';
+  //   }
+  //   // Real D and ideal I - use padding
+  //   if (real_op == 'D' && ideal_op == 'I') {
+  //     return '_';
+  //   }
+    
+  //   // PRIORITY 6: If ideal has S, D, or I, use it
+  //   if (ideal_op == 'S' || ideal_op == 'D' || ideal_op == 'I') {
+  //     return ideal_op;
+  //   }
+    
+  //   // PRIORITY 7: If real has S, D, or I, use it
+  //   if (real_op == 'S' || real_op == 'D' || real_op == 'I') {
+  //     return real_op;
+  //   }
+    
+  //   // PRIORITY 8: Matches (M, =, X all become M)
+  //   if (ideal_op == 'M' || ideal_op == '=' || ideal_op == 'X') {
+  //     return 'M';
+  //   }
+  //   if (real_op == 'M' || real_op == '=' || real_op == 'X') {
+  //     return 'M';
+  //   }
+    
+  //   // PRIORITY 9: Padding from alignment
+  //   if (real_op == '_') return ideal_op;
+  //   if (ideal_op == '_') return real_op;
+    
+  //   // Fallback
+  //   return real_op != '*' ? real_op : ideal_op;
+  // }
+
   char merge_ops(char real_op, char ideal_op) {
-    // PRIORITY 1: Special case - real insertion with ideal padding
-    if (real_op == 'I' && ideal_op == '_') {
-      return 'I';
+
+    if ((real_op == BAM_CMATCH || real_op == BAM_CSOFT_CLIP) && ideal_op == BAM_CLIP_OVERRIDE) {
+      return BAM_CSOFT_CLIP;
     }
-    
-    // PRIORITY 2: Special overrides - ideal's ,./ override real's soft clips
-    // ; = soft clip override (should become S)
-    // , = match override (should become M)
-    // . = deletion override (should become D)
-    // / = insertion override (should become I)
-    if ((real_op == 'M' || real_op == 'S') && ideal_op == ';') {
-      return 'S';
+    if ((real_op == BAM_CMATCH || real_op == BAM_CSOFT_CLIP) && ideal_op == BAM_CMATCH_OVERRIDE) {
+      return BAM_CMATCH;
     }
-    if ((real_op == 'M' || real_op == 'S') && ideal_op == ',') {
-      return 'M';
+    if ((real_op == BAM_CMATCH || real_op == BAM_CSOFT_CLIP) && ideal_op == BAM_CINS_OVERRIDE) {
+      return BAM_CINS;
     }
-    if ((real_op == 'M' || real_op == 'S') && ideal_op == '/') {
-      return 'I';
-    }
-    if ((real_op == 'M' || real_op == 'S') && ideal_op == '.') {
-      return 'D';
+    if ((real_op == BAM_CMATCH || real_op == BAM_CSOFT_CLIP) && ideal_op == BAM_CDEL_OVERRIDE) {
+      return BAM_CDEL;
     }
 
-    if (real_op == 'D' && ideal_op == ';') {
-      return '_';
-    }
-    if (real_op == 'D' && ideal_op == ',') {
-      return 'D';
-    }
-    if (real_op == 'D' && ideal_op == '/') {
-      return '_';
-    }
-    if (real_op == 'D' && ideal_op == '.') {
-      return '_';   // doesn't happen
+    if (real_op == BAM_CDEL && ideal_op == BAM_CMATCH_OVERRIDE) {
+      return BAM_CDEL;
     }
 
-    if (real_op == 'I' && ideal_op == ';') {
-      return 'S';
+    if (real_op == BAM_CINS && ideal_op == BAM_CLIP_OVERRIDE) {
+      return BAM_CSOFT_CLIP;
     }
-    if (real_op == 'I' && ideal_op == ',') {
-      return 'I';
-    }
-    if (real_op == 'D' && ideal_op == '/') {
-      return '_';
-    }
-    if (real_op == 'I' && ideal_op == '.') {
-      return '_';   // doesn't happen
+    if (real_op == BAM_CINS && ideal_op == BAM_CMATCH_OVERRIDE) {
+      return BAM_CINS;
     }
 
-    if (ideal_op == ';') {
-      return 'S';
+    if (ideal_op == BAM_CLIP_OVERRIDE) {
+      return BAM_CSOFT_CLIP;
     }
-    if (ideal_op == ',') {
-      return 'M';
+    if (ideal_op == BAM_CMATCH_OVERRIDE) {
+      return BAM_CMATCH;
     }
-    if (ideal_op == '/') {
-      return 'I';
+    if (ideal_op == BAM_CINS_OVERRIDE) {
+      return BAM_CINS;
     }
-    if (ideal_op == '.') { // this takes care of the '_' and '.' case, rest may be unnecessary
-      return 'D';
+    if (ideal_op == BAM_CDEL_OVERRIDE) { 
+      // this takes care of the '_' and '.' case, rest may be unnecessary
+      return BAM_CDEL;
     }
-    
-    // PRIORITY 3: Handle end soft/hard clips (padding markers)
-    if (ideal_op == '*') {
-      return real_op;
-    }
-    if (real_op == '*') {
+
+    if (real_op == BAM_CPAD) {
       return ideal_op;
     }
     
-    // PRIORITY 4: Hard clips always win
-    if (real_op == 'H') {
-      return 'H';
+    if (real_op == BAM_CHARD_CLIP) {
+      return BAM_CHARD_CLIP;
     }
     
-    // PRIORITY 5: Special edge cases
-    // Real D and ideal S - add padding to avoid extra sequence
-    if (real_op == 'D' && ideal_op == 'S') {
-      return '_';
-    }
     // Real I and ideal S - use S
-    if (real_op == 'I' && ideal_op == 'S') {
-      return 'S';
-    }
-    // Real D and ideal I - use padding
-    if (real_op == 'D' && ideal_op == 'I') {
-      return '_';
+    if (real_op == BAM_CINS && ideal_op == BAM_CSOFT_CLIP) {
+      return BAM_CSOFT_CLIP;
     }
     
-    // PRIORITY 6: If ideal has S, D, or I, use it
-    if (ideal_op == 'S' || ideal_op == 'D' || ideal_op == 'I') {
+    // If ideal has S, D, or I, use it
+    if (ideal_op == BAM_CSOFT_CLIP || ideal_op == BAM_CDEL || ideal_op == BAM_CINS) {
       return ideal_op;
     }
     
-    // PRIORITY 7: If real has S, D, or I, use it
-    if (real_op == 'S' || real_op == 'D' || real_op == 'I') {
+    // If real has S, D, or I, use it
+    if (real_op == BAM_CSOFT_CLIP || real_op == BAM_CDEL || real_op == BAM_CINS) {
       return real_op;
     }
     
-    // PRIORITY 8: Matches (M, =, X all become M)
-    if (ideal_op == 'M' || ideal_op == '=' || ideal_op == 'X') {
-      return 'M';
+    // Matches (M, =, X all become M)
+    if (ideal_op == BAM_CMATCH || ideal_op == BAM_CEQUAL) {
+      return BAM_CMATCH;
     }
-    if (real_op == 'M' || real_op == '=' || real_op == 'X') {
-      return 'M';
+    if (ideal_op == BAM_CDIFF) {
+      return BAM_CDIFF;
     }
-    
-    // PRIORITY 9: Padding from alignment
-    if (real_op == '_') return ideal_op;
-    if (ideal_op == '_') return real_op;
+    if (real_op == BAM_CMATCH || real_op == BAM_CEQUAL) {
+      return BAM_CMATCH;
+    }
+    if (real_op == BAM_CDIFF) {
+      return BAM_CDIFF;
+    }
     
     // Fallback
-    return real_op != '*' ? real_op : ideal_op;
+    return ideal_op;
   }
 
   // ============================================================================
@@ -428,6 +509,126 @@ namespace bramble {
     return result;
   }
 
+  uint32_t* merge_cigars(uint32_t* real_cigar, uint32_t n_real_cigar,
+                        const Cigar& ideal_cigar, uint32_t* new_n_cigar,
+                        uint32_t real_front_hard_clip,
+                        uint32_t real_front_soft_clip) {
+    
+    uint32_t n_ideal_cigar = ideal_cigar.cigar.size();
+    uint32_t max_size = n_real_cigar + n_ideal_cigar;
+    uint32_t* result = (uint32_t*)malloc(max_size * sizeof(uint32_t));
+    uint32_t result_idx = 0;
+    
+    uint32_t ri = 0;  // index into real_cigar operations
+    uint32_t ii = 0;  // index into ideal_cigar operations
+    
+    uint32_t real_pos = 0;   // position within current real operation
+    uint32_t ideal_pos = 0;  // position within current ideal operation
+    
+    auto add_op = [&](uint8_t op) {
+      if (result_idx > 0 && bam_cigar_op(result[result_idx - 1]) == op) {
+        result[result_idx - 1] = bam_cigar_gen(
+            bam_cigar_oplen(result[result_idx - 1]) + 1, op);
+      } else {
+        result[result_idx++] = bam_cigar_gen(1, op);
+      }
+    };
+    
+    auto get_real_op = [&]() -> uint8_t {
+      if (ri >= n_real_cigar) return 0xff; // invalid
+      return bam_cigar_op(real_cigar[ri]);
+    };
+    
+    auto get_ideal_op = [&]() -> uint8_t {
+      if (ii >= n_ideal_cigar) return 0xff; // invalid
+      return bam_cigar_op(ideal_cigar.cigar[ii]);
+    };
+    
+    auto advance_real = [&]() {
+      if (ri >= n_real_cigar) return;
+      real_pos++;
+      if (real_pos >= bam_cigar_oplen(real_cigar[ri])) {
+        ri++;
+        real_pos = 0;
+      }
+    };
+    
+    auto advance_ideal = [&]() {
+      if (ii >= n_ideal_cigar) return;
+      ideal_pos++;
+      if (ideal_pos >= bam_cigar_oplen(ideal_cigar.cigar[ii])) {
+        ii++;
+        ideal_pos = 0;
+      }
+    };
+    
+    // Phase 1: Handle front hard clips from real_cigar
+    for (size_t i = 0; i < real_front_hard_clip && ri < n_real_cigar; i++) {
+      add_op(get_real_op());
+      advance_real();
+    }
+    
+    // Phase 2: Handle front soft clips from real_cigar (with ideal overrides)
+    for (size_t i = 0; i < real_front_soft_clip && ri < n_real_cigar; i++) {
+      uint8_t real_op = get_real_op();
+      uint8_t ideal_op = get_ideal_op();
+      
+      // Check if ideal has an override at this position
+      if (ii < n_ideal_cigar &&
+        (ideal_op == BAM_CMATCH_OVERRIDE || ideal_op == BAM_CDEL_OVERRIDE || 
+        ideal_op == BAM_CINS_OVERRIDE || ideal_op == BAM_CLIP_OVERRIDE)) {
+        add_op(ideal_op);
+        advance_ideal();
+      } else {
+        add_op(real_op);
+      }
+      advance_real();
+    }
+    
+    while (ri < n_real_cigar || ii < n_ideal_cigar) {
+      uint8_t real_op = get_real_op();
+      uint8_t ideal_op = get_ideal_op();
+      
+      if (ri >= n_real_cigar) { // only ideal left
+        add_op(ideal_op);
+        advance_ideal();
+      } else if (ii >= n_ideal_cigar) { // only real left
+        add_op(real_op);
+        advance_real();
+      } else {
+        if (real_op == BAM_CREF_SKIP) {
+          // do nothing
+          advance_real();
+        }
+        else if (real_op == BAM_CDEL && 
+          (ideal_op == BAM_CSOFT_CLIP || ideal_op == BAM_CLIP_OVERRIDE)) {
+          // do nothing
+          advance_real();
+          advance_ideal();
+        } else if (real_op == BAM_CDEL && 
+          (ideal_op == BAM_CINS || ideal_op == BAM_CINS_OVERRIDE)) {
+          // do nothing
+          advance_real();
+          advance_ideal();
+        } else if (real_op == BAM_CINS) {
+          add_op(BAM_CINS);
+          advance_real();
+        } else if (ideal_op == BAM_CDEL || ideal_op == BAM_CDEL_OVERRIDE) {
+          add_op(BAM_CDEL);
+          advance_ideal();
+        } else {
+          uint8_t merged_op = merge_ops(real_op, ideal_op);
+          add_op(merged_op);
+          advance_real();
+          advance_ideal();
+        }
+      }
+    }
+    
+    *new_n_cigar = result_idx;
+    return result;
+  }
+
 
   // ============================================================================
   // MAIN FUNCTION: Merge real and ideal CIGARs
@@ -437,14 +638,14 @@ namespace bramble {
                         const Cigar& ideal_cigar, uint32_t* new_n_cigar,
                         CigarMem& mem, int32_t& nm) {
     
-    Cigar merged_ideal = merge_indels(ideal_cigar);
+    //Cigar merged_ideal = merge_indels(ideal_cigar);
 
     // Expand both CIGARs to character arrays
-    std::vector<char> real_expanded;
-    std::vector<char> ideal_expanded;
+    //std::vector<char> real_expanded;
+    //std::vector<char> ideal_expanded;
     
-    expand_cigar_simple(real_cigar, n_real_cigar, real_expanded);
-    expand_cigar_struct(merged_ideal, ideal_expanded);  // Use struct version!
+    //expand_cigar_simple(real_cigar, n_real_cigar, real_expanded);
+    //expand_cigar_struct(merged_ideal, ideal_expanded);
 
     uint32_t real_front_hard_clip = 0;
     uint32_t real_front_soft_clip = 0;
@@ -463,28 +664,31 @@ namespace bramble {
       real_front_soft_clip = real_cigar[cigar_idx] >> BAM_CIGAR_SHIFT;
     }
 
-    pad_ideal_for_leading_clips(ideal_expanded, real_front_hard_clip, real_front_soft_clip);
-    align_expanded_cigars(real_expanded, ideal_expanded);
+    uint32_t* result = merge_cigars(real_cigar, n_real_cigar,
+      ideal_cigar, new_n_cigar, real_front_hard_clip, real_front_soft_clip);
 
-    std::vector<char> merged;
-    size_t max_len = std::max(real_expanded.size(), ideal_expanded.size());
+    //pad_ideal_for_leading_clips(ideal_expanded, real_front_hard_clip, real_front_soft_clip);
+    //align_expanded_cigars(real_expanded, ideal_expanded);
 
-    for (size_t i = 0; i < max_len; i++) {
-      char real_op = (i < real_expanded.size()) ? real_expanded[i] : '*';
-      char ideal_op = (i < ideal_expanded.size()) ? ideal_expanded[i] : '*';
-      merged.push_back(merge_ops(real_op, ideal_op));
-    }
+    //std::vector<char> merged;
+    //size_t max_len = std::max(real_expanded.size(), ideal_expanded.size());
+
+    // for (size_t i = 0; i < max_len; i++) {
+    //   char real_op = (i < real_expanded.size()) ? real_expanded[i] : '*';
+    //   char ideal_op = (i < ideal_expanded.size()) ? ideal_expanded[i] : '*';
+    //   merged.push_back(merge_ops(real_op, ideal_op));
+    // }
     
-    Cigar compressed = compress_cigar(merged, nm);
-    Cigar final_cigar = merge_indels(compressed);
+    // Cigar compressed = compress_cigar(merged, nm);
+    // Cigar final_cigar = merge_indels(compressed);
     
-    uint32_t* final_result = mem.get_mem(final_cigar.cigar.size());
-    for (size_t k = 0; k < final_cigar.cigar.size(); k++) {
-      uint32_t len = final_cigar.cigar[k] >> BAM_CIGAR_SHIFT;
-      uint8_t op = final_cigar.cigar[k] & BAM_CIGAR_MASK;
-      final_result[k] = (len << BAM_CIGAR_SHIFT) | op;
-    }
-    *new_n_cigar = final_cigar.cigar.size();
+    // uint32_t* final_result = mem.get_mem(final_cigar.cigar.size());
+    // for (size_t k = 0; k < final_cigar.cigar.size(); k++) {
+    //   uint32_t len = final_cigar.cigar[k] >> BAM_CIGAR_SHIFT;
+    //   uint8_t op = final_cigar.cigar[k] & BAM_CIGAR_MASK;
+    //   final_result[k] = (len << BAM_CIGAR_SHIFT) | op;
+    // }
+    // *new_n_cigar = final_cigar.cigar.size();
 
     // Debug output
     // fprintf(stderr, "REAL CIGAR: ");
@@ -493,26 +697,148 @@ namespace bramble {
     //   uint32_t len = real_cigar[k] >> BAM_CIGAR_SHIFT;
     //   fprintf(stderr, "%u%c", len, "MIDNSHP=XB,./;"[op]);
     // }
+
     // fprintf(stderr, "\nIDEAL CIGAR: ");
     // for (const auto& cig : ideal_cigar.cigar) {
     //   fprintf(stderr, "%u%c ", cig >> BAM_CIGAR_SHIFT, 
     //     "MIDNSHP=XB,./;"[cig & BAM_CIGAR_MASK]);
     // }
-    // fprintf(stderr, "\nREAL EXPANDED:  ");
-    // for (char c : real_expanded) fprintf(stderr, "%c", c);
-    // fprintf(stderr, "\nIDEAL EXPANDED: ");
-    // for (char c : ideal_expanded) fprintf(stderr, "%c", c);
-    // fprintf(stderr, "\nMERGED:         ");
-    // for (char c : merged) fprintf(stderr, "%c", c);
+
+    // // Build expanded strings with padding
+    // std::string real_expanded, ideal_expanded, merged_expanded;
+    // size_t ri = 0, ii = 0;
+    // uint32_t real_pos = 0, ideal_pos = 0;
+
+    // while (ri < n_real_cigar || ii < ideal_cigar.cigar.size()) {
+    //   uint8_t real_op = 0, ideal_op = 0;
+      
+    //   if (ri < n_real_cigar) {
+    //     real_op = real_cigar[ri] & BAM_CIGAR_MASK;
+    //   }
+    //   if (ii < ideal_cigar.cigar.size()) {
+    //     ideal_op = ideal_cigar.cigar[ii] & BAM_CIGAR_MASK;
+    //   }
+      
+    //   if (ri >= n_real_cigar) {
+    //     // Only ideal left - pad real
+    //     real_expanded += '_';
+    //     ideal_expanded += "MIDNSHP=XB,./;"[ideal_op];
+    //     merged_expanded += "MIDNSHP=XB,./;"[ideal_op];
+    //     ideal_pos++;
+    //     if (ideal_pos >= (ideal_cigar.cigar[ii] >> BAM_CIGAR_SHIFT)) {
+    //       ii++;
+    //       ideal_pos = 0;
+    //     }
+    //   } else if (ii >= ideal_cigar.cigar.size()) {
+    //     // Only real left - pad ideal
+    //     real_expanded += "MIDNSHP=XB,./;"[real_op];
+    //     ideal_expanded += '_';
+    //     merged_expanded += "MIDNSHP=XB,./;"[real_op];
+    //     real_pos++;
+    //     if (real_pos >= (real_cigar[ri] >> BAM_CIGAR_SHIFT)) {
+    //       ri++;
+    //       real_pos = 0;
+    //     }
+    //   } else if (real_op == BAM_CREF_SKIP) {
+    //     // Intron
+    //     real_pos++;
+    //     if (real_pos >= (real_cigar[ri] >> BAM_CIGAR_SHIFT)) {
+    //       ri++;
+    //       real_pos = 0;
+    //     }
+    //   } else if (real_op == BAM_CHARD_CLIP) {
+    //     // Hard clip
+    //     real_expanded += 'H';
+    //     ideal_expanded += '_';
+    //     merged_expanded += 'H';
+    //     real_pos++;
+    //     if (real_pos >= (real_cigar[ri] >> BAM_CIGAR_SHIFT)) {
+    //       ri++;
+    //       real_pos = 0;
+    //     }
+    //   } else if (real_op == BAM_CSOFT_CLIP) {
+    //     // Hard clip
+    //     real_expanded += 'S';
+    //     ideal_expanded += '_';
+    //     merged_expanded += 'S';
+    //     if (ideal_op == BAM_CMATCH_OVERRIDE) {
+    //       ideal_expanded += ',';
+    //       merged_expanded += 'M';
+    //       ideal_pos++;
+    //     } else if (ideal_op == BAM_CDEL_OVERRIDE) {
+    //       ideal_expanded += '.';
+    //       merged_expanded += 'D';
+    //       ideal_pos++;
+    //     } else if (ideal_op == BAM_CINS_OVERRIDE) {
+    //       ideal_expanded += '/';
+    //       merged_expanded += 'I';
+    //       ideal_pos++;
+    //     } else if (ideal_op == BAM_CLIP_OVERRIDE) {
+    //       ideal_expanded += ';';
+    //       merged_expanded += 'S';
+    //       ideal_pos++;
+    //     }
+    //     real_pos++;
+    //     if (real_pos >= (real_cigar[ri] >> BAM_CIGAR_SHIFT)) {
+    //       ri++;
+    //       real_pos = 0;
+    //     }
+    //     if (ideal_pos >= (ideal_cigar.cigar[ii] >> BAM_CIGAR_SHIFT)) {
+    //       ii++;
+    //       ideal_pos = 0;
+    //     }
+    //   } else if (real_op == BAM_CINS) {
+    //     // Insertion - pad ideal
+    //     real_expanded += 'I';
+    //     ideal_expanded += '_';
+    //     merged_expanded += 'I';
+    //     real_pos++;
+    //     if (real_pos >= (real_cigar[ri] >> BAM_CIGAR_SHIFT)) {
+    //       ri++;
+    //       real_pos = 0;
+    //     }
+    //   } else if (ideal_op == BAM_CDEL || ideal_op == BAM_CDEL_OVERRIDE) {
+    //     // Deletion - pad real
+    //     real_expanded += '_';
+    //     ideal_expanded += "MIDNSHP=XB,./;"[ideal_op];
+    //     merged_expanded += 'D';
+    //     ideal_pos++;
+    //     if (ideal_pos >= (ideal_cigar.cigar[ii] >> BAM_CIGAR_SHIFT)) {
+    //       ii++;
+    //       ideal_pos = 0;
+    //     }
+    //   } else {
+    //     // Both advance
+    //     real_expanded += "MIDNSHP=XB,./;"[real_op];
+    //     ideal_expanded += "MIDNSHP=XB,./;"[ideal_op];
+    //     // Here you'd use your merge_ops result
+    //     merged_expanded += "MIDNSHP=XB,./;"[merge_ops(real_op, ideal_op)];
+    //     real_pos++;
+    //     ideal_pos++;
+    //     if (real_pos >= (real_cigar[ri] >> BAM_CIGAR_SHIFT)) {
+    //       ri++;
+    //       real_pos = 0;
+    //     }
+    //     if (ideal_pos >= (ideal_cigar.cigar[ii] >> BAM_CIGAR_SHIFT)) {
+    //       ii++;
+    //       ideal_pos = 0;
+    //     }
+    //   }
+    // }
+
+    // fprintf(stderr, "\nREAL EXPANDED:  %s", real_expanded.c_str());
+    // fprintf(stderr, "\nIDEAL EXPANDED: %s", ideal_expanded.c_str());
+    // fprintf(stderr, "\nMERGED:         %s", merged_expanded.c_str());
+
     // fprintf(stderr, "\nNEW CIGAR: ");
     // for (uint32_t k = 0; k < *new_n_cigar; k++) {
-    //   uint32_t op = final_result[k] & BAM_CIGAR_MASK;
-    //   uint32_t len = final_result[k] >> BAM_CIGAR_SHIFT;
+    //   uint32_t op = result[k] & BAM_CIGAR_MASK;
+    //   uint32_t len = result[k] >> BAM_CIGAR_SHIFT;
     //   fprintf(stderr, "%u%c", len, "MIDNSHP=XB,./;"[op]);
     // }
     // fprintf(stderr, "\n--------------------\n");
     
-    return final_result;
+    return result;
   }
 
   // Copy CIGAR memory for intron removal

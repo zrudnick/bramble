@@ -3,6 +3,11 @@
 
 #include <list>
 
+#define BAM_CMATCH_OVERRIDE 10
+#define BAM_CDEL_OVERRIDE 11
+#define BAM_CINS_OVERRIDE 12
+#define BAM_CLIP_OVERRIDE 13
+
 namespace bramble {
 
   struct CReadAln;
