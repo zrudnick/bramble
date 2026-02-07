@@ -12,6 +12,10 @@ mod types;
 
 use anyhow::Result;
 use clap::Parser;
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 fn main() -> Result<()> {
     let args = cli::Args::parse();
