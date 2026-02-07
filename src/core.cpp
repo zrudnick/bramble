@@ -265,15 +265,11 @@ namespace bramble {
       n_pairs = 0;
     };
 
-    auto emit_pair = [&](BamInfo* pair, bool is_last) {
+    auto emit_pair = [&](BamInfo* pair, bool /*is_last*/) {
       if (pair && pair->read1) {
         std::string read_name = pair->read1->name;
         pairs_by_name[read_name].push_back(pair);
         n_pairs++;
-        
-        if (is_last && n_pairs >= CHUNK_SIZE) {
-          flush();
-        }
       }
     };
 
@@ -328,6 +324,12 @@ namespace bramble {
 
         delete this_read;
         seen.insert(i);
+      }
+
+      // Only flush between read-name groups so NH/MAPQ are computed
+      // using all alignments for a given read.
+      if (n_pairs >= CHUNK_SIZE) {
+        flush();
       }
     }
 
