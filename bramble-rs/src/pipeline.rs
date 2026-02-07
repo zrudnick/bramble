@@ -6,6 +6,7 @@ use crate::g2t::G2TTree;
 use crate::types::{ReadId, RefId, Tid};
 use anyhow::Result;
 use crossfire::mpmc;
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use noodles::{bam, sam};
 use noodles::core::Position;
 use sam::alignment::io::Write as _;
@@ -20,6 +21,7 @@ use std::sync::Mutex;
 use std::thread;
 
 const UNORDERED_FLUSH_GROUPS: usize = 8;
+const PROGRESS_UPDATE_INTERVAL: u64 = 1000;
 
 const FR_STRAND: bool = true;
 const RF_STRAND: bool = false;
@@ -83,6 +85,20 @@ pub fn run(
     let out_file = File::create(&args.out_bam)?;
     let mut writer = bam::io::Writer::new(out_file);
     writer.write_header(out_header)?;
+
+    let progress = if !args.quiet {
+        let pb = ProgressBar::new_spinner();
+        pb.set_draw_target(ProgressDrawTarget::stderr_with_hz(2));
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} [{elapsed_precise}] {msg}")
+                .expect("Failed to set progress bar template")
+        );
+        pb.set_message("Processing alignments...");
+        Some(pb)
+    } else {
+        None
+    };
 
     let evaluator = ReadEvaluator {
         long_reads: args.long,
@@ -155,6 +171,14 @@ pub fn run(
                     stats.unmapped_reads += 1;
                 }
 
+                // Update progress bar periodically
+                if let Some(ref pb) = progress {
+                    if stats.total_reads.is_multiple_of(PROGRESS_UPDATE_INTERVAL) {
+                        pb.set_message(format!("Processed {} reads", stats.total_reads));
+                        pb.tick();
+                    }
+                }
+
                 let exons = alignment::extract_exons(&record)?;
                 stats.total_exons += exons.len() as u64;
 
@@ -211,6 +235,10 @@ pub fn run(
             Ok(())
         })?;
 
+        if let Some(pb) = progress {
+            pb.finish_with_message(format!("Completed: {} reads processed", stats.total_reads));
+        }
+
         return Ok(stats);
     }
 
@@ -246,6 +274,14 @@ pub fn run(
                 stats.total_reads += 1;
                 if record.flags().is_unmapped() {
                     stats.unmapped_reads += 1;
+                }
+
+                // Update progress bar periodically
+                if let Some(ref pb) = progress {
+                    if stats.total_reads.is_multiple_of(PROGRESS_UPDATE_INTERVAL) {
+                        pb.set_message(format!("Processed {} reads", stats.total_reads));
+                        pb.tick();
+                    }
                 }
 
                 let exons = alignment::extract_exons(&record)?;
@@ -324,6 +360,10 @@ pub fn run(
             Ok(())
         })?;
 
+        if let Some(pb) = progress {
+            pb.finish_with_message(format!("Completed: {} reads processed", stats.total_reads));
+        }
+
         return Ok(stats);
     }
 
@@ -332,6 +372,14 @@ pub fn run(
         stats.total_reads += 1;
         if record.flags().is_unmapped() {
             stats.unmapped_reads += 1;
+        }
+
+        // Update progress bar periodically
+        if let Some(ref pb) = progress {
+            if stats.total_reads.is_multiple_of(PROGRESS_UPDATE_INTERVAL) {
+                pb.set_message(format!("Processed {} reads", stats.total_reads));
+                pb.tick();
+            }
         }
 
         let exons = alignment::extract_exons(&record)?;
@@ -380,6 +428,10 @@ pub fn run(
         for record in records {
             writer.write_alignment_record(out_header, &record)?;
         }
+    }
+
+    if let Some(pb) = progress {
+        pb.finish_with_message(format!("Completed: {} reads processed", stats.total_reads));
     }
 
     Ok(stats)
