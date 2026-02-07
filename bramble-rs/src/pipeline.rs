@@ -6,6 +6,7 @@ use crate::g2t::G2TTree;
 use crate::types::{ReadId, RefId, Tid};
 use anyhow::Result;
 use crossfire::mpmc;
+use indicatif::{ProgressBar, ProgressStyle};
 use noodles::{bam, sam};
 use noodles::core::Position;
 use sam::alignment::io::Write as _;
@@ -84,6 +85,19 @@ pub fn run(
     let mut writer = bam::io::Writer::new(out_file);
     writer.write_header(out_header)?;
 
+    let progress = if !args.quiet {
+        let pb = ProgressBar::new_spinner();
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} [{elapsed_precise}] {msg}")
+                .unwrap()
+        );
+        pb.set_message("Processing alignments...");
+        Some(pb)
+    } else {
+        None
+    };
+
     let evaluator = ReadEvaluator {
         long_reads: args.long,
         use_fasta: fasta.is_some(),
@@ -155,6 +169,14 @@ pub fn run(
                     stats.unmapped_reads += 1;
                 }
 
+                // Update progress bar periodically
+                if let Some(ref pb) = progress {
+                    if stats.total_reads % 10000 == 0 {
+                        pb.set_message(format!("Processed {} reads", stats.total_reads));
+                        pb.tick();
+                    }
+                }
+
                 let exons = alignment::extract_exons(&record)?;
                 stats.total_exons += exons.len() as u64;
 
@@ -211,6 +233,10 @@ pub fn run(
             Ok(())
         })?;
 
+        if let Some(pb) = progress {
+            pb.finish_with_message(format!("Completed: {} reads processed", stats.total_reads));
+        }
+
         return Ok(stats);
     }
 
@@ -246,6 +272,14 @@ pub fn run(
                 stats.total_reads += 1;
                 if record.flags().is_unmapped() {
                     stats.unmapped_reads += 1;
+                }
+
+                // Update progress bar periodically
+                if let Some(ref pb) = progress {
+                    if stats.total_reads % 10000 == 0 {
+                        pb.set_message(format!("Processed {} reads", stats.total_reads));
+                        pb.tick();
+                    }
                 }
 
                 let exons = alignment::extract_exons(&record)?;
@@ -324,6 +358,10 @@ pub fn run(
             Ok(())
         })?;
 
+        if let Some(pb) = progress {
+            pb.finish_with_message(format!("Completed: {} reads processed", stats.total_reads));
+        }
+
         return Ok(stats);
     }
 
@@ -332,6 +370,14 @@ pub fn run(
         stats.total_reads += 1;
         if record.flags().is_unmapped() {
             stats.unmapped_reads += 1;
+        }
+
+        // Update progress bar periodically
+        if let Some(ref pb) = progress {
+            if stats.total_reads % 10000 == 0 {
+                pb.set_message(format!("Processed {} reads", stats.total_reads));
+                pb.tick();
+            }
         }
 
         let exons = alignment::extract_exons(&record)?;
@@ -380,6 +426,10 @@ pub fn run(
         for record in records {
             writer.write_alignment_record(out_header, &record)?;
         }
+    }
+
+    if let Some(pb) = progress {
+        pb.finish_with_message(format!("Completed: {} reads processed", stats.total_reads));
     }
 
     Ok(stats)

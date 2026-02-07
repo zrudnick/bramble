@@ -27,8 +27,8 @@ pub struct Args {
     #[arg(long)]
     pub long: bool,
 
-    /// Turn off verbose mode
-    #[arg(long)]
+    /// Suppress progress bar and set logging level to WARN
+    #[arg(short = 'q', long)]
     pub quiet: bool,
 
     /// Allow non-deterministic output order (read groups remain contiguous)
