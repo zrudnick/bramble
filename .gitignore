@@ -123,3 +123,7 @@ dkms.conf
 *.app
 
 # End of https://mrkandreev.name/snippets/gitignore-generator/#C,C++
+
+# Rust
+/bramble-rs/target/
+/bramble-rs/Cargo.lock
