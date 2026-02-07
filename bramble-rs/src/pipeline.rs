@@ -6,7 +6,7 @@ use crate::g2t::G2TTree;
 use crate::types::{ReadId, RefId, Tid};
 use anyhow::Result;
 use crossfire::mpmc;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use noodles::{bam, sam};
 use noodles::core::Position;
 use sam::alignment::io::Write as _;
@@ -21,7 +21,7 @@ use std::sync::Mutex;
 use std::thread;
 
 const UNORDERED_FLUSH_GROUPS: usize = 8;
-const PROGRESS_UPDATE_INTERVAL: u64 = 10000;
+const PROGRESS_UPDATE_INTERVAL: u64 = 1000;
 
 const FR_STRAND: bool = true;
 const RF_STRAND: bool = false;
@@ -88,6 +88,7 @@ pub fn run(
 
     let progress = if !args.quiet {
         let pb = ProgressBar::new_spinner();
+        pb.set_draw_target(ProgressDrawTarget::stderr_with_hz(2));
         pb.set_style(
             ProgressStyle::default_spinner()
                 .template("{spinner:.green} [{elapsed_precise}] {msg}")
@@ -172,7 +173,7 @@ pub fn run(
 
                 // Update progress bar periodically
                 if let Some(ref pb) = progress {
-                    if stats.total_reads % PROGRESS_UPDATE_INTERVAL == 0 {
+                    if stats.total_reads.is_multiple_of(PROGRESS_UPDATE_INTERVAL) {
                         pb.set_message(format!("Processed {} reads", stats.total_reads));
                         pb.tick();
                     }
@@ -277,7 +278,7 @@ pub fn run(
 
                 // Update progress bar periodically
                 if let Some(ref pb) = progress {
-                    if stats.total_reads % PROGRESS_UPDATE_INTERVAL == 0 {
+                    if stats.total_reads.is_multiple_of(PROGRESS_UPDATE_INTERVAL) {
                         pb.set_message(format!("Processed {} reads", stats.total_reads));
                         pb.tick();
                     }
@@ -375,7 +376,7 @@ pub fn run(
 
         // Update progress bar periodically
         if let Some(ref pb) = progress {
-            if stats.total_reads % PROGRESS_UPDATE_INTERVAL == 0 {
+            if stats.total_reads.is_multiple_of(PROGRESS_UPDATE_INTERVAL) {
                 pb.set_message(format!("Processed {} reads", stats.total_reads));
                 pb.tick();
             }
