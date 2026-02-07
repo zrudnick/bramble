@@ -21,6 +21,7 @@ use std::sync::Mutex;
 use std::thread;
 
 const UNORDERED_FLUSH_GROUPS: usize = 8;
+const PROGRESS_UPDATE_INTERVAL: u64 = 10000;
 
 const FR_STRAND: bool = true;
 const RF_STRAND: bool = false;
@@ -90,7 +91,7 @@ pub fn run(
         pb.set_style(
             ProgressStyle::default_spinner()
                 .template("{spinner:.green} [{elapsed_precise}] {msg}")
-                .unwrap()
+                .expect("Failed to set progress bar template")
         );
         pb.set_message("Processing alignments...");
         Some(pb)
@@ -171,7 +172,7 @@ pub fn run(
 
                 // Update progress bar periodically
                 if let Some(ref pb) = progress {
-                    if stats.total_reads % 10000 == 0 {
+                    if stats.total_reads % PROGRESS_UPDATE_INTERVAL == 0 {
                         pb.set_message(format!("Processed {} reads", stats.total_reads));
                         pb.tick();
                     }
@@ -276,7 +277,7 @@ pub fn run(
 
                 // Update progress bar periodically
                 if let Some(ref pb) = progress {
-                    if stats.total_reads % 10000 == 0 {
+                    if stats.total_reads % PROGRESS_UPDATE_INTERVAL == 0 {
                         pb.set_message(format!("Processed {} reads", stats.total_reads));
                         pb.tick();
                     }
@@ -374,7 +375,7 @@ pub fn run(
 
         // Update progress bar periodically
         if let Some(ref pb) = progress {
-            if stats.total_reads % 10000 == 0 {
+            if stats.total_reads % PROGRESS_UPDATE_INTERVAL == 0 {
                 pb.set_message(format!("Processed {} reads", stats.total_reads));
                 pb.tick();
             }
