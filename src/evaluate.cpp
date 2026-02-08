@@ -504,9 +504,8 @@ namespace bramble {
       // We keep everything before start_i (leftmost part) for next iteration
       
       // Always update remaining_qseq first
-      if (result.start_i > 1) {
+      if (result.start_i > 0) {
         // should add deletion here
-
         remaining_qseq = remaining_qseq.substr(0, result.start_i);
       } else {
         remaining_qseq.clear();  // Everything consumed
