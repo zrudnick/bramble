@@ -200,7 +200,7 @@ namespace bramble {
           set_hi_tag(b, pair->m_align.hit_index);
         }
 
-        //set_mate_info(b, pair, is_first); // must be called for both paired and non-paired instances
+        set_mate_info(b, pair, is_first); // must be called for both paired and non-paired instances
 
         to_write.push_back(b);
 
