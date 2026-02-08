@@ -4,6 +4,3 @@
 [submodule "subprojects/nclist"]
 	path = subprojects/nclist
 	url = https://github.com/LTLA/nclist-cpp
-[submodule "subprojects/cgranges"]
-	path = subprojects/cgranges
-	url = https://github.com/lh3/cgranges
