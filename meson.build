@@ -32,7 +32,12 @@ gclib_dir = 'gclib'
 #htslib_sp = subproject('htslib')
 htslib_inc = subproject('htslib').get_variable('htslib_inc')
 htslib_lib = subproject('htslib').get_variable('htslib_lib')
-cgranges_dep = subproject('cgranges').get_variable('cgranges_dep')
+
+#cgranges_dep = subproject('cgranges').get_variable('cgranges_dep')
+
+cgranges_dep = dependency('cgranges', 
+                          fallback: ['cgranges', 'cgranges_dep'])
+
 gclib_dep = declare_dependency(
   include_directories: gclib_dir,
   dependencies: [htslib_dep]
