@@ -1,0 +1,8 @@
+[wrap-git]
+url = https://github.com/lh3/cgranges
+revision = b3d5e2c5b9a0a379f54592ab85f6cff5d58c387e
+depth = 1
+patch_directory = cgranges
+
+[provide]
+cgranges = cgranges_dep

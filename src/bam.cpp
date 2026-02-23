@@ -1,13 +1,8 @@
 
-#include <set>
-#include <unordered_set>
 #include <string>
 #include <vector>
 #include <algorithm>
-#include <memory>
 #include <cstdlib>
-#include <cmath>
-#include <random>
 
 #include "types.h"
 #include "bramble.h"
@@ -26,16 +21,20 @@ namespace bramble {
 
   char merge_ops(char real_op, char ideal_op) {
 
-    if ((real_op == BAM_CMATCH || real_op == BAM_CSOFT_CLIP) && ideal_op == BAM_CLIP_OVERRIDE) {
+    if ((real_op == BAM_CMATCH || real_op == BAM_CSOFT_CLIP) 
+      && ideal_op == BAM_CLIP_OVERRIDE) {
       return BAM_CSOFT_CLIP;
     }
-    if ((real_op == BAM_CMATCH || real_op == BAM_CSOFT_CLIP) && ideal_op == BAM_CMATCH_OVERRIDE) {
+    if ((real_op == BAM_CMATCH || real_op == BAM_CSOFT_CLIP) 
+      && ideal_op == BAM_CMATCH_OVERRIDE) {
       return BAM_CMATCH;
     }
-    if ((real_op == BAM_CMATCH || real_op == BAM_CSOFT_CLIP) && ideal_op == BAM_CINS_OVERRIDE) {
+    if ((real_op == BAM_CMATCH || real_op == BAM_CSOFT_CLIP) 
+      && ideal_op == BAM_CINS_OVERRIDE) {
       return BAM_CINS;
     }
-    if ((real_op == BAM_CMATCH || real_op == BAM_CSOFT_CLIP) && ideal_op == BAM_CDEL_OVERRIDE) {
+    if ((real_op == BAM_CMATCH || real_op == BAM_CSOFT_CLIP) 
+      && ideal_op == BAM_CDEL_OVERRIDE) {
       return BAM_CDEL;
     }
 
@@ -78,12 +77,14 @@ namespace bramble {
     }
     
     // If ideal has S, D, or I, use it
-    if (ideal_op == BAM_CSOFT_CLIP || ideal_op == BAM_CDEL || ideal_op == BAM_CINS) {
+    if (ideal_op == BAM_CSOFT_CLIP || ideal_op == BAM_CDEL 
+      || ideal_op == BAM_CINS) {
       return ideal_op;
     }
     
     // If real has S, D, or I, use it
-    if (real_op == BAM_CSOFT_CLIP || real_op == BAM_CDEL || real_op == BAM_CINS) {
+    if (real_op == BAM_CSOFT_CLIP || real_op == BAM_CDEL 
+      || real_op == BAM_CINS) {
       return real_op;
     }
     
@@ -101,18 +102,17 @@ namespace bramble {
       return BAM_CDIFF;
     }
     
-    // Fallback
-    return ideal_op;
+    return ideal_op; // fallback
   }
 
   uint32_t* merge_cigars(uint32_t* real_cigar, uint32_t n_real_cigar,
                         const Cigar& ideal_cigar, uint32_t* new_n_cigar,
                         uint32_t real_front_hard_clip,
-                        uint32_t real_front_soft_clip) {
+                        uint32_t real_front_soft_clip, CigarMem &mem) {
     
-    uint32_t n_ideal_cigar = ideal_cigar.cigar.size();
+    uint32_t n_ideal_cigar = ideal_cigar.n_cigar;
     uint32_t max_size = n_real_cigar + n_ideal_cigar;
-    uint32_t* result = (uint32_t*)malloc(max_size * sizeof(uint32_t));
+    uint32_t* result = mem.get_mem(max_size);
     uint32_t result_idx = 0;
     
     uint32_t ri = 0;
@@ -123,9 +123,9 @@ namespace bramble {
     auto add_op = [&](uint8_t op, uint32_t len) {
       if (len == 0) return;
       if (result_idx > 0 && bam_cigar_op(result[result_idx - 1]) == op) {
-          result[result_idx - 1] += (len << 4);
+        result[result_idx - 1] += (len << 4);
       } else {
-          result[result_idx++] = bam_cigar_gen(len, op);
+        result[result_idx++] = bam_cigar_gen(len, op);
       }
     };
     
@@ -298,7 +298,8 @@ namespace bramble {
     }
 
     fprintf(stderr, "\nIDEAL CIGAR: ");
-    for (const auto& cig : ideal_cigar.cigar) {
+    for (int i = 0; i < ideal_cigar.n_cigar; ++i) {
+      auto cig = ideal_cigar.cigar[i];
       fprintf(stderr, "%u%c ", cig >> BAM_CIGAR_SHIFT, 
         "MIDNSHP=XB,./;"[cig & BAM_CIGAR_MASK]);
     }
@@ -307,13 +308,13 @@ namespace bramble {
     size_t ri = 0, ii = 0;
     uint32_t real_pos = 0, ideal_pos = 0;
 
-    while (ri < n_real_cigar || ii < ideal_cigar.cigar.size()) {
+    while (ri < n_real_cigar || ii < ideal_cigar.n_cigar) {
       uint8_t real_op = 0, ideal_op = 0;
       
       if (ri < n_real_cigar) {
         real_op = real_cigar[ri] & BAM_CIGAR_MASK;
       }
-      if (ii < ideal_cigar.cigar.size()) {
+      if (ii < ideal_cigar.n_cigar) {
         ideal_op = ideal_cigar.cigar[ii] & BAM_CIGAR_MASK;
       }
       
@@ -326,7 +327,7 @@ namespace bramble {
           ii++;
           ideal_pos = 0;
         }
-      } else if (ii >= ideal_cigar.cigar.size()) {
+      } else if (ii >= ideal_cigar.n_cigar) {
         real_expanded += "MIDNSHP=XB,./;"[real_op];
         ideal_expanded += '_';
         merged_expanded += "MIDNSHP=XB,./;"[real_op];
@@ -446,19 +447,20 @@ namespace bramble {
     
     // Check for leading hard clip
     if (n_real_cigar > 0 && 
-        ((real_cigar[0] & BAM_CIGAR_MASK) == BAM_CHARD_CLIP)) {
+      ((real_cigar[0] & BAM_CIGAR_MASK) == BAM_CHARD_CLIP)) {
       real_front_hard_clip = real_cigar[0] >> BAM_CIGAR_SHIFT;
       cigar_idx++;
     }
     
     // Check for leading soft clip (after potential hard clip)
     if (cigar_idx < n_real_cigar && 
-        ((real_cigar[cigar_idx] & BAM_CIGAR_MASK) == BAM_CSOFT_CLIP)) {
+      ((real_cigar[cigar_idx] & BAM_CIGAR_MASK) == BAM_CSOFT_CLIP)) {
       real_front_soft_clip = real_cigar[cigar_idx] >> BAM_CIGAR_SHIFT;
     }
 
     uint32_t* result = merge_cigars(real_cigar, n_real_cigar,
-      ideal_cigar, new_n_cigar, real_front_hard_clip, real_front_soft_clip);
+      ideal_cigar, new_n_cigar, real_front_hard_clip, 
+      real_front_soft_clip, mem);
 
     // debug cigar strings
     //print_debug(real_cigar, n_real_cigar, ideal_cigar, new_n_cigar, result);
@@ -466,7 +468,7 @@ namespace bramble {
     return result;
   }
 
-  // Copy CIGAR memory for intron removal
+  // Copy CIGAR memory for CIGAR updates
   uint8_t* copy_cigar_memory(bam1_t* b, uint32_t new_n_cigar, 
                             uint32_t old_n_cigar, uint32_t new_m_data,
                             const uint32_t* new_cigar,
@@ -564,16 +566,16 @@ namespace bramble {
       int32_t isize = 0;
       if (first_read) {
         if (b->core.mpos > b->core.pos) {
-          isize = ((b->core.mpos + this_pair->read2->read_size) - b->core.pos);
+          isize = ((b->core.mpos + b->core.l_qseq) - b->core.pos);
         } else {
-          isize = -((b->core.pos + this_pair->read1->read_size) - b->core.mpos);
+          isize = -((b->core.pos + b->core.l_qseq) - b->core.mpos);
         }
         
       } else {
         if (b->core.pos > b->core.mpos) {
-          isize = -((b->core.pos + this_pair->read1->read_size) - b->core.mpos);
+          isize = -((b->core.pos + b->core.l_qseq) - b->core.mpos);
         } else {
-          isize = ((b->core.mpos + this_pair->read2->read_size) - b->core.pos);
+          isize = ((b->core.mpos + b->core.l_qseq) - b->core.pos);
         }
         
       }
@@ -588,7 +590,6 @@ namespace bramble {
     }
   }
 
-  // Add new NH tag (after removing current one)
   void set_nh_tag(bam1_t* b, int32_t nh_i) {
     uint8_t* nh = bam_aux_get(b, "NH");
     if (nh) bam_aux_del(b, nh);
@@ -610,8 +611,15 @@ namespace bramble {
   void set_xs_tag(bam1_t* b, char xs_a) {
     uint8_t* xs = bam_aux_get(b, "XS");
     if (xs) bam_aux_del(b, xs);
-    uint8_t new_xs = (uint8_t) xs_a;
-    bam_aux_append(b, "XS", 'A', 1, &new_xs);
+    // uint8_t new_xs = (uint8_t) xs_a;
+    // bam_aux_append(b, "XS", 'A', 1, &new_xs);
+  }
+
+  void set_ts_tag(bam1_t* b, char ts_a) {
+    uint8_t* ts = bam_aux_get(b, "ts");
+    if (ts) bam_aux_del(b, ts);
+    // uint8_t new_ts = (uint8_t) ts_a;
+    // bam_aux_append(b, "ts", 'A', 1, &new_ts);
   }
 
   void set_as_tag(bam1_t* b, AlignInfo &align, uint8_t qual) {
@@ -621,64 +629,44 @@ namespace bramble {
     if (as) bam_aux_del(b, as);
 
     double score;
-    if (!LONG_READS) {
-      score = std::pow(1.0 + align.similarity_score, 3.0) * 100.0;
-    } else {
-      double x = align.similarity_score;
-      double y = static_cast<double>(align.clip_score);
-      score = (static_cast<double>(gn_as) + y) * x;
-    }
+    double x = align.similarity_score;
+    double y = static_cast<double>(align.clip_score);
+    score = (static_cast<double>(gn_as) + y) * x;
     int32_t new_as = static_cast<int32_t>(score);
     bam_aux_append(b, "AS", 'i', sizeof(int32_t), (uint8_t*)&new_as);
-  }
-
-  void remove_extra_tags(bam1_t* b) {
-    uint8_t* sa = bam_aux_get(b, "SA");
-    if (sa) bam_aux_del(b, sa);
-    uint8_t* ms = bam_aux_get(b, "ms");
-    if (ms) bam_aux_del(b, ms);
-    uint8_t* nn = bam_aux_get(b, "nn");
-    if (nn) bam_aux_del(b, nn);
-    uint8_t* ts = bam_aux_get(b, "ts");
-    if (ts) bam_aux_del(b, ts);
-    uint8_t* tp = bam_aux_get(b, "tp");
-    if (tp) bam_aux_del(b, tp);
-    uint8_t* cm = bam_aux_get(b, "cm");
-    if (cm) bam_aux_del(b, cm);
-    uint8_t* s1 = bam_aux_get(b, "s1");
-    if (s1) bam_aux_del(b, s1);
-    uint8_t* s2 = bam_aux_get(b, "s2");
-    if (s2) bam_aux_del(b, s2);
-    uint8_t* de = bam_aux_get(b, "de");
-    if (de) bam_aux_del(b, de);
-    uint8_t* rl = bam_aux_get(b, "rl");
-    if (rl) bam_aux_del(b, rl);
   }
 
   int reverse_complement_bam(bam1_t *b) {
     // validate record
     if (!b) return -1;
-    if (b->core.l_qseq <= 0) return 0;
+    if (b->core.l_qseq <= 0) {
+      b->core.flag ^= BAM_FREVERSE;
+      return 0;
+    }
 
     int len = b->core.l_qseq;
 
     uint8_t *seq = bam_get_seq(b);
     uint8_t *qual = bam_get_qual(b);
 
+    static const uint8_t comp_table[16] = {
+      15, // 0 (unused)
+      8,  // 1 A -> T
+      4,  // 2 C -> G
+      15, // 3
+      2,  // 4 G -> C
+      15,15,15,
+      1,  // 8 T -> A
+      15,15,15,15,15,15,15
+    };
+
     // Allocate buffer for the reversed complemented sequence
     // Each byte holds two bases
     std::vector<uint8_t> tmp((len + 1) / 2);
     for (int i = 0; i < len; ++i) {
       uint8_t nt = bam_seqi(seq, len - 1 - i);
-      uint8_t nt_complement;
-      switch (nt) {
-        case 1: nt_complement = 8; break; // A -> T
-        case 2: nt_complement = 4; break; // C -> G
-        case 4: nt_complement = 2; break; // G -> C
-        case 8: nt_complement = 1; break; // T -> A
-        default: nt_complement = 15; break; // N or others -> N
-      }
-      bam_set_seqi(tmp, i, nt_complement);
+      uint8_t nt_complement = comp_table[nt];
+      bam_set_seqi(tmp.data(), i, nt_complement);
     }
 
     memcpy(seq, tmp.data(), (len + 1) / 2);

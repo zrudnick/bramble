@@ -13,94 +13,143 @@ namespace bramble {
   struct CReadAln;
   struct BamIO;
   struct g2tTree;
-  struct GuideExon;
 
   struct Cigar {
-    //std::vector<std::pair<uint32_t, uint8_t>> cigar;
-    std::vector<uint32_t> cigar;
+    uint32_t *cigar = nullptr;
+    uint32_t n_cigar = 0;
+    uint32_t capacity = 0;
+
+    ~Cigar() {
+      delete[] cigar;
+    }
+
+    Cigar() = default;
+
+    // copy constructor (deep copy)
+    Cigar(const Cigar &other) {
+      n_cigar = other.n_cigar;
+      capacity = other.capacity;
+
+      if (capacity) {
+        cigar = new uint32_t[capacity];
+        std::memcpy(cigar, other.cigar, n_cigar * sizeof(uint32_t));
+      }
+    }
+
+    // copy assignment (deep copy)
+    Cigar& operator=(const Cigar &other) {
+      if (this == &other) return *this;
+
+      delete[] cigar;
+
+      n_cigar = other.n_cigar;
+      capacity = other.capacity;
+
+      cigar = capacity ? new uint32_t[capacity] : nullptr;
+
+      if (n_cigar) {
+        std::memcpy(cigar, other.cigar, n_cigar * sizeof(uint32_t));
+      }
+
+      return *this;
+    }
+
+    // move constructor (cheap, no copy)
+    Cigar(Cigar &&other) noexcept {
+      cigar = other.cigar;
+      n_cigar = other.n_cigar;
+      capacity = other.capacity;
+
+      other.cigar = nullptr;
+      other.n_cigar = 0;
+      other.capacity = 0;
+    }
+
+    // move assignment
+    Cigar& operator=(Cigar &&other) noexcept {
+      if (this == &other) return *this;
+
+      delete[] cigar;
+
+      cigar = other.cigar;
+      n_cigar = other.n_cigar;
+      capacity = other.capacity;
+
+      other.cigar = nullptr;
+      other.n_cigar = 0;
+      other.capacity = 0;
+
+      return *this;
+    }
+
+    void reserve(uint32_t new_capacity) {
+      if (new_capacity <= capacity) return;
+
+      uint32_t *new_buf = new uint32_t[new_capacity];
+
+      if (n_cigar) {
+        std::memcpy(new_buf, cigar, n_cigar * sizeof(uint32_t));
+      }
+
+      delete[] cigar;
+      cigar = new_buf;
+      capacity = new_capacity;
+    }
+
+    void grow() {
+      uint32_t new_capacity = capacity ? capacity * 2 : 4;
+      reserve(new_capacity);
+    }
 
     void add_operation(uint32_t len, uint8_t op) {
-      if (cigar.empty()) {
-        uint32_t new_cig = (len << BAM_CIGAR_SHIFT) | op;
-        cigar.emplace_back(new_cig);
+      if (n_cigar == 0) {
+        if (n_cigar == capacity) grow();
+        cigar[n_cigar++] = bam_cigar_gen(len, op);
         return;
-      } 
-      
-      uint32_t &prev_cig = cigar.back();
-      uint8_t prev_op = prev_cig & BAM_CIGAR_MASK;
-      uint32_t prev_len = prev_cig >> BAM_CIGAR_SHIFT;
+      }
+
+      uint32_t &prev_cig = cigar[n_cigar - 1];
+
+      uint8_t prev_op = bam_cigar_op(prev_cig);
+      uint32_t prev_len = bam_cigar_oplen(prev_cig);
 
       if (prev_op == op) {
-        prev_cig = ((prev_len + len) << BAM_CIGAR_SHIFT) | op;
+        prev_cig = bam_cigar_gen(prev_len + len, op);
       } else {
-        uint32_t new_cig = (len << BAM_CIGAR_SHIFT) | op;
-        cigar.emplace_back(new_cig);
+        if (n_cigar == capacity) grow();
+        cigar[n_cigar++] = bam_cigar_gen(len, op);
       }
     }
 
-    void prepend_operation(uint32_t len, uint8_t op) {
-      if (cigar.empty()) {
-        uint32_t new_cig = (len << BAM_CIGAR_SHIFT) | op;
-        cigar.insert(cigar.begin(), new_cig);
-        return;
-      }
+  };
 
-      uint32_t &front_cig = cigar.front();
-      uint8_t front_op = front_cig & BAM_CIGAR_MASK;
-      uint32_t front_len = front_cig >> BAM_CIGAR_SHIFT;
-
-      if (front_op == op) {
-        front_cig = ((front_len + len) << BAM_CIGAR_SHIFT) | op;
-      } else {
-        uint32_t new_cig = (len << BAM_CIGAR_SHIFT) | op;
-        cigar.insert(cigar.begin(), new_cig);
-      }
-    }
-
-    // for debugging
-    std::string to_string() const {
-      std::string result;
-      for (const auto &cig : cigar) {
-        uint8_t op = cig & BAM_CIGAR_MASK;
-        uint32_t len = cig >> BAM_CIGAR_SHIFT;
-
-        result += std::to_string(len);
-        // Convert BAM op code to CIGAR character
-        switch(op) {
-          case BAM_CMATCH: result += 'M'; break;
-          case BAM_CINS: result += 'I'; break;
-          case BAM_CDEL: result += 'D'; break;
-          case BAM_CREF_SKIP: result += 'N'; break;
-          case BAM_CSOFT_CLIP: result += 'S'; break;
-          case BAM_CHARD_CLIP: result += 'H'; break;
-          case BAM_CPAD: result += 'P'; break;
-          case BAM_CEQUAL: result += '='; break;
-          case BAM_CDIFF: result += 'X'; break;
-          case 9: result += ','; break;
-          case 10: result += '.'; break;
-          case 11: result += '/'; break;
-          case 12: result += ';'; break;
-          default: result += '?'; break;
-        }
-      }
-      return result.empty() ? "*" : result;
-    }
-
-    void reverse() {
-      std::reverse(cigar.begin(), cigar.end());
-    }
-
-    void clear() {
-      cigar.clear();
-    }
-
+  struct GuideExon {
+    tid_t tid;
+    uint32_t start;
+    uint32_t end;
+    pos_t    pos;
+    uint32_t pos_start;
+    uint8_t  exon_id;
+    int32_t  left_ins;
+    int32_t  right_ins;
+    int32_t  left_gap;
+    int32_t  right_gap;
+    bool     has_prev;
+    bool     has_next;
+    uint32_t prev_start;
+    uint32_t prev_end;
+    uint32_t next_start;
+    uint32_t next_end;
+    uint32_t transcript_len;
+    const char* seq;
+    uint32_t    seq_len;
   };
 
   struct AlignInfo {
     pos_t fwpos;
     pos_t rcpos;
     char strand;
-    std::shared_ptr<Cigar> cigar;
+    Cigar cigar;
     bool is_reverse;
     bool primary_alignment;
     int clip_score;
@@ -113,6 +162,7 @@ namespace bramble {
   };
 
   struct ExonChainMatch {
+    tid_t tid;
     bool created;
     AlignInfo align;
     double total_coverage;
@@ -138,10 +188,9 @@ namespace bramble {
   };
 
   struct Segment {
-    bool is_valid;
     bool has_gexon;
     bool has_qexon;
-    std::shared_ptr<GuideExon> gexon;
+    GuideExon gexon;
     GSeg qexon;
 
     // gap indicated by has_gexon and !has_qexon
@@ -151,29 +200,17 @@ namespace bramble {
     bool is_small_exon;
     Cigar cigar;
     int score;
-
-    Segment()
-      : is_valid(false),
-        gexon(nullptr) {}
   };
 
   struct TidData {
     bool elim = false;
-    std::list<Segment> segments;
-    ExonChainMatch match;
-    bool has_left_ins;
-    bool has_right_ins;
-    int32_t n_left_ins;
-    int32_t n_right_ins;
     bool has_left_clip;
     bool has_right_clip;
+    ExonChainMatch match;
+    std::vector<Segment> segments;
 
     TidData()
-      : has_left_ins(false),
-        has_right_ins(false),
-        n_left_ins(0),
-        n_right_ins(0),
-        has_left_clip(false),
+      : has_left_clip(false),
         has_right_clip(false) {}
   };
 
@@ -181,25 +218,17 @@ namespace bramble {
     read_id_t index;
     uint32_t nh;
     uint32_t mapq;
-    std::string name;
-    uint32_t read_size;
-    GSamRecord *brec;
-    bool discard_read;
+    std::shared_ptr<GSamRecord> brec;
 
     ReadOut() 
       : index(), 
         nh(), 
-        mapq(),
-        name(),
-        read_size(), 
-        brec(nullptr), 
-        discard_read(false) {}
-
-    // brec is deleted by CReadAln
+        mapq(), 
+        brec(nullptr) {}
   };
 
   struct ReadInfo {
-    std::unordered_map<tid_t, ExonChainMatch> matches;
+    std::vector<ExonChainMatch> matches;
     bool valid_read;
     bool is_paired;
 
@@ -219,7 +248,7 @@ namespace bramble {
     bool valid_pair;
     bool is_paired;
 
-    // Two ends of a pair (or just one if unpaired)
+    // two ends of a pair (or just one if unpaired)
     std::shared_ptr<ReadOut> read1;
     std::shared_ptr<ReadOut> read2;
 
@@ -253,85 +282,84 @@ namespace bramble {
     std::string name;
   };
 
+  struct kswResult {
+    uint32_t* cigar_array;      // raw CIGAR ops
+    int n_cigar;                // number of CIGAR ops
+    int score;
+    int max;
+  };
+
   class ReadEvaluator {
   public:
     virtual ~ReadEvaluator();
 
     // Evaluate a single read and return structured result
-    virtual std::unordered_map<tid_t, ExonChainMatch> 
-    evaluate(CReadAln * read, read_id_t id, std::shared_ptr<g2tTree> g2t,
+    virtual std::vector<ExonChainMatch> 
+    evaluate(CReadAln &read, std::shared_ptr<g2tTree> g2t,
             uint8_t *seq, int seq_len) = 0;
   
   protected:
     
-    std::string reverse_complement(const std::string &seq);
+    std::vector<char> get_strands_to_check(CReadAln &read);
 
-    std::string extract_sequence(char *gseq, uint start, 
-                                uint length, char strand);
-    
-    std::vector<char> get_strands_to_check(CReadAln * read);
-
-    void get_clips(CReadAln *read, ReadEvaluationConfig &config, bool &failure,
-                  bool &has_left_clip, bool &has_right_clip,
+    void get_clips(CReadAln &read, ReadEvaluationConfig &config, 
+                  bool &failure, bool &has_left_clip, bool &has_right_clip,
                   uint32_t &n_left_clip, uint32_t &n_right_clip);
 
-    void get_intervals(std::unordered_map<tid_t, TidData> &data,
-                      CReadAln *read, uint32_t j, uint32_t exon_count,
-                      ReadEvaluationConfig &config, std::shared_ptr<g2tTree> g2t,
-                      refid_t refid, char strand, bool has_left_clip,
-                      bool has_right_clip, Segment &start_ignore,
-                      Segment &end_ignore, bool &has_variants, bool &failure);
-
-    void correct_for_gaps(TidData &tid_data, tid_t tid,
+    bool correct_for_gaps(TidData &td, tid_t tid,
+                          Segment &seg,
                           ReadEvaluationConfig &config, 
                           std::shared_ptr<g2tTree> g2t,
                           char strand, refid_t refid);
 
-    void left_clip_rescue(TidData &tid_data, Segment &start_ignore,
-                          char strand, std::shared_ptr<g2tTree> g2t,
+    void get_intervals(unordered_map<tid_t, TidData> &data, CReadAln &read, 
+                      uint32_t j, uint32_t exon_count,
+                      ReadEvaluationConfig& config, std::shared_ptr<g2tTree> g2t,
+                      refid_t refid, char strand, bool has_left_clip,
+                      bool has_right_clip, bool& failure);
+
+
+    void left_clip_rescue(TidData &td, char strand, std::shared_ptr<g2tTree> g2t,
                           refid_t refid, tid_t tid, uint32_t n_left_clip,
-                          uint32_t n_left_ins, ReadEvaluationConfig &config, 
-                          CReadAln *read, uint8_t *seq, int seq_len);
+                          ReadEvaluationConfig &config, 
+                          CReadAln &read, uint8_t *seq, int seq_len);
 
-    void right_clip_rescue(TidData &tid_data, Segment &end_ignore,
-                          char strand, std::shared_ptr<g2tTree> g2t,
+    void right_clip_rescue(TidData &td, char strand, std::shared_ptr<g2tTree> g2t,
                           refid_t refid, tid_t tid, uint32_t n_right_clip,
-                          uint32_t n_right_ins, ReadEvaluationConfig &config, 
-                          CReadAln *read, uint8_t *seq, int seq_len);
+                          ReadEvaluationConfig &config, 
+                          CReadAln &read, uint8_t *seq, int seq_len);
 
-    void create_match(std::unordered_map<tid_t, TidData> &data, 
-                                  std::shared_ptr<GuideExon> gexon, tid_t tid,
-                                  char strand, char read_strand, bool has_gexon,
-                                  uint32_t ins_exon_len, ReadEvaluationConfig config);
+    void create_match(TidData &td, GuideExon &gexon, tid_t tid, char strand);
 
-    void build_cigar_match(Segment &segment, TidData &tid_data,
+    void build_cigar_match(Segment &seg, TidData &td,
                           ExonChainMatch &match, bool first_match,
                           bool last_match, ReadEvaluationConfig &config);
 
-    void build_cigar_ins(Segment &segment, TidData &tid_data, uint32_t k,
-                        uint32_t n, ExonChainMatch &match, ReadEvaluationConfig &config);
-
-    void build_cigar_gap(Segment &segment, TidData &tid_data,
+    void build_cigar_ins(Segment &seg, uint32_t k, uint32_t n, 
                         ExonChainMatch &match, ReadEvaluationConfig &config);
 
-    void build_cigar_clip(Segment &segment, TidData &tid_data,
-                          ExonChainMatch &match, ReadEvaluationConfig &config);
+    void build_cigar_gap(Segment &seg, ExonChainMatch &match, 
+                        ReadEvaluationConfig &config);
 
-    void filter_by_similarity(std::unordered_map<tid_t, ExonChainMatch> &matches,
-                              std::shared_ptr<g2tTree> g2t, ReadEvaluationConfig config);
+    void build_cigar_clip(Segment &seg, ExonChainMatch &match, 
+                          ReadEvaluationConfig &config);
+
+    void filter_by_similarity(std::vector<ExonChainMatch> &matches,
+                              std::shared_ptr<g2tTree> g2t, 
+                              ReadEvaluationConfig config);
 
   public:
-    std::unordered_map<tid_t, ExonChainMatch> 
-    evaluate_exon_chains(CReadAln *read, read_id_t id, 
-                        std::shared_ptr<g2tTree> g2t, ReadEvaluationConfig config,
+    std::vector<ExonChainMatch>
+    evaluate_exon_chains(CReadAln &read, std::shared_ptr<g2tTree> g2t, 
+                        ReadEvaluationConfig config,
                         uint8_t *seq, int seq_len);
   };
 
   class ShortReadEvaluator : public ReadEvaluator {
 
   public:
-    std::unordered_map<tid_t, ExonChainMatch> 
-    evaluate(CReadAln *read, read_id_t id, std::shared_ptr<g2tTree> g2t,
+    std::vector<ExonChainMatch> 
+    evaluate(CReadAln &read, std::shared_ptr<g2tTree> g2t,
             uint8_t *seq, int seq_len) override;
 
   };
@@ -339,14 +367,12 @@ namespace bramble {
   class LongReadEvaluator : public ReadEvaluator {
 
   public:
-    std::unordered_map<tid_t, ExonChainMatch> 
-    evaluate(CReadAln *read, read_id_t id, std::shared_ptr<g2tTree> g2t,
+    std::vector<ExonChainMatch> 
+    evaluate(CReadAln &read, std::shared_ptr<g2tTree> g2t,
             uint8_t *seq, int seq_len) override;
   };
 
-  // -------- function definitions
-
-  void convert_reads(std::vector<CReadAln *> &reads,
+  void convert_reads(std::vector<CReadAln> &reads,
                     std::shared_ptr<g2tTree> g2t, 
                     std::shared_ptr<ReadEvaluator> evaluator, 
                     BamIO *io);

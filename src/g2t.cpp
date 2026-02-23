@@ -2,11 +2,7 @@
 #include <numeric>
 #include <algorithm>
 #include <iostream>
-#include <map>
 #include <memory>
-#include <set>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include <IITree.h>
@@ -14,29 +10,17 @@
 #include "bramble.h"
 #include "evaluate.h"
 #include "g2t.h"
-#include "sw.h"
 
 extern bool SOFT_CLIPS;
 extern bool STRICT;
 extern bool USE_FASTA;
+extern bool LONG_READS;
 
 extern GFastaDb *gfasta;  // FASTA file, -S
 
 namespace bramble {
 
   IITData::IITData() {}
-
-  GuideExon::GuideExon(uint32_t s = 0, uint32_t e = 0)
-    : start(s),
-      end(e),
-      pos(0),
-      pos_start(0),
-      exon_id(0),
-      left_ins(0),
-      right_ins(0),
-      left_gap(0),
-      right_gap(0),
-      seq() {}
 
   IntervalTree::IntervalTree() {
     iit = new IITree<int, IITData>();
@@ -60,13 +44,12 @@ namespace bramble {
     node.prev_end = interval.prev_end;
     node.next_start = interval.next_start;
     node.next_end = interval.next_end;
-
     node.transcript_len = interval.transcript_len;
 
-    // could just grab this later when necessary
+    // grab here to avoid multithreading issues
     if (USE_FASTA) {
       GFaSeqGet* faseq = gfasta->fetch(ref_name);
-      std::string seq = faseq->copyRange(interval.start, 
+      const char *seq = faseq->copyRange(interval.start, 
         interval.end - 1, false, true);
       node.seq = seq;
     }
@@ -84,10 +67,11 @@ namespace bramble {
     IITData data;
   };
 
-  std::shared_ptr<GuideExon>
-  IntervalTree::findOverlappingForTid(uint32_t qstart, uint32_t qend, tid_t tid) {
+  bool
+  IntervalTree::findOverlappingForTid(uint32_t qstart, uint32_t qend, tid_t tid,
+                                      GuideExon &gexon) {
     
-    if (qstart == 0 && qend == 0) return nullptr;
+    if (qstart == 0 && qend == 0) return false;
     std::vector<size_t> hits;
     iit->overlap(qstart, qend, hits);
 
@@ -97,259 +81,186 @@ namespace bramble {
 
       const IITData& data = iit->data(idx);
       if (data.tid == tid) {
-        auto exon = std::make_shared<GuideExon>(s, e);
-        exon->transcript_len = data.transcript_len;
-        exon->pos_start = data.pos_start;
-        exon->exon_id = data.exon_id;
-        exon->has_prev = data.has_prev;
-        exon->has_next = data.has_next;
-        exon->prev_start = data.prev_start;
-        exon->prev_end = data.prev_end;
-        exon->next_start = data.next_start;
-        exon->next_end = data.next_end;
-        exon->seq = data.seq; // not sure if this has to be cleared
-
-        return exon;
+        gexon.start = s;
+        gexon.end = e;
+        gexon.transcript_len = data.transcript_len;
+        gexon.pos_start = data.pos_start;
+        gexon.exon_id = data.exon_id;
+        gexon.has_prev = data.has_prev;
+        gexon.has_next = data.has_next;
+        gexon.prev_start = data.prev_start;
+        gexon.prev_end = data.prev_end;
+        gexon.next_start = data.next_start;
+        gexon.next_end = data.next_end;
+        gexon.seq = data.seq; // may have to be cleared
+        return true;
       }
     }
 
-    return nullptr;
+    return false;
   }
 
-  std::unordered_map<tid_t, std::shared_ptr<GuideExon>>
+  bool
   IntervalTree::findOverlapping(uint32_t qstart, uint32_t qend, 
                                 char strand, ReadEvaluationConfig config, 
-                                ExonStatus status) {
-    std::unordered_map<tid_t, std::shared_ptr<GuideExon>> exons;
+                                ExonStatus status, 
+                                std::vector<GuideExon> &gexons) {
     std::vector<size_t> hits;
-    //config.print = true;
     
     iit->overlap(qstart, qend, hits);
-    if (hits.empty()) {
-      if (config.print) {
-        printf("=== QUERY FAILED ===\n");
-        printf("Query range: [%u, %u], strand: %c\n", qstart, qend, strand);
-        printf("Reason: No overlapping intervals found in tree\n\n");
-      }
-      config.print = false;
-      return exons;
-    }
+    if (hits.empty()) return false;
 
-    // Track rejection reasons for debugging
-    std::vector<std::string> rejection_reasons;
+    uint32_t pos;
+    uint32_t left_gap;
+    uint32_t left_ins;
+    uint32_t right_gap;
+    uint32_t right_ins;
+
+    // remove tids that appear >1
+    // means that junctions have been ignored
+
+    // update: should be handled in create_match loop
+    // if (LONG_READS) { // won't happen with strict short read parameters
+    //   thread_local unordered_set<tid_t> seen;
+    //   seen.clear();
+    //   thread_local unordered_set<tid_t> duplicates;
+    //   duplicates.clear();
+
+    //   for (size_t idx : hits) {
+    //     tid_t tid = iit->data(idx).tid;
+    //     if (!seen.emplace(tid).second) {
+    //       duplicates.emplace(tid);
+    //     }
+    //   }
+
+    //   hits.erase(
+    //     std::remove_if(hits.begin(), hits.end(), [&](size_t idx) {
+    //       return duplicates.count(iit->data(idx).tid);
+    //     }),
+    //     hits.end()
+    //   );
+    // }
 
     for (size_t idx : hits) {
       uint32_t s = iit->start(idx);
       uint32_t e = iit->end(idx);
 
-      if (config.print) printf("tid = %d\n", iit->data(idx).tid);
-
-      // Check soft clip conditions
-      if ((!SOFT_CLIPS || STRICT) && (qstart < s || e < qend)) {
-        rejection_reasons.push_back(
-          "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
-          "] rejected by soft clip policy"
-        );
-        continue;
-      }
+      pos = 0;
+      left_gap = 0;
+      left_ins = 0;
+      right_gap = 0;
+      right_ins = 0;
 
       const IITData& data = iit->data(idx);
-      auto exon = std::make_shared<GuideExon>(s, e);
-
-      bool rejected = false;
-      std::string reject_reason;
 
       if (strand == '+') {
         if (s <= qstart) {
           // Left junction gap: query starts after interval starts
-          exon->pos = (qstart - s) + data.pos_start;
-          exon->left_gap = qstart - s;
+          pos = (qstart - s) + data.pos_start;
+          left_gap = qstart - s;
           if (status == MIDDLE_EXON || status == LAST_EXON) {
-            if (exon->left_gap > config.max_junc_gap) {
-              reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
-                            "] left junction gap too large: " + std::to_string(exon->left_gap) + 
-                            " (max: " + std::to_string(config.max_junc_gap) + ")";
-              rejected = true;
-            }
+            if (left_gap > config.max_junc_gap) continue;
           }
         } else {
-          exon->pos = data.pos_start;
+          pos = data.pos_start;
           // Left clip: query extends before interval
-          exon->left_ins = s - qstart;
+          left_ins = s - qstart;
           if (status == MIDDLE_EXON || status == LAST_EXON) {
-            if (exon->left_ins > config.max_ins) {
-              reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
-                            "] left insertion too large: " + std::to_string(exon->left_ins) + 
-                            " (max: " + std::to_string(config.max_clip) + ")";
-              rejected = true;
-            }
+            if (left_ins > config.max_ins) continue;
           } else {
-            if (exon->left_ins > config.max_clip) {
-              reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
-                            "] left clip too large: " + std::to_string(exon->left_ins) + 
-                            " (max: " + std::to_string(config.max_clip) + ")";
-              rejected = true;
-            }
+            if (left_ins > config.max_clip) continue;
           }
         }
 
-        if (!rejected) {
-          // Check right side
-          if (e < qend) {
-            // Right clip: query extends past interval
-            exon->right_ins = qend - e;
-            if (status == FIRST_EXON || status == MIDDLE_EXON) {
-              if (exon->right_ins > config.max_ins) {
-                reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
-                              "] right insertion too large: " + std::to_string(exon->right_ins) + 
-                              " (max: " + std::to_string(config.max_clip) + ")";
-                rejected = true;
-              }
-            } else {
-              if (exon->right_ins > config.max_clip) {
-                reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
-                              "] right clip too large: " + std::to_string(exon->right_ins) + 
-                              " (max: " + std::to_string(config.max_clip) + ")";
-                rejected = true;
-              }
-            }
-          } else if (qend < e) {
-            // Right junction gap: query ends before interval ends
-            exon->right_gap = e - qend;
-            if (status == FIRST_EXON || status == MIDDLE_EXON) {
-              if (exon->right_gap > config.max_junc_gap) {
-                reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
-                              "] right junction gap too large: " + std::to_string(exon->right_gap) + 
-                              " (max: " + std::to_string(config.max_junc_gap) + ")";
-                rejected = true;
-              }
-            }
+        // Check right side
+        if (e < qend) {
+          // Right clip: query extends past interval
+          right_ins = qend - e;
+          if (status == FIRST_EXON || status == MIDDLE_EXON) {
+            if (right_ins > config.max_ins) continue;
+          } else {
+            if (right_ins > config.max_clip) continue;
+          }
+        } else if (qend < e) {
+          // Right junction gap: query ends before interval ends
+          right_gap = e - qend;
+          if (status == FIRST_EXON || status == MIDDLE_EXON) {
+            if (right_gap > config.max_junc_gap) continue;
           }
         }
 
       } else {  // strand == '-'
         if (qend <= e) {
-          exon->pos = (e - qend) + data.pos_start;
-          exon->right_gap = e - qend;
+          pos = (e - qend) + data.pos_start;
+          right_gap = e - qend;
           // Right junction gap: query ends before interval ends
           if (status == FIRST_EXON || status == MIDDLE_EXON) {
-            if (exon->right_gap > config.max_junc_gap) {
-              reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
-                            "] right junction gap too large: " + std::to_string(exon->right_gap) + 
-                            " (max: " + std::to_string(config.max_junc_gap) + ")";
-              rejected = true;
-            }
+            if (right_gap > config.max_junc_gap) continue;
           }
         } else {
-          exon->pos = data.pos_start;
+          pos = data.pos_start;
           // Right clip: query extends past interval
-          exon->right_ins = qend - e;
+          right_ins = qend - e;
           if (status == FIRST_EXON || MIDDLE_EXON) {
-            if (exon->right_ins > config.max_ins) {
-              reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
-                            "] right clip too large: " + std::to_string(exon->right_ins) + 
-                            " (max: " + std::to_string(config.max_clip) + ")";
-              rejected = true;
-            }
+            if (right_ins > config.max_ins) continue;
           } else {
-            if (exon->right_ins > config.max_clip) {
-              reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
-                            "] right clip too large: " + std::to_string(exon->right_ins) + 
-                            " (max: " + std::to_string(config.max_clip) + ")";
-              rejected = true;
-            }
+            if (right_ins > config.max_clip) continue;
           }
         }
 
-        if (!rejected) {
-          // Check left side
-          if (qstart < s) {
-            // Left clip: query extends before interval
-            exon->left_ins = s - qstart;
-            if (status == MIDDLE_EXON || status == LAST_EXON) {
-              if (exon->left_ins > config.max_ins) {
-                reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
-                              "] left clip too large: " + std::to_string(exon->left_ins) + 
-                              " (max: " + std::to_string(config.max_clip) + ")";
-                rejected = true;
-              }
-            } else {
-              if (exon->left_ins > config.max_clip) {
-                reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
-                              "] left clip too large: " + std::to_string(exon->left_ins) + 
-                              " (max: " + std::to_string(config.max_clip) + ")";
-                rejected = true;
-              }
-            }
-            
-          } else if (s < qstart) {
-            exon->left_gap = qstart - s;
-            // Left junction gap: query starts after interval starts
-            if (status == MIDDLE_EXON || status == LAST_EXON) {
-              if (exon->left_gap > config.max_junc_gap) {
-                reject_reason = "Interval [" + std::to_string(s) + ", " + std::to_string(e) + 
-                              "] left junction gap too large: " + std::to_string(exon->left_gap) + 
-                              " (max: " + std::to_string(config.max_junc_gap) + ")";
-                rejected = true;
-              }
-            }
+        // Check left side
+        if (qstart < s) {
+          // Left clip: query extends before interval
+          left_ins = s - qstart;
+          if (status == MIDDLE_EXON || status == LAST_EXON) {
+            if (left_ins > config.max_ins) continue;
+          } else {
+            if (left_ins > config.max_clip) continue;
+          }
+        } else if (s < qstart) {
+          left_gap = qstart - s;
+          // Left junction gap: query starts after interval starts
+          if (status == MIDDLE_EXON || status == LAST_EXON) {
+            if (left_gap > config.max_junc_gap) continue;
           }
         }
       }
 
-      if (rejected) {
-        rejection_reasons.push_back(reject_reason);
-        continue;
-      }
+      auto exon = GuideExon();
+      exon.start = s;
+      exon.end = e;
+      exon.tid = data.tid;
 
-      exon->pos_start = data.pos_start;
-      exon->exon_id = data.exon_id;
+      exon.pos = pos;
+      exon.left_gap = left_gap;
+      exon.left_ins = left_ins;
+      exon.right_gap = right_gap;
+      exon.right_ins = right_ins;
 
-      exon->has_prev = data.has_prev;
-      exon->has_next = data.has_next;
-      exon->prev_start = data.prev_start;
-      exon->prev_end = data.prev_end;
-      exon->next_start = data.next_start;
-      exon->next_end = data.next_end;
+      exon.pos_start = data.pos_start;
+      exon.exon_id = data.exon_id;
 
-      exon->transcript_len = data.transcript_len;
-      exon->seq = data.seq; // not sure if this has to be cleared
+      exon.has_prev = data.has_prev;
+      exon.has_next = data.has_next;
+      exon.prev_start = data.prev_start;
+      exon.prev_end = data.prev_end;
+      exon.next_start = data.next_start;
+      exon.next_end = data.next_end;
 
-      exons[data.tid] = exon;
+      exon.transcript_len = data.transcript_len;
+      exon.seq = data.seq; // may have to be cleared
+
+      gexons.emplace_back(exon);
     }
 
-    // Only print diagnostics if no intervals were found and printing is enabled
-    // if (config.print && intervals.empty()) {
-    if (config.print) {
-      //printf("=== QUERY FAILED ===\n");
-      printf("Query range: [%u, %u], strand: %c, status: %d\n", 
-             qstart, qend, strand, static_cast<int>(status));
-      // printf("Found %zu overlapping intervals in tree, but all were rejected:\n\n", 
-      //        hits.size());
-      printf("Found %zu overlapping intervals in tree\n\n", 
-             hits.size());
-
-      for (size_t idx : hits) {
-        uint32_t s = iit->start(idx);
-        uint32_t e = iit->end(idx);
-        printf("s = %d, e = %d\n", s, e);
-      }
-      
-      for (size_t i = 0; i < rejection_reasons.size(); i++) {
-        printf("  %zu. %s\n", i + 1, rejection_reasons[i].c_str());
-      }
-      printf("\n");
-    }
-
-    config.print = false;
-    return exons;
+    return (!gexons.empty());
   }
 
   g2tTree::g2tTree() = default;
     
   g2tTree::~g2tTree() {
     // Clean up all allocated trees
-    for (auto& [refid, pair] : trees) {
+    for (auto& pair : trees) {
       delete pair.first;   // forward tree
       delete pair.second;  // reverse tree
     }
@@ -357,20 +268,16 @@ namespace bramble {
   }
 
   // Get or create tree pair for a given refid
-  std::pair<IntervalTree*, IntervalTree*>& g2tTree::getTrees(uint8_t refid) {
-    auto it = trees.find(refid);
-    if (it == trees.end()) {
-      // Create new tree pair for this refid
-      IntervalTree* fw_tree = new IntervalTree();
-      IntervalTree* rc_tree = new IntervalTree();
-      trees[refid] = std::make_pair(fw_tree, rc_tree);
-      return trees[refid];
-    }
-    return it->second;
+  void g2tTree::createTree(int refid) {
+    // Create new tree pair for this refid
+    IntervalTree* fw_tree = new IntervalTree();
+    IntervalTree* rc_tree = new IntervalTree();
+    trees.emplace_back(std::make_pair(fw_tree, rc_tree));
   }
 
   IntervalTree *g2tTree::getTreeForStrand(uint8_t refid, char strand) {
-    auto pair = getTrees(refid);
+    if (refid >= trees.size()) return nullptr;
+    auto pair = trees[refid];
     if (strand == '+' || strand == 1)
       return pair.first;
     else if (strand == '-' || strand == -1)
@@ -415,20 +322,25 @@ namespace bramble {
     rc_tree->indexTree();
   }
 
-  std::shared_ptr<GuideExon> 
+  bool
   g2tTree::getGuideExonForTid(uint8_t refid, char strand, tid_t tid, 
-                              uint32_t start, uint32_t end) {
+                              uint32_t start, uint32_t end, GuideExon &gexon) {
     IntervalTree *tree = getTreeForStrand(refid, strand);
-    return tree->findOverlappingForTid(start, end, tid);
+    if (!tree) return false;
+    return tree->findOverlappingForTid(start, end, tid, gexon);
   }
 
   // Find all guide TIDs that overlap with a read exon
-  std::unordered_map<tid_t, std::shared_ptr<GuideExon>>
+  bool
   g2tTree::getGuideExons(uint8_t refid, char strand, GSeg exon, 
-                        ReadEvaluationConfig config, ExonStatus status) {
+                        ReadEvaluationConfig config, ExonStatus status,
+                        std::vector<GuideExon> &gexons) {
     IntervalTree *tree = getTreeForStrand(refid, strand);
+    if (!tree) {
+      return false;
+    }
     return tree->findOverlapping(exon.start, exon.end, strand, 
-      config, status);
+      config, status, gexons);
   }
   
 };

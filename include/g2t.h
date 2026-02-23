@@ -7,6 +7,7 @@ namespace bramble {
 
   struct BamIO;
   struct ReadEvaluationConfig;
+  struct GuideExonFlat;
   
   struct IntervalData {
     uint32_t start;
@@ -36,33 +37,9 @@ namespace bramble {
     uint32_t next_start;
     uint32_t next_end;
     uint32_t transcript_len;
-    std::string seq;
+    const char *seq;
       
     IITData();
-  };
-
-  struct GuideExon {
-    uint32_t start;
-    uint32_t end;
-    pos_t pos;  // calculated using alignment info
-    uint32_t pos_start;
-    uint8_t exon_id;
-    int32_t left_ins;
-    int32_t right_ins;
-    int32_t left_gap;
-    int32_t right_gap;
-
-    bool has_prev;
-    bool has_next;
-    uint32_t prev_start;
-    uint32_t prev_end;
-    uint32_t next_start;
-    uint32_t next_end;
-
-    uint32_t transcript_len;
-    std::string seq;
-      
-    GuideExon(uint32_t s, uint32_t e);
   };
 
   class IntervalTree {
@@ -80,36 +57,34 @@ namespace bramble {
 
     void indexTree();
 
-    std::shared_ptr<GuideExon>
-    findOverlappingForTid(uint32_t start, uint32_t end, tid_t tid);
+    bool
+    findOverlappingForTid(uint32_t start, uint32_t end, tid_t tid,
+                          GuideExon &gexon);
 
     // Find intervals that overlap with the given range
-    std::unordered_map<tid_t, std::shared_ptr<GuideExon>>
+    bool
     findOverlapping(uint32_t start, uint32_t end, char strand,
-                    ReadEvaluationConfig config, ExonStatus status);
+                    ReadEvaluationConfig config, ExonStatus status,
+                    std::vector<GuideExon> &gexons);
 
   };
 
   // g2t tree using interval tree
   struct g2tTree {
     // trees for forward and reverse strand
-    std::unordered_map<uint8_t, std::pair<IntervalTree*, IntervalTree*>> trees;
+    std::vector<std::pair<IntervalTree*, IntervalTree*>> trees;
 
     // map from transcript names to transcript IDs
-    std::unordered_map<tid_t, std::string> name_id_map;
+    unordered_map<tid_t, std::string> name_id_map;
     std::vector<std::string> tid_names;
     const std::string invalid_name{"INVALID TID"};
-
-    std::unordered_map<refid_t, uint32_t> ref_len_map;
 
     g2tTree();
 
     ~g2tTree();
 
   private:
-
-    std::pair<IntervalTree*, IntervalTree*>& getTrees(uint8_t refid);
-
+  
     IntervalTree *getTreeForStrand(uint8_t refid, char strand);
 
   public:
@@ -120,6 +95,8 @@ namespace bramble {
     // Get the string name given an id
     const std::string &getTidName(tid_t id);
 
+    void createTree(int refid);
+
     // Add guide exon with TID and transcript start
     void addInterval(refid_t refid, const tid_t &tid, 
                     IntervalData interval, char strand,
@@ -128,14 +105,15 @@ namespace bramble {
     // Index tree after guides have been added
     void indexTrees(uint8_t refid);
 
-    std::shared_ptr<GuideExon> 
+    bool
     getGuideExonForTid(uint8_t refid, char strand, tid_t tid, 
-                      uint32_t start, uint32_t end);
+                      uint32_t start, uint32_t end, GuideExon &gexon);
 
     // Find all guide exons that overlap with a read exon
-    std::unordered_map<tid_t, std::shared_ptr<GuideExon>> 
+    bool
     getGuideExons(uint8_t refid, char strand, GSeg exon, 
-                 ReadEvaluationConfig config, ExonStatus status);
+                 ReadEvaluationConfig config, ExonStatus status,
+                 std::vector<GuideExon> &gexons);
 
   };
 

@@ -6,7 +6,7 @@ cc = meson.get_compiler('cpp')
 base_flags = [
   '-Wall', '-Wextra', '-fsigned-char',
   '-D_FILE_OFFSET_BITS=64', '-D_LARGEFILE_SOURCE',
-  '-fno-strict-aliasing', '-fno-rtti'
+  '-fno-strict-aliasing'
 ]
 
 if get_option('buildtype') == 'debug'
@@ -18,13 +18,23 @@ add_project_arguments(base_flags, language: 'cpp')
 # External static libraries
 htslib_dep = dependency('', fallback: ['htslib', 'htslib_dep'])
 quill_dep = dependency('quill', fallback: ['quill', 'quill_dep'])
+# unordered_dense_dep = dependency('unordered_dense', fallback: ['unordered_dense', 'unordered_dense_dep'])
 zlib_dep = dependency('zlib', fallback: ['zlib', 'zlib_dep'])
-bz2_dep = dependency('bzip2', fallback: ['bzip2', 'bzip2_dep'])
+# Use cc.find_library as fallback for bzip2 when dependency() fails
+bz2_dep = dependency('bzip2', required: false)
+if not bz2_dep.found()
+  bz2_dep = cc.find_library('bz2', required: true)
+endif
+# Use cc.find_library as fallback for liblzma when dependency() fails
+lzma_dep = dependency('liblzma', required: false)
+if not lzma_dep.found()
+  lzma_dep = cc.find_library('lzma', required: true)
+endif
 lzma_dep = dependency('liblzma', required: true)
 curl_dep = dependency('libcurl', required: true)
 libdeflate_dep = dependency('libdeflate', fallback: ['libdeflate', 'libdeflate_dep'], required: true)
 
-libs = [libdeflate_dep, curl_dep, zlib_dep, bz2_dep, lzma_dep, cc.find_library('m', required: false)]
+libs = [libdeflate_dep, zlib_dep, curl_dep, bz2_dep, lzma_dep, cc.find_library('m', required: false)]
 
 # Paths to external directories
 # htslib_dir = 'htslib'
@@ -33,6 +43,7 @@ gclib_dir = 'gclib'
 htslib_inc = subproject('htslib').get_variable('htslib_inc')
 htslib_lib = subproject('htslib').get_variable('htslib_lib')
 cgranges_dep = subproject('cgranges').get_variable('cgranges_dep')
+unordered_dense_dep = subproject('unordered_dense').get_variable('unordered_dense_dep')
 gclib_dep = declare_dependency(
   include_directories: gclib_dir,
   dependencies: [htslib_dep]
@@ -60,8 +71,8 @@ gclib_srcs = files(
   'gclib/GFaSeqGet.cpp', 'gclib/gff.cpp', 'gclib/GThreads.cpp'
 )
 
-main_srcs = files('src/bramble.cpp', 'src/bam.cpp', 'src/threads.cpp',
-'src/core.cpp', 'src/mates.cpp', 'src/evaluate.cpp', 'src/g2t.cpp', 'src/sw.cpp')
+main_srcs = files('src/bramble.cpp', 'src/bam.cpp', 'src/threads.cpp', 'src/ksw2_extz2_sse.cpp',
+'src/core.cpp', 'src/mates.cpp', 'src/evaluate.cpp', 'src/g2t.cpp')
 
 # Optional sanitizers
 if get_option('memcheck')
@@ -96,5 +107,5 @@ endif
 
 executable('bramble', gclib_srcs + main_srcs + gclib_target,
   include_directories: inc_dirs,
-  dependencies: [htslib_dep, quill_dep, gclib_dep, cgranges_dep] + libs,
+  dependencies: [htslib_dep, quill_dep, gclib_dep, cgranges_dep, unordered_dense_dep] + libs,
 )

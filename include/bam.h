@@ -42,8 +42,6 @@ namespace bramble {
     }
   };
 
-  // -------- function definitions
-
   uint32_t* get_new_cigar(uint32_t* real_cigar, uint32_t n_real_cigar,
                         const Cigar& ideal_cigar, uint32_t* new_n_cigar, 
                         CigarMem& mem, int32_t &nm);
@@ -60,13 +58,14 @@ namespace bramble {
 
   void set_nh_tag(bam1_t* b, int32_t nh_i);
 
+  // not yet implemented; nm retained from aligner
   void set_nm_tag(bam1_t* b, int32_t nm_i);
 
   void set_hi_tag(bam1_t* b, int32_t hi_i);
 
-  void set_xs_tag(bam1_t* b, char xs_a);
+  void set_xs_tag(bam1_t* b, char xs_a); // short reads
 
-  void remove_extra_tags(bam1_t* b);
+  void set_ts_tag(bam1_t* b, char ts_a); // long reads
 
   void set_as_tag(bam1_t* b, AlignInfo &align, uint8_t qual);
 

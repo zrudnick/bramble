@@ -2,11 +2,7 @@
 #pragma once
 #include <algorithm>
 #include <iostream>
-#include <map>
 #include <memory>
-#include <set>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 #include <functional>
 
@@ -19,14 +15,6 @@
 #include "time.h"
 #include "types.h"
 
-#define MAX_NODE 1000000
-#define SMALL_EXON                                                             \
-  35 // exons smaller than this have a tendency to be missed by long read data
-#define RUNOFF_DIST 200  // Reads at what distance should be considered part of separate bundles?
-
-#define LONG_INTRON_ANCHOR 25
-#define MISMATCH_FRAC 0.02
-
 namespace bramble {
 
   struct g2tTree;
@@ -36,36 +24,44 @@ namespace bramble {
   protected:
     std::unique_ptr<GSamReader> reader{nullptr};
     std::unique_ptr<GSamWriter> writer{nullptr};
-    GSamRecord *current_record = nullptr;
+    std::shared_ptr<GSamRecord> current_record{nullptr};
     GStr input_bam;
     GStr output_bam;
     GStr header_sam;
 
   public:
-    BamIO(const GStr &in_bam, const GStr &out_bam, const GStr &sam_header)
-        : input_bam(in_bam), output_bam(out_bam), header_sam(sam_header) {}
+    BamIO(const GStr &in_bam, 
+          const GStr &out_bam, 
+          const GStr &sam_header)
+      : input_bam(in_bam), 
+        output_bam(out_bam), 
+        header_sam(sam_header) {}
 
     void start() {
       reader = std::make_unique<GSamReader>(input_bam.chars());
-      writer = std::make_unique<GSamWriter>(output_bam.chars(), header_sam.chars());
+      writer = std::make_unique<GSamWriter>(output_bam.chars(), 
+        header_sam.chars());
 
-      GSamRecord *next_rec = reader->next();
-      if (next_rec) {
-        current_record = next_rec;
+      if (GSamRecord* next_rec = reader->next()) { 
+        current_record = std::shared_ptr<GSamRecord>(
+          next_rec, [](GSamRecord* p) { delete p; }); 
       }
     }
 
-    GSamRecord *next() {
-      GSamRecord *result = current_record;
-
-      current_record = reader->next(); // null at EOF
-
+    std::shared_ptr<GSamRecord>next() {
+      auto result = current_record; 
+      if (GSamRecord* next_rec = reader->next()) { 
+        current_record = std::shared_ptr<GSamRecord>(
+          next_rec, [](GSamRecord* p){ delete p; }); 
+      } else { 
+        current_record.reset(); 
+      } 
       return result;
     }
 
-    void write(GSamRecord *rec) {
-      if (writer && rec != nullptr) {
-        writer->write(rec);
+    void write(bam1_t *b) {
+      if (writer && b != nullptr) {
+        writer->write(b);
       }
     }
 
@@ -73,15 +69,12 @@ namespace bramble {
       return writer->get_tid(transcript_id);
     }
 
-    bam_hdr_t* get_header() {
-      return reader->header();
+    bam_hdr_t* get_header() { 
+      return reader->header(); 
     }
 
-    void stop() {
-      if (current_record != nullptr) {
-        delete current_record;
-        current_record = nullptr;
-      }
+    void stop() { 
+      current_record.reset(); 
     }
   };
 
@@ -130,47 +123,31 @@ namespace bramble {
   struct CReadAln : public GSeg {
     char strand;                  // 1, 0 (unknown), -1 (reverse)
     refid_t refid;                // chromosome origin
-    short int nh;
-    uint32_t len;
     float read_count;             // keeps count for all reads (including paired and unpaired)
-    bool unitig : 1;              // set if read come from an unitig
     GVec<float> pair_count;       // keeps count for all paired reads
-    GVec<int> pair_idx;           // keeps indices for all pairs in assembly mode, or all
-                                    // reads that were collapsed in merge mode
-
-    // For mate position calculations
-    uint32_t mate_genomic_pos;
-    tid_t mate_transcript_id;
-    bool mate_found;
-
+    GVec<int> pair_idx;           // keeps indices for all paired reads
     GVec<GSeg> segs;  // "exons"
-    GSamRecord *brec; // store BAM record
+    std::shared_ptr<GSamRecord> brec; // store BAM record
 
     CReadAln(char _strand = 0, refid_t id = 0, 
-      short int _nh = 0, int rstart = 0, int rend = 0)
+      int rstart = 0, int rend = 0)
       : GSeg(rstart, rend),
         strand(_strand), 
         refid(id),
-        nh(_nh), 
-        len(0), 
-        read_count(0), 
-        unitig(false), 
+        read_count(0),
         pair_count(), 
         pair_idx(), 
-        mate_genomic_pos(0),
-        mate_transcript_id(), 
-        mate_found(false), 
         segs(), 
         brec() {}
 
-    ~CReadAln() { delete brec; }
+    ~CReadAln() {}
   };
 
   // Bundle data structure, holds input data parsed from BAM file
   struct BundleData {
     BundleStatus status; // bundle status
     int idx; // index in the main bundles array
-    std::vector<CReadAln *> reads; // all reads in bundle
+    std::vector<CReadAln> reads; // all reads in bundle
 
     std::shared_ptr<g2tTree> g2t; 
     std::shared_ptr<ReadEvaluator> evaluator;
@@ -188,10 +165,6 @@ namespace bramble {
     }
 
     void Clear() {
-      // delete each CReadAln*
-      for (auto &aln : reads) {
-        delete aln;
-      }
       reads.clear();
       status = BundleStatus::BUNDLE_STATUS_CLEAR;
     }

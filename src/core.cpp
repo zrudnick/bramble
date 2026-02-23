@@ -1,10 +1,8 @@
 
 #include <algorithm>
 #include <memory>
-#include <set>
 #include <string>
 #include <vector>
-#include <unordered_set>
 
 #include "types.h"
 #include "bramble.h"
@@ -41,35 +39,33 @@ namespace bramble {
     }
   }
 
-  ReadInfo *process_read_out(CReadAln *read, read_id_t id, 
+  ReadInfo *process_read_out(CReadAln &read, read_id_t id, 
                             std::shared_ptr<g2tTree> g2t, 
                             std::shared_ptr<ReadEvaluator> evaluator,
                             uint8_t *seq, int seq_len) {
 
     // Evaluate read group to find matches
-    std::unordered_map<tid_t, ExonChainMatch> matches = 
-      evaluator->evaluate(read, id, g2t, seq, seq_len);
+    std::vector<ExonChainMatch> matches = 
+      evaluator->evaluate(read, g2t, seq, seq_len);
 
     if (matches.empty()) return nullptr;
 
     // Write out evaluation result
     auto this_read = new ReadInfo;
 
-    this_read->matches = matches;
+    this_read->matches = std::move(matches);
     this_read->valid_read = true;
-    this_read->is_paired = (read->brec->flags() & BAM_FPAIRED);
+    this_read->is_paired = (read.brec->flags() & BAM_FPAIRED);
     this_read->read = std::make_shared<ReadOut>();
-    this_read->read->name = read->brec->name();
-    this_read->read->index = id;
-    this_read->read->brec = read->brec;
-    this_read->read->read_size = read->len;
+    this_read->read->index = id; // used for seen in bam
+    this_read->read->brec = read.brec;
     this_read->read->nh = matches.size();
     return this_read;
   }
 
   void write_to_bam(BamIO *io, std::vector<BamInfo *>& bam_info) {
-    std::unordered_set<read_id_t> seen;
-    CigarMem cigar_mem; // reuse space in memory
+    unordered_set<read_id_t> seen;
+    CigarMem cigar_mem;             // reuse space in memory
     std::vector<bam1_t*> to_write;  // collect finished records
 
     // Prepare records for paired reads or single read
@@ -78,7 +74,7 @@ namespace bramble {
 
       // Prepare records for one output alignment
       auto prepare_read = [&](std::shared_ptr<ReadOut> read, 
-                              std::shared_ptr<Cigar> &ideal_cigar,
+                              Cigar &cigar,
                               char strand,
                               bool is_first) {
         if (!read || !read->brec) return;
@@ -87,41 +83,24 @@ namespace bramble {
         bam1_t* b; // new copy
 
         bool new_read = seen.insert(read->index).second;
-        // if (new_read && !LONG_READS) {
-        //   uint32_t* cigar = bam_get_cigar(old_b);
-        //   uint32_t n_cigar = old_b->core.n_cigar;
-
-        //   int32_t nm = 0;
-        //   update_cigar(old_b, cigar, n_cigar, cigar_mem, *ideal_cigar, nm);
-
-        //   // Set tags
-        //   set_nh_tag(old_b, read->nh);
-        //   set_xs_tag(old_b, strand);
-        //   set_nm_tag(old_b, nm);
-        //   remove_extra_tags(old_b);
-
-        // we have different cigars for every match
-        // so just modify new b every time
-        // } else if (new_read && LONG_READS) { 
-          // Set NH and XS tags
+        if (new_read && !LONG_READS) {
+          // Set tags
           set_nh_tag(old_b, read->nh);
           set_xs_tag(old_b, strand);
-          remove_extra_tags(old_b);
-        // }
+        } else if (new_read && LONG_READS) { 
+          // Set NH and XS tags
+          set_nh_tag(old_b, read->nh);
+          set_ts_tag(old_b, strand);
+        }
 
-        // if (!LONG_READS) {
-        //   b = bam_dup1(old_b);
-        // } else {
+        b = bam_dup1(old_b);
 
-          b = bam_dup1(old_b);
-
-          // Print BEFORE update
-          uint32_t* cigar = bam_get_cigar(b);
-          uint32_t n_cigar = b->core.n_cigar;
-          int32_t nm = 0;
-          update_cigar(b, cigar, n_cigar, cigar_mem, *ideal_cigar, nm);
-          set_nm_tag(b, nm);
-        // }
+        // Print BEFORE update
+        uint32_t* new_cigar = bam_get_cigar(b);
+        uint32_t n_cigar = b->core.n_cigar;
+        int32_t nm = 0;
+        update_cigar(b, new_cigar, n_cigar, cigar_mem, cigar, nm);
+        // set_nm_tag(b, nm); should this be updated?
 
         // Update mapping quality score
         // must have values between 0–255
@@ -133,24 +112,11 @@ namespace bramble {
           if (pair->r_align.primary_alignment) b->core.flag &= ~BAM_FSECONDARY; // mark primary
           else b->core.flag |= BAM_FSECONDARY; // default secondary
           // If read is being reversed - reverse-complement the sequence and quality strings
-          bool align_reverse = (pair->r_align.is_reverse);
-          bool current_reverse = (b->core.flag & BAM_FREVERSE);
-          //printf("current reverse = %d, align reverse = %d\n", current_reverse, align_reverse);
-          if (LONG_READS) {
-            if (current_reverse == 0 && align_reverse == 1) {
-              // update to allow * for sequence
-              int rc_res = reverse_complement_bam(b);
-              if (rc_res != 0) {
-                GError("Error: reverse_complement_bam failed with code %d\n", rc_res);
-              }
-            }
-          } else {
-            if (b->core.flag & BAM_FREVERSE) {
-              // update to allow * for sequence
-              int rc_res = reverse_complement_bam(b);
-              if (rc_res != 0) {
-                GError("Error: reverse_complement_bam failed with code %d\n", rc_res);
-              }
+          if (strand == '-') {
+            // update to allow * for sequence
+            int rc_res = reverse_complement_bam(b);
+            if (rc_res != 0) {
+              GError("Error: reverse_complement_bam failed with code %d\n", rc_res);
             }
           }
 
@@ -161,47 +127,34 @@ namespace bramble {
             b->core.pos = (int32_t)pair->r_align.rcpos;
           }
           
-          set_as_tag(b, pair->r_align, b->core.qual);
+          if (LONG_READS) set_as_tag(b, pair->r_align, b->core.qual);
           set_hi_tag(b, pair->r_align.hit_index);
-        } else {
+
+        } else {  // mate
           b->core.tid = (int32_t)pair->m_tid;
           if (pair->m_align.primary_alignment) b->core.flag &= ~BAM_FSECONDARY; // mark primary
           else b->core.flag |= BAM_FSECONDARY; // default secondary
           // If read is being reversed - reverse-complement the sequence and quality strings
-          if (LONG_READS) {
-            bool align_reverse = (pair->m_align.is_reverse);
-            bool current_reverse = (b->core.flag & BAM_FREVERSE);
-            if (current_reverse == 0 && align_reverse == 1) {
-              // update to allow * for sequence
-              int rc_res = reverse_complement_bam(b);
-              if (rc_res != 0) {
-                GError("Error: reverse_complement_bam failed with code %d\n", rc_res);
-              }
-            }
-          } else {
-            if (b->core.flag & BAM_FREVERSE) {
-              // update to allow * for sequence
-              int rc_res = reverse_complement_bam(b);
-              if (rc_res != 0) {
-                GError("Error: reverse_complement_bam failed with code %d\n", rc_res);
-              }
+          if (strand == '-') {
+            // update to allow * for sequence
+            int rc_res = reverse_complement_bam(b);
+            if (rc_res != 0) {
+              GError("Error: reverse_complement_bam failed with code %d\n", rc_res);
             }
           }
-          
 
           if (strand == '+') { // pos depends only on transcript strand
                                // not on read orientation or reverse status
-            b->core.pos = (int32_t)pair->r_align.fwpos;
+            b->core.pos = (int32_t)pair->m_align.fwpos;
           } else {
-            b->core.pos = (int32_t)pair->r_align.rcpos;
+            b->core.pos = (int32_t)pair->m_align.rcpos;
           }
           
-          set_as_tag(b, pair->m_align, b->core.qual);
+          if (LONG_READS) set_as_tag(b, pair->m_align, b->core.qual);
           set_hi_tag(b, pair->m_align.hit_index);
         }
 
         set_mate_info(b, pair, is_first); // must be called for both paired and non-paired instances
-
         to_write.push_back(b);
 
       };
@@ -219,9 +172,8 @@ namespace bramble {
 #endif
 
     for (auto* b_ : to_write) {
-      GSamRecord *rec = new GSamRecord(b_);
-      io->write(rec);
-      delete rec;
+      io->write(b_);
+      bam_destroy1(b_);
     }
 
 #ifndef NOTHREADS
@@ -229,7 +181,7 @@ namespace bramble {
 #endif
   }
 
-  void convert_reads(std::vector<CReadAln *> &reads,
+  void convert_reads(std::vector<CReadAln> &reads,
                     std::shared_ptr<g2tTree> g2t, 
                     std::shared_ptr<ReadEvaluator> evaluator, 
                     BamIO *io) {
@@ -239,8 +191,8 @@ namespace bramble {
     bam_info.reserve(CHUNK_SIZE*1.2);
 
     // Buffer for grouping by read name before filtering
-    std::unordered_map<std::string, std::vector<BamInfo*>> pairs_by_name;
-    uint32_t n_pairs;
+    std::unordered_map<const char *, std::vector<BamInfo*>> pairs_by_name;
+    uint32_t n_pairs = 0;
 
     auto flush = [&]() {
       // Filter by strand before writing
@@ -267,7 +219,7 @@ namespace bramble {
 
     auto emit_pair = [&](BamInfo* pair, bool is_last) {
       if (pair && pair->read1) {
-        std::string read_name = pair->read1->name;
+        const char *read_name = pair->read1->brec->name();
         pairs_by_name[read_name].push_back(pair);
         n_pairs++;
         
@@ -278,25 +230,34 @@ namespace bramble {
     };
 
     // Track seen reads
-    std::unordered_set<read_id_t> seen;
+    unordered_set<read_id_t> seen;
     seen.reserve(reads.size() * 1.2);
 
     for (read_id_t id = 0; id < reads.size(); ) {
 
       // Group reads with identical read names
       read_id_t start = id;
-      const std::string& name = reads[id]->brec->name();
+      const std::string& name = reads[id].brec->name();
+      id++; // prevent doing it twice
 
-      while (id < reads.size() && reads[id]->brec->name() == name) {
+      while (id < reads.size() && reads[id].brec->name() == name) {
         id++;
       }
       read_id_t end = id; // [start, end)
 
-      CReadAln* first = reads[start];
-      bam1_t* b = first->brec->get_b();
-      int seq_len = b->core.l_qseq;
-      uint8_t *seq = bam_get_seq(b);
+      CReadAln &first = reads[start];
 
+      int seq_len;
+      uint8_t *seq;
+      if (LONG_READS) {
+        bam1_t* b = first.brec->get_b();
+        seq_len = b->core.l_qseq;
+        seq = bam_get_seq(b);
+      } else {
+        seq_len = 0;
+        seq = nullptr;
+      }
+      
       // Process read groups
       for (read_id_t i = start; i < end; i++) {
         if (seen.count(i)) continue;
@@ -304,8 +265,7 @@ namespace bramble {
         ReadInfo* this_read = process_read_out(
           reads[i], i, g2t, evaluator, seq, seq_len);
 
-        int n_mates = reads[i]->pair_idx.Count();
-
+        int n_mates = reads[i].pair_idx.Count();
         if (n_mates == 0) {
           process_mate_pair(this_read, nullptr, emit_pair);
           delete this_read;
@@ -314,7 +274,7 @@ namespace bramble {
         }
 
         for (uint32_t m = 0; m < n_mates; m++) {
-          int mate_id = reads[i]->pair_idx[m];
+          int mate_id = reads[i].pair_idx[m];
           if (mate_id < 0 || mate_id >= reads.size()) continue;
           if (seen.count(mate_id)) continue;
 

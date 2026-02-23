@@ -1,9 +1,13 @@
-[submodule "external/coitrees"]
-	path = external/coitrees
-	url = https://github.com/dcjones/coitrees
-[submodule "subprojects/nclist"]
-	path = subprojects/nclist
-	url = https://github.com/LTLA/nclist-cpp
 [submodule "subprojects/cgranges"]
 	path = subprojects/cgranges
 	url = https://github.com/lh3/cgranges
+	ignore = dirty
+[submodule "unordered_dense"]
+	path = unordered_dense
+	url = https://github.com/martinus/unordered_dense
+[submodule "subprojects/unordered_dense"]
+	path = subprojects/unordered_dense
+	url = https://github.com/martinus/unordered_dense
+[submodule "subprojects/ksw2"]
+	path = subprojects/ksw2
+	url = https://github.com/lh3/ksw2

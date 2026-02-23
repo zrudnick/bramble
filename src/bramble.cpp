@@ -1,13 +1,8 @@
-
 #include <numeric>
 #include <algorithm>
 #include <iostream>
-#include <map>
-#include <memory>
-#include <set>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
+#include <atomic>
 
 #include "CLI/CLI11.hpp"
 #ifndef NOTHREADS
@@ -34,7 +29,7 @@
 #include "evaluate.h"
 #include "g2t.h"
 #include "threads.h"
-#include "sw.h"
+#include "ksw2.h"
 
 using namespace bramble;
 
@@ -47,27 +42,28 @@ bramble <in.bam ..> [-G <guide_gff>] [-o <out.bam>] [-p <cpus>] [-S <genome.fa>]
  \n\
 Project spliced genomic alignments into transcriptomic space.\n\
 Options:\n\
- --help     : print this usage message and exit\n\
- --version  : print just the version at stdout and exit\n\
- --quiet    : turn off verbose mode (log bundle processing details)\n\
- --long     : alignments are from long reads?\n\
- -G <file>  : reference annotation to use for guiding the BAM conversion (GTF/GFF)\n\
- -o <file>  : output path/file name for the projected alignments (default: stdout)\n\
- -p <int>   : number of threads (CPUs) to use (default: 1)\n\
- -S <file>  : genome sequence file (FASTA format)\n\
+ --help       : print this usage message and exit\n\
+ --version    : print just the version at stdout and exit\n\
+ --quiet      : turn off verbose mode (log bundle processing details)\n\
+ --long       : alignments are from long reads?\n\
+ --fr         : assume stranded library (first-strand, read2 sense)\n\
+ --rf         : assume stranded library (second-strand, read1 sense)\n\
+ --paired-end : library is paired-end\n\
+ -G <file>    : reference annotation to use for guiding the BAM conversion (GTF/GFF)\n\
+ -o <file>    : output path/file name for the projected alignments (default: stdout)\n\
+ -p <int>     : number of threads (CPUs) to use (default: 1)\n\
+ -S <file>    : genome sequence file (FASTA format)\n\
 "
-
-// --fr       : assume stranded library fw-firststrand\n\
-// --rf       : assume stranded library fw-secondstrand\n\
 
 bool QUIET = false;     // Turn off verbose mode, --quiet
 bool BRAMBLE_DEBUG = false;
 bool LONG_READS = false;  // BAM file contains long reads, --long
-bool FR_STRAND = true;   // Read 1 is on forward strand, --fr
-bool RF_STRAND = false;   // Read 1 is on reverse strand, --fr
+bool FR_STRAND = false;   // Read 2 is on sense strand, --fr
+bool RF_STRAND = false;   // Read 1 is on sense strand, --fr
 bool USE_FASTA = false;   // Use FASTA for reducing soft clips
 bool SOFT_CLIPS = true;   // Add soft clips
 bool STRICT = false;      // Use for strict boundary adherence
+bool PAIRED_END = false;   // Are reads paired-end?
 
 FILE *f_out = NULL;       // Default: stdout
 uint8_t n_threads = 1;    // Threads, -p
@@ -94,7 +90,7 @@ char bundle_work =
        // yet) Bit 1 set if there are Bundles ready in the queue
 
 GMutex wait_mutex;       // Controls threads_waiting (idle threads counter)
-uint8_t threads_waiting; // Idle worker threads
+std::atomic<uint8_t> threads_waiting; // Idle worker threads; // Idle worker threads
 GConditionVar
     have_threads; // Will notify the bundle loader when a thread
                   // Is available to process the currently loaded bundle
@@ -113,23 +109,21 @@ uint32_t dropped_reads;
 uint32_t unresolved_reads;
 
 std::shared_ptr<g2tTree> build_g2t_tree(GVec<GRefData> refguides, 
-                                        int n_refguides, BamIO *io) {
+                                        BamIO *io) {
   auto g2t = std::make_shared<g2tTree>();
-
   GList<GffObj> *guides;
-
   std::vector<IntervalData> intervals;
   intervals.reserve(100);
   
-  for (uint32_t refid = 0; refid < refguides.Count(); refid++) {
+  for (int refid = 0; refid < refguides.Count(); refid++) {
     guides = &(refguides[refid].rnas);
     const char* ref_name = refguides[refid].gseq_name;
+    g2t->createTree(refid);
 
     for (int j = 0; j < guides->Count(); j++) {
       GffObj *guide = (*guides)[j];
       char strand = guide->strand;
       const char *tid_string = guide->getID();
-      // todo: validate that these are contiguous
       
 #ifndef NOTHREADS
       bam_io_mutex.lock();
@@ -138,8 +132,6 @@ std::shared_ptr<g2tTree> build_g2t_tree(GVec<GRefData> refguides,
 #ifndef NOTHREADS
       bam_io_mutex.unlock();
 #endif
-
-      std::string tid_string_print = g2t->getTidName(tid);
 
       int exon_count = guide->exons.Count();
       intervals.clear();
@@ -203,44 +195,41 @@ char get_strand(GSamRecord* brec) {
   // Set strand if stranded library
   if ((strand == '.') && (FR_STRAND || RF_STRAND)) {
 
-    if (brec->isPaired()) {
-      if (brec->pairOrder() == 1) { // first read in pair
-        if ((RF_STRAND && brec->revStrand()) || (FR_STRAND && !brec->revStrand()))
-          strand = '+';
-        else strand = '-';
-      } else { // second read in pair
-        if ((RF_STRAND && brec->revStrand()) || (FR_STRAND && !brec->revStrand()))
+    bool is_paired = (brec->isPaired() || PAIRED_END);
+    bool is_rev    = (brec->revStrand());
+
+    if (is_paired) {
+
+      int pair_order = brec->pairOrder();
+      if (pair_order == 1) { // first read in pair
+        if ((RF_STRAND && is_rev) || (FR_STRAND && !is_rev))
           strand = '-';
         else strand = '+';
+      } else { // second read in pair
+        if ((RF_STRAND && is_rev) || (FR_STRAND && !is_rev))
+          strand = '+';
+        else strand = '-';
       }
-    } else { // read isn't paired
-      if ((RF_STRAND && brec->revStrand()) || (FR_STRAND && !brec->revStrand()))
-        strand = '+';
-      else strand = '-';
+    } 
+    
+    else { // read isn't paired
+
+      if ((RF_STRAND && is_rev) || (FR_STRAND && !is_rev))
+        strand = '-';
+      else strand = '+';
     }
   }
   return strand;
 }
 
-void process_exons(GSamRecord *brec, CReadAln *read, const char *ref_name) {
+void process_exons(std::shared_ptr<GSamRecord> brec, 
+                  CReadAln &read) {
   auto exons = brec->exons;
   for (int i = 0; i < exons.Count(); i++) {
-    auto exon = exons[i];
+    auto &exon = exons[i];
     exon.end++; // switch to exclusive end
-
-    read->len += exon.len();
-    read->segs.Add(exon);
+    read.segs.Add(exon);
   }
-}
-
-float calculate_read_count(GSamRecord *brec) {
-  float unitig_cov = brec->tag_float("YK");
-  float read_count = static_cast<float>(brec->tag_int("YC"));
-  if (read_count == 0)
-    read_count = 1;
-  if (unitig_cov)
-    read_count = unitig_cov;
-  return read_count;
 }
 
 std::string 
@@ -250,55 +239,58 @@ create_read_id(const char *read_name, int32_t pos, int32_t hi) {
   return id;
 }
 
-void add_pair_if_new(CReadAln *read, int pair_id, float read_count) {
-  for (int i = 0; i < read->pair_idx.Count(); i++) {
-    if (read->pair_idx[i] == pair_id) {
+void add_pair_if_new(CReadAln &read, int pair_id) {
+  for (int i = 0; i < read.pair_idx.Count(); i++) {
+    if (read.pair_idx[i] == pair_id) {
       return; // pairing already exists
     }
   }
 
-  read->pair_idx.Add(pair_id);
-  read->pair_count.Add(read_count);
+  read.pair_idx.Add(pair_id);
 }
 
-void process_pairs(std::vector<CReadAln *> &reads, 
-                  read_id_t id, GSamRecord *brec, int32_t hi, 
-                  float read_count, GHash<int> &hashread) {
+void process_pairs(std::vector<CReadAln> &reads, 
+                  read_id_t id, GSamRecord *brec, 
+                  GHash<int> &hashread) {
 
   // Only process pairs on same chromosome/contig
   if (brec->refId() != brec->mate_refId())
     return;
 
-  int32_t read_start = reads[id]->start;
+  int32_t read_start = reads[id].start;
   int32_t mate_start = brec->mate_start();
 
   if (mate_start <= read_start) {
     std::string read_id =
-      create_read_id(reads[id]->brec->name(), mate_start, hi);
+      create_read_id(reads[id].brec->name(), mate_start, 
+        brec->tag_int("HI"));
     int *mate_id = hashread[read_id.c_str()];
     if (mate_id) {
-      add_pair_if_new(reads[id], *mate_id, read_count);
-      add_pair_if_new(reads[*mate_id], id, read_count);
+      add_pair_if_new(reads[id], *mate_id);
+      add_pair_if_new(reads[*mate_id], id);
       hashread.Remove(read_id.c_str());
     }
   } else {
-    std::string read_id = create_read_id(brec->name(), read_start, hi);
+    std::string read_id = create_read_id(brec->name(), read_start, 
+      brec->tag_int("HI"));
     hashread.Add(read_id.c_str(), id);
   }
 }
 
-void process_read_in(std::vector<CReadAln *> &reads, read_id_t id,
-                    GSamRecord *brec, char strand, refid_t refid, 
-                    const char *ref_name, int32_t nh, int32_t hi, GHash<int> &hashread) {
-
-  // Create new read alignment
-  CReadAln *read = new CReadAln(strand, refid, nh, brec->start, brec->end);
-  read->brec = brec;
-  reads.emplace_back(read);
+void process_read_in(std::vector<CReadAln> &reads, read_id_t id,
+                    std::shared_ptr<GSamRecord> brec, char strand, 
+                    refid_t refid, GHash<int> &hashread) {
+  CReadAln read;
+  read.strand = strand;
+  read.refid = refid;
+  read.brec = brec;
   
-  process_exons(brec, read, ref_name);
-  float read_count = calculate_read_count(brec);
-  process_pairs(reads, id, brec, hi, read_count, hashread);
+  process_exons(brec, read);
+  if (PAIRED_END) {
+    process_pairs(reads, id, brec.get(), hashread);
+  }
+
+  reads.emplace_back(read);
 }
 
 void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,  
@@ -321,12 +313,12 @@ void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,
 
   bool more_alignments = true;
 
-  GSamRecord *brec = nullptr;
-  std::vector<CReadAln *> reads;
+  std::shared_ptr<GSamRecord> brec = nullptr;
+  std::vector<CReadAln> reads;
   GHash<int> hashread;
 
   read_id_t id = 0;
-  uint32_t chunk_size = 1000000;
+  uint32_t chunk_size = 100000;
 
   std::string prev_read_name;
   std::string read_name;
@@ -346,7 +338,7 @@ void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,
       }
 
       read_name = brec->name();
-      strand = get_strand(brec);
+      strand = LONG_READS ? '.' : get_strand(brec.get());
       ref_name = brec->refName();
       refid = guide_seq_names->gseqs.addName(ref_name);
 
@@ -393,8 +385,8 @@ void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,
 
     // this_refid is an index into whatever array
     // refid is the actual refid for the specific read
-    process_read_in(bundle->reads, id++, brec, strand, refid, 
-      ref_name, brec->tag_int("NH"), brec->tag_int("HI"), hashread);
+    process_read_in(bundle->reads, id++, brec, 
+      strand, refid, hashread);
 
     prev_read_name = read_name;
   }
@@ -418,10 +410,11 @@ int main(int argc, char *argv[]) {
   std::string in_bam;
   std::string in_fasta;
   app.add_option("in.bam", in_bam, "input bam file")->required();
-  // app.add_flag("--fr", FR_STRAND, "assume stranded library fw-firststrand");
-  // app.add_flag("--rf", RF_STRAND, "assume stranded library fw-secondstrand");
   app.add_flag("--quiet", QUIET, "turn off verbose (log processing details)");
   app.add_flag("--long", LONG_READS, "alignments are from long reads?");
+  app.add_flag("--fr", FR_STRAND, "assume stranded library (first-strand, read2 sense)");
+  app.add_flag("--rf", RF_STRAND, "assume stranded library (second-strand, read1 sense)");
+  app.add_flag("--paired-end", PAIRED_END, "library is paired end");
   app.add_option("-G", gff,
                  "reference annotation to use for guiding the assembly process "
                  "(GTF/GFF)")
@@ -442,6 +435,11 @@ int main(int argc, char *argv[]) {
   app.add_flag_function("-V,--version", version_callback, "print version.");
 
   CLI11_PARSE(app, argc, argv);
+
+  // Set strand information
+  if (LONG_READS) {
+    PAIRED_END = false;
+  }
 
   // LOG_INFO(logger, "command line parsed --- running bramble");
   bam_file_in = in_bam.c_str();
@@ -554,13 +552,23 @@ int main(int argc, char *argv[]) {
   BamIO *io = new BamIO(bam_file_in, bam_file_out, header_path);
   io->start();
 
-  auto g2t = build_g2t_tree(refguides, n_refguides, io);
+  auto g2t = build_g2t_tree(refguides, io);
 
   // Delete gffreader data
   for (int i = 0; i < gffreader->gflst.Count(); i++) {
     GffObj *guide = gffreader->gflst[i];
     delete guide;
   }
+  // GffReader destructor will handle cleanup of GffObj objects via freeUnused()
+  // --> valgrind always complains when I remove this :(
+
+  // Sources:
+  // LEAK SUMMARY:
+  // ==2552304==    definitely lost: 64,844,416 bytes in 311,752 blocks
+  // ==2552304==    indirectly lost: 389,888,373 bytes in 11,525,861 blocks
+  // ==2552304==      possibly lost: 32,427 bytes in 870 blocks
+  // ==2552304==    still reachable: 376 bytes in 12 blocks
+  // ==2552304==         suppressed: 0 bytes in 0 blocks
   delete gffreader;
 
   #ifndef NOTHREADS
@@ -584,7 +592,7 @@ int main(int argc, char *argv[]) {
   GThread *threads = new GThread[n_threads]; // threads for processing bundles
   GPVec<BundleData> bundle_queue(false);
   BundleData *bundles =
-      new BundleData[n_threads + 1];         // redef with more bundles
+    new BundleData[n_threads + 1];           // redef with more bundles
 
   clear_data_pool.setCapacity(n_threads + 1);
 
