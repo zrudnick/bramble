@@ -3,6 +3,8 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <cmath>
+#include <random>
 
 #include "types.h"
 #include "bramble.h"
@@ -181,6 +183,13 @@ namespace bramble {
 #endif
   }
 
+  int32_t get_rand(uint32_t x) {
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, x - 1);
+    return dis(gen);
+  }
+
   void convert_reads(std::vector<CReadAln> &reads,
                     std::shared_ptr<g2tTree> g2t, 
                     std::shared_ptr<ReadEvaluator> evaluator, 
@@ -199,9 +208,56 @@ namespace bramble {
       std::vector<BamInfo*> filtered_bam_info;
       
       for (auto& [read_name, pairs] : pairs_by_name) {
-      
+
+        // Determine primary/secondary alignment status
+        auto best_it = pairs.end();
+        int which = 0;
+        double best_score = -std::numeric_limits<double>::infinity();
+        int32_t hit_index = 1;
+        int count_at_best = 0;
+        int total_matches = 0;
+        for (auto it = pairs.begin(); it != pairs.end(); ++it) {
+          auto &info = (*it);
+          info->r_align.hit_index = hit_index++;
+          total_matches++;
+
+          if (info->r_align.similarity_score > best_score) {
+            best_score = info->r_align.similarity_score;
+            best_it = it;
+            which = 0;
+            count_at_best = 1;
+          } else if (info->r_align.similarity_score == best_score) {
+            count_at_best++;
+          }
+
+          if (info->is_paired) {
+            info->r_align.hit_index = hit_index++;
+            total_matches++;
+            if (info->m_align.similarity_score > best_score) {
+              best_score = info->m_align.similarity_score;
+              best_it = it;
+              which = 1;
+              count_at_best = 1;
+            } else if (info->m_align.similarity_score == best_score) {
+              count_at_best++;
+            }
+          }
+        }
+
+        if (best_it != pairs.end() && count_at_best == 1) {
+          auto &best_info = (*best_it);
+          if (which == 0) best_info->r_align.primary_alignment = true;
+          else best_info->m_align.primary_alignment = true;
+        } else {
+          int32_t rand_idx = get_rand(pairs.size());
+          auto it = pairs.begin();
+          std::advance(it, rand_idx);
+          auto &secondary = (*it);
+          secondary->r_align.primary_alignment = true;  // read1 always chosen in this case
+        }
+
         // Recalculate NH and MAPQ based on number of kept alignments
-        uint32_t new_nh = pairs.size();
+        uint32_t new_nh = total_matches;
         uint32_t new_mapq = get_mapq(new_nh);
         
         for (auto* pair : pairs) {

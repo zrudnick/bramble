@@ -3,8 +3,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <cmath>
-#include <random>
 
 #include "types.h"
 #include "bramble.h"
@@ -763,13 +761,6 @@ namespace bramble {
     match.align.clip_score += seg.score;
   }
 
-  int32_t get_rand(uint32_t x) {
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(0, x - 1);
-    return dis(gen);
-  }
-
   void 
   ReadEvaluator::filter_by_similarity(std::vector<ExonChainMatch> &matches, 
                                       std::shared_ptr<g2tTree> g2t, ReadEvaluationConfig config) {
@@ -798,6 +789,8 @@ namespace bramble {
           it = matches.erase(it);
         }
       }
+
+      if (matches.empty()) return;
     }
 
     if (BRAMBLE_DEBUG) {
@@ -816,38 +809,8 @@ namespace bramble {
           ++it;
         }
       }
-    }
 
-    if (matches.empty()) return;
-
-    // Determine primary/secondary alignment status
-    auto best_it = matches.end();
-    double best_score = -std::numeric_limits<double>::infinity();
-    int32_t hit_index = 1;
-    int count_at_best = 0;
-
-    for (auto it = matches.begin(); it != matches.end(); ++it) {
-      auto& match = (*it);
-      match.align.hit_index = hit_index++;
-
-      if (match.align.similarity_score > best_score) {
-        best_score = match.align.similarity_score;
-        best_it = it;
-        count_at_best = 1;
-      } else if (match.align.similarity_score == best_score) {
-        count_at_best++;
-      }
-    }
-
-    if (best_it != matches.end() && count_at_best == 1) {
-      auto &best_match = (*best_it);
-      best_match.align.primary_alignment = true;
-    } else {
-      int32_t rand_idx = get_rand(matches.size());
-      auto it = matches.begin();
-      std::advance(it, rand_idx);
-      auto &secondary = (*it);
-      secondary.align.primary_alignment = true;
+      if (matches.empty()) return;
     }
   }
 
@@ -1093,11 +1056,11 @@ namespace bramble {
                               uint8_t *seq,
                               int seq_len) {
 
-    uint32_t max_clip = 0;
+    uint32_t max_clip = 2;
     uint32_t max_ins = 0;
     uint32_t max_gap = 0;
     uint32_t max_junc_gap = 0;
-    float similarity_threshold = 1.0;
+    float similarity_threshold = 0.95;
 
     ReadEvaluationConfig config = {
       max_clip,                       // max clip size
@@ -1137,7 +1100,7 @@ namespace bramble {
       35,                             // small exon size
       max_junc_gap,                   // max junction gap
       similarity_threshold,
-      false,                           // print debug statements
+      false,                          // print debug statements
       ""
     };   
 
