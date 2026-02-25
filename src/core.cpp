@@ -17,6 +17,12 @@
 #include "GThreads.h"
 #endif
 
+#include "quill/Backend.h"
+#include "quill/Frontend.h"
+#include "quill/LogMacros.h"
+#include "quill/Logger.h"
+#include "quill/sinks/ConsoleSink.h"
+
 extern GFastMutex bam_io_mutex;     // protects BAM io
 const uint32_t CHUNK_SIZE = 5000;   // size of each write to BAM
 extern double similarity_threshold;
@@ -24,6 +30,14 @@ extern double similarity_threshold;
 extern bool LONG_READS;
 extern bool USE_FASTA;
 extern bool SOFT_CLIPS;
+extern bool QUIET;
+extern bool BRAMBLE_DEBUG;
+
+extern uint32_t total_complete;
+extern uint32_t total_unique;
+extern uint32_t dropped_reads;
+extern uint32_t total_processed;
+extern uint32_t print_mod;
 
 namespace bramble {
 
@@ -44,11 +58,18 @@ namespace bramble {
   ReadInfo *process_read_out(CReadAln &read, read_id_t id, 
                             std::shared_ptr<g2tTree> g2t, 
                             std::shared_ptr<ReadEvaluator> evaluator,
+                            quill::Logger *logger,
                             uint8_t *seq, int seq_len) {
 
     // Evaluate read group to find matches
     std::vector<ExonChainMatch> matches = 
       evaluator->evaluate(read, g2t, seq, seq_len);
+
+    total_processed++;
+    if ((!QUIET || BRAMBLE_DEBUG) 
+      && (total_processed % print_mod == 0)) {
+      LOG_INFO(logger, "{} alignments processed", int(total_processed / 100) * 100);
+    }
 
     if (matches.empty()) return nullptr;
 
@@ -193,6 +214,7 @@ namespace bramble {
   void convert_reads(std::vector<CReadAln> &reads,
                     std::shared_ptr<g2tTree> g2t, 
                     std::shared_ptr<ReadEvaluator> evaluator, 
+                    quill::Logger *logger,
                     BamIO *io) {
 
     // Chunk buffer for BAM output
@@ -259,6 +281,10 @@ namespace bramble {
         // Recalculate NH and MAPQ based on number of kept alignments
         uint32_t new_nh = total_matches;
         uint32_t new_mapq = get_mapq(new_nh);
+
+        // Update statistics
+        total_complete += total_matches;
+        if (total_matches == 1) total_unique++;
         
         for (auto* pair : pairs) {
           pair->read1->nh = new_nh;
@@ -315,11 +341,13 @@ namespace bramble {
       }
       
       // Process read groups
+      bool dropped = true;
       for (read_id_t i = start; i < end; i++) {
         if (seen.count(i)) continue;
 
-        ReadInfo* this_read = process_read_out(
-          reads[i], i, g2t, evaluator, seq, seq_len);
+        ReadInfo* this_read = process_read_out(reads[i], 
+          i, g2t, evaluator, logger, seq, seq_len);
+        if (this_read) dropped = false;
 
         int n_mates = reads[i].pair_idx.Count();
         if (n_mates == 0) {
@@ -334,9 +362,10 @@ namespace bramble {
           if (mate_id < 0 || mate_id >= reads.size()) continue;
           if (seen.count(mate_id)) continue;
 
-          ReadInfo* mate_read = process_read_out(
-            reads[mate_id], mate_id, g2t, evaluator, seq, seq_len);
+          ReadInfo* mate_read = process_read_out(reads[mate_id], 
+            mate_id, g2t, evaluator, logger, seq, seq_len);
 
+          if (mate_read) dropped = false;
           process_mate_pair(this_read, mate_read, emit_pair);
           delete mate_read;
           seen.insert(mate_id);
@@ -345,6 +374,8 @@ namespace bramble {
         delete this_read;
         seen.insert(i);
       }
+
+      if (dropped) dropped_reads++;
     }
 
     if (!pairs_by_name.empty()) flush();

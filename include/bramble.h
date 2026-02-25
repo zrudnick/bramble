@@ -15,6 +15,12 @@
 #include "time.h"
 #include "types.h"
 
+#include "quill/Backend.h"
+#include "quill/Frontend.h"
+#include "quill/LogMacros.h"
+#include "quill/Logger.h"
+#include "quill/sinks/ConsoleSink.h"
+
 namespace bramble {
 
   struct g2tTree;
@@ -149,6 +155,7 @@ namespace bramble {
     int idx; // index in the main bundles array
     std::vector<CReadAln> reads; // all reads in bundle
 
+    quill::Logger *logger;
     std::shared_ptr<g2tTree> g2t; 
     std::shared_ptr<ReadEvaluator> evaluator;
 
@@ -156,6 +163,7 @@ namespace bramble {
       : status(BundleStatus::BUNDLE_STATUS_CLEAR), 
         idx(0),
         reads(),
+        logger(),
         g2t(),
         evaluator() {}
   

@@ -1,7 +1,11 @@
 
 #pragma once
 
-#include <list>
+#include "quill/Backend.h"
+#include "quill/Frontend.h"
+#include "quill/LogMacros.h"
+#include "quill/Logger.h"
+#include "quill/sinks/ConsoleSink.h"
 
 #define BAM_CMATCH_OVERRIDE 10
 #define BAM_CDEL_OVERRIDE 11
@@ -13,7 +17,7 @@ namespace bramble {
   struct CReadAln;
   struct BamIO;
   struct g2tTree;
-
+  
   struct Cigar {
     uint32_t *cigar = nullptr;
     uint32_t n_cigar = 0;
@@ -375,6 +379,7 @@ namespace bramble {
   void convert_reads(std::vector<CReadAln> &reads,
                     std::shared_ptr<g2tTree> g2t, 
                     std::shared_ptr<ReadEvaluator> evaluator, 
+                    quill::Logger *logger,
                     BamIO *io);
 
 }

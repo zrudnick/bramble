@@ -21,9 +21,6 @@ extern bool USE_FASTA;
 extern bool SOFT_CLIPS;
 extern bool STRICT;
 
-extern uint32_t dropped_reads;
-extern uint32_t unresolved_reads;
-
 namespace bramble {
 
   ReadEvaluator::~ReadEvaluator() {}
@@ -233,7 +230,6 @@ namespace bramble {
     
       if (status == MIDDLE_EXON) {
         if (data.empty()) {
-          dropped_reads++;
           failure = true;
           return;
         }
@@ -1042,10 +1038,6 @@ namespace bramble {
 
     if (!matches_by_strand.empty()) {
       filter_by_similarity(matches_by_strand, g2t, config);
-    } else {
-      if (failure)
-        dropped_reads++;
-      else unresolved_reads++;
     }
     return matches_by_strand;
   }

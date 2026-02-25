@@ -98,7 +98,8 @@ namespace bramble {
 
   // Process current bundle
   void process_bundle(BundleData *bundle, BamIO *io) {
-    convert_reads(bundle->reads, bundle->g2t, bundle->evaluator, io);
+    convert_reads(bundle->reads, bundle->g2t, 
+      bundle->evaluator, bundle->logger, io);
     bundle->Clear();
   }
 

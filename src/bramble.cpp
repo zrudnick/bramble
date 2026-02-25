@@ -106,7 +106,10 @@ bool no_more_bundles = false;
 uint32_t total_reads;
 uint32_t unmapped_reads;
 uint32_t dropped_reads;
-uint32_t unresolved_reads;
+uint32_t total_complete;
+uint32_t total_unique;
+uint32_t total_processed;
+uint32_t print_mod;
 
 std::shared_ptr<g2tTree> build_g2t_tree(GVec<GRefData> refguides, 
                                         BamIO *io) {
@@ -294,8 +297,8 @@ void process_read_in(std::vector<CReadAln> &reads, read_id_t id,
 }
 
 void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,  
-                  BundleData *bundles, BundleData* bundle, 
-                  GPVec<BundleData> *bundle_queue) {
+                  quill::Logger *logger, BundleData *bundles, 
+                  BundleData* bundle, GPVec<BundleData> *bundle_queue) {
 
   std::shared_ptr<ReadEvaluator> evaluator;
   if (LONG_READS) {
@@ -306,10 +309,16 @@ void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,
 
   auto guide_seq_names = std::shared_ptr<GffNames>(GffObj::names);
 
-  unmapped_reads = 0;
   total_reads = 0;
+  unmapped_reads = 0;
   dropped_reads = 0;
-  unresolved_reads = 0;
+  total_complete = 0;
+  total_unique = 0;
+  total_processed = 0;
+
+  print_mod = LONG_READS ? 100000 : 10000000;
+  // 100,000 for long reads
+  // 10,000,000 for short reads
 
   bool more_alignments = true;
 
@@ -364,6 +373,7 @@ void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,
 
     if (new_bundle) {
       hashread.Clear();
+      bundle->logger = logger;
       bundle->g2t = g2t;
       bundle->evaluator = evaluator;
 
@@ -394,16 +404,19 @@ void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,
 
 int main(int argc, char *argv[]) {
 
-  //quill::Backend::start();
-  // Get a logger
-  // This segfaults on my system, not sure why
-  // quill::Logger *logger = quill::Frontend::create_or_get_logger(
-  //     "root",
-  //     quill::Frontend::create_or_get_sink<quill::ConsoleSink>("sink_id_1"));
+  quill::Backend::start();
+  
+  // Frontend
+  auto console_sink = quill::Frontend::create_or_get_sink<quill::ConsoleSink>("sink_id_1");
+  quill::Logger* logger = quill::Frontend::create_or_get_logger("root", std::move(console_sink));
+
+  // Change the LogLevel to print everything
+  //logger->set_log_level(quill::LogLevel::TraceL3);
+  // console_sink->set_log_level_colour(quill::LogLevel::TraceL3, "\033[32m");
 
   CLI::App app{
-      "Project spliced genomic alignments into transcriptomic space",
-      "Bramble"};
+    "Project spliced genomic alignments into transcriptomic space",
+    "Bramble"};
 
   std::string gff;
   std::string out_bam;
@@ -441,7 +454,6 @@ int main(int argc, char *argv[]) {
     PAIRED_END = false;
   }
 
-  // LOG_INFO(logger, "command line parsed --- running bramble");
   bam_file_in = in_bam.c_str();
   guide_gff = gff.c_str();
   bam_file_out = out_bam.c_str();
@@ -457,22 +469,23 @@ int main(int argc, char *argv[]) {
   const GStr header_path = "tx_header.sam";
   FILE *header_file = fopen(header_path.chars(), "w");
   if (header_file == NULL)
-    GError("Error creating file: %s\n", header_path.chars());
+    LOG_ERROR(logger, "error creating header file: {}", 
+      header_path.chars());
   fprintf(header_file, "@HD\tVN:1.0\tSO:coordinate\n");
 
   if (!QUIET || BRAMBLE_DEBUG) {
-    // print logo
-    printf("\n-----------------------------------------------------\n");
-    printf(" Bramble version %s \n", VERSION);
-    printf("-----------------------------------------------------\n\n");
-    printf("--> Loading reference annotation...\n");
+    printf("\n[bramble] starting version: %s\n", VERSION);
+    // LOG_INFO(logger, "starting bramble version {}", VERSION);
+    LOG_INFO(logger, "loading reference annotation...");
   }
     
   // Open GFF/GTF file
   FILE *f = fopen(guide_gff.chars(), "r");
-  if (f == NULL)
-    GError("Error: could not open reference annotation file (%s)!\n",
-           guide_gff.chars());
+  if (f == NULL) {
+    LOG_ERROR(logger, "error: could not open reference annotation file {}", 
+      guide_gff.chars());
+    return 0;
+  }
 
   // GffReader: transcripts only, sort by location
   GffReader *gffreader = new GffReader(f, true, true); // loading only recognizable transcript features
@@ -486,9 +499,9 @@ int main(int argc, char *argv[]) {
 
   int n_refguides = gffreader->gseqtable.Count();
   if (n_refguides == 0 || gffreader->gflst.Count() == 0) {
-    GError("Error: could not any valid reference transcripts in %s (invalid "
-           "GTF/GFF file?)\n",
-           guide_gff.chars());
+    LOG_ERROR(logger, "error: could not find valid reference transcripts in {}\n", 
+      guide_gff.chars());
+    return 0;
   }
 
   GVec<GRefData> refguides;        // vector with guides for each chromosome
@@ -507,10 +520,10 @@ int main(int argc, char *argv[]) {
     // Sanity check: make sure there are no exonless "genes" or other
     if (guide->exons.Count() == 0) {
       if (BRAMBLE_DEBUG)
-        // LOG_WARNING(logger, "Warning: exonless GFF {} feature with ID {} found, added "
-        //          "implicit exon {}-{}.\n",
-        //          guide->getFeatureName(), guide->getID(), guide->start,
-        //          guide->end);
+        LOG_WARNING(logger, "Warning: exonless GFF {} feature with ID {} found, added "
+          "implicit exon {}-{}.\n",
+          guide->getFeatureName(), guide->getID(), guide->start,
+          guide->end);
       guide->addExon(guide->start, guide->end); // should never happen!
     }
 
@@ -537,16 +550,13 @@ int main(int argc, char *argv[]) {
   fclose(header_file);
 
   if (!QUIET || BRAMBLE_DEBUG) {
-    printf("Reference annotation loaded! %d unique transcripts were found\n\n", gffreader->gflst.Count());
-  
-    if (LONG_READS) {
-      printf("--> Using LONG READS mode\n\n");
-    }
+    LOG_INFO(logger, "reference annotation loaded! {} unique transcripts were found", 
+      gffreader->gflst.Count());
+    if (LONG_READS) LOG_INFO(logger, "using long-read mode");
     else {
-      printf("--> Using SHORT READS mode\n");
-      printf("Have long-read input data? Try running with the --long flag\n\n"); 
+      LOG_INFO(logger, "using short-read mode (have long reads? try running with the --long flag)");
     }
-    printf("--> Building g2t tree\n\n");
+    LOG_INFO(logger, "building g2t tree");
   }
   
   BamIO *io = new BamIO(bam_file_in, bam_file_out, header_path);
@@ -582,10 +592,11 @@ int main(int argc, char *argv[]) {
     def_stack_size = DEF_TSTACK_SIZE;
   if (BRAMBLE_DEBUG) {
     if (tstack_size < def_stack_size) {
-      GMessage("Default stack size for threads: %d (increased to %d)\n",
-               tstack_size, def_stack_size);
-    } else
-      GMessage("Default stack size for threads: %d\n", tstack_size);
+      LOG_INFO(logger, "default stack size for threads: {}, increased to {}", 
+        tstack_size, def_stack_size);
+    } else {
+      LOG_INFO(logger, "default stack size for threads: {}", tstack_size);
+    }
   }
 #endif
 
@@ -606,6 +617,10 @@ int main(int argc, char *argv[]) {
   }
   BundleData* bundle = &(bundles[n_threads]);
 
+  if (BRAMBLE_DEBUG) {
+    LOG_INFO(logger, "threads started");
+  }
+
 #else
 
   // Just put everything into the same bundle
@@ -614,10 +629,11 @@ int main(int argc, char *argv[]) {
 #endif
 
   if (!QUIET || BRAMBLE_DEBUG) {
-    printf("--> Processing alignments\n\n");
+    LOG_INFO(logger, "processing alignments :-)");
   }
 
-  process_reads(g2t, io, bundles, bundle, &bundle_queue);
+  process_reads(g2t, io, logger, 
+    bundles, bundle, &bundle_queue);
 
    // Delete thread and bundle arrays
 #ifndef NOTHREADS
@@ -625,7 +641,7 @@ int main(int argc, char *argv[]) {
     threads[t].join();
   }
   if (BRAMBLE_DEBUG) {
-    // LOG_INFO(logger, " All threads finished.\n");
+    LOG_INFO(logger, "all threads finished");
   }
   delete[] threads;
   delete[] bundles;
@@ -635,13 +651,14 @@ int main(int argc, char *argv[]) {
   delete io;
   delete gfasta;
 
-  printf("Final report:\n");
-  printf("Total input reads:    %d\n", total_reads);
-  printf("Unmapped reads:       %d\n", unmapped_reads);
-  printf("Dropped reads:        %d\n", dropped_reads);
-  printf("Unresolved reads:     %d\n\n", unresolved_reads);
+  if (!QUIET || BRAMBLE_DEBUG) {
+    printf("\n[bramble] final report:\n");
+    printf("# input alignments:   %d\n", total_reads);
+    printf("# unmapped reads:     %d\n", unmapped_reads);
+    printf("# dropped alignments: %d\n", dropped_reads);
+    printf("# total alignments:   %d\n", total_complete);
+    printf("# unique alignments:  %d\n\n", total_unique);
+  }
   
   f_out = stdout;
-  if (!QUIET || BRAMBLE_DEBUG)
-    printf("-----------------------------------------------------\n");
 }
