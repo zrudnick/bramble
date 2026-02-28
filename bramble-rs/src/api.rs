@@ -235,15 +235,7 @@ fn infer_strand(a: &GenomicAlignment) -> (char, bool) {
             return (flipped, true);
         }
     }
-    // Infer from FR strandedness (default library layout).
-    if a.is_paired {
-        let strand = if a.is_first_in_pair {
-            if a.is_reverse { '-' } else { '+' }
-        } else if a.is_reverse { '+' } else { '-' };
-        (strand, false)
-    } else if a.is_reverse {
-        ('-', false)
-    } else {
-        ('+', false)
-    }
+    // No strand tag present — return '.' so the evaluator checks both strands,
+    // matching C++ get_strand() behavior when no --fr/--rf flag is set.
+    ('.', false)
 }

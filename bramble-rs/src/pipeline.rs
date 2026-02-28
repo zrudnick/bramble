@@ -23,7 +23,7 @@ use std::thread;
 const UNORDERED_FLUSH_GROUPS: usize = 8;
 const PROGRESS_UPDATE_INTERVAL: u64 = 1000;
 
-const FR_STRAND: bool = true;
+const FR_STRAND: bool = false;
 const RF_STRAND: bool = false;
 
 #[derive(Debug, Default)]
@@ -671,23 +671,17 @@ fn splice_strand(record: &bam::Record) -> (char, bool) {
             return (strand, true);
         }
     }
-    // Match C++ behavior: if no splice-strand tags, infer from library layout.
+    // Match C++ behavior: if no splice-strand tags and no strand library flags,
+    // return '.' (unspecified) so the evaluator checks both strands.
+    // Only infer a definite strand when FR_STRAND / RF_STRAND is set.
     let flags = record.flags();
     let rev = flags.is_reverse_complemented();
     if FR_STRAND || RF_STRAND {
         let strand = if flags.is_segmented() {
             if flags.is_first_segment() {
-                if (RF_STRAND && rev) || (FR_STRAND && !rev) {
-                    '+'
-                } else {
-                    '-'
-                }
+                if (RF_STRAND && rev) || (FR_STRAND && !rev) { '+' } else { '-' }
             } else {
-                if (RF_STRAND && rev) || (FR_STRAND && !rev) {
-                    '-'
-                } else {
-                    '+'
-                }
+                if (RF_STRAND && rev) || (FR_STRAND && !rev) { '-' } else { '+' }
             }
         } else if (RF_STRAND && rev) || (FR_STRAND && !rev) {
             '+'
@@ -695,10 +689,8 @@ fn splice_strand(record: &bam::Record) -> (char, bool) {
             '-'
         };
         (strand, false)
-    } else if rev {
-        ('-', false)
     } else {
-        ('+', false)
+        ('.', false)
     }
 }
 
