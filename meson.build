@@ -40,12 +40,12 @@ libs = [libdeflate_dep, zlib_dep, curl_dep, bz2_dep, lzma_dep,
 # Paths to external directories
 # htslib_dir = 'htslib'
 gclib_dir = 'gclib'
-ksw2_dir = 'ksw2'
 #htslib_sp = subproject('htslib')
 htslib_inc = subproject('htslib').get_variable('htslib_inc')
 htslib_lib = subproject('htslib').get_variable('htslib_lib')
 cgranges_dep = subproject('cgranges').get_variable('cgranges_dep')
 unordered_dense_dep = subproject('unordered_dense').get_variable('unordered_dense_dep')
+ksw2_dep = subproject('ksw2').get_variable('ksw2_dep')
 gclib_dep = declare_dependency(
   include_directories: gclib_dir,
   dependencies: [htslib_dep]
@@ -59,7 +59,7 @@ gclib_target = custom_target(
 )
 
 # Include directories
-inc_dirs = [htslib_inc] + include_directories('include', gclib_dir) + include_directories('include', ksw2_dir)
+inc_dirs = [htslib_inc] + include_directories('include', gclib_dir)
 
 # Add pthread if available
 if not host_machine.system().startswith('windows')
@@ -72,8 +72,6 @@ gclib_srcs = files(
   'gclib/gdna.cpp', 'gclib/codons.cpp', 'gclib/GFastaIndex.cpp',
   'gclib/GFaSeqGet.cpp', 'gclib/gff.cpp', 'gclib/GThreads.cpp'
 )
-
-ksw2_srcs = files('ksw2/ksw2_extz2_sse.cpp')
 
 main_srcs = files('src/bramble.cpp', 'src/bam.cpp', 'src/threads.cpp',
 'src/core.cpp', 'src/mates.cpp', 'src/evaluate.cpp', 'src/g2t.cpp')
@@ -109,7 +107,7 @@ if get_option('static_cpp')
   add_project_link_arguments(['-static-libstdc++', '-static-libgcc'], language: 'cpp')
 endif
 
-executable('bramble', gclib_srcs + ksw2_srcs + main_srcs + gclib_target,
+executable('bramble', gclib_srcs + main_srcs + gclib_target,
   include_directories: inc_dirs,
-  dependencies: [htslib_dep, quill_dep, gclib_dep, cgranges_dep, unordered_dense_dep] + libs,
+  dependencies: [htslib_dep, quill_dep, gclib_dep, cgranges_dep, unordered_dense_dep, ksw2_dep] + libs,
 )

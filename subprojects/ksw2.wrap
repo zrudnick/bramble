@@ -1,0 +1,9 @@
+[wrap-file]
+directory = ksw2-289609bd9e5381a13b16239d0a7703f1ff03f9ca
+source_url = https://github.com/lh3/ksw2/archive/289609b.tar.gz
+source_filename = ksw2-289609bd9e5381a13b16239d0a7703f1ff03f9ca.tar.gz
+source_hash = b7bb4bdd246ac13ef4c94d3d8236b9805056dcaf4ddcbe34db85ab24eacf9ad2
+patch_directory = ksw2
+
+[provide]
+ksw2 = ksw2_dep
