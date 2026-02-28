@@ -1048,11 +1048,11 @@ namespace bramble {
                               uint8_t *seq,
                               int seq_len) {
 
-    uint32_t max_clip = 2;
+    uint32_t max_clip = 5;
     uint32_t max_ins = 0;
     uint32_t max_gap = 0;
     uint32_t max_junc_gap = 0;
-    float similarity_threshold = 0.95;
+    float similarity_threshold = 0.90;
 
     ReadEvaluationConfig config = {
       max_clip,                       // max clip size

@@ -109,6 +109,7 @@ uint32_t dropped_reads;
 uint32_t total_complete;
 uint32_t total_unique;
 uint32_t total_processed;
+uint32_t seen_last_out;
 uint32_t print_mod;
 
 std::shared_ptr<g2tTree> build_g2t_tree(GVec<GRefData> refguides, 
@@ -316,6 +317,8 @@ void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,
   total_unique = 0;
   total_processed = 0;
 
+  
+  seen_last_out = 0;
   print_mod = LONG_READS ? 100000 : 10000000;
   // 100,000 for long reads
   // 10,000,000 for short reads
@@ -554,7 +557,7 @@ int main(int argc, char *argv[]) {
       gffreader->gflst.Count());
     if (LONG_READS) LOG_INFO(logger, "using long-read mode");
     else {
-      LOG_INFO(logger, "using short-read mode (have long reads? try running with the --long flag)");
+      LOG_INFO(logger, "using short-read mode (have long reads? try running with --long)");
     }
     LOG_INFO(logger, "building g2t tree");
   }
@@ -565,10 +568,10 @@ int main(int argc, char *argv[]) {
   auto g2t = build_g2t_tree(refguides, io);
 
   // Delete gffreader data
-  for (int i = 0; i < gffreader->gflst.Count(); i++) {
-    GffObj *guide = gffreader->gflst[i];
-    delete guide;
-  }
+  // for (int i = 0; i < gffreader->gflst.Count(); i++) {
+  //   GffObj *guide = gffreader->gflst[i];
+  //   delete guide;
+  // }
   // GffReader destructor will handle cleanup of GffObj objects via freeUnused()
   // --> valgrind always complains when I remove this :(
 

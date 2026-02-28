@@ -39,6 +39,8 @@ extern uint32_t dropped_reads;
 extern uint32_t total_processed;
 extern uint32_t print_mod;
 
+extern uint32_t seen_last_out;
+
 namespace bramble {
 
   uint32_t get_mapq(uint32_t nh) {
@@ -68,7 +70,12 @@ namespace bramble {
     total_processed++;
     if ((!QUIET || BRAMBLE_DEBUG) 
       && (total_processed % print_mod == 0)) {
-      LOG_INFO(logger, "{} alignments processed", int(total_processed / 100) * 100);
+      
+      uint32_t out = int(total_processed / 100) * 100;
+      if (out != seen_last_out) {
+        LOG_INFO(logger, "{} alignments processed", out);
+        seen_last_out = out;
+      }
     }
 
     if (matches.empty()) return nullptr;
