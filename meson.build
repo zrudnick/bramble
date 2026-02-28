@@ -35,7 +35,7 @@ curl_dep = dependency('libcurl', required: true)
 libdeflate_dep = dependency('libdeflate', fallback: ['libdeflate', 'libdeflate_dep'], required: true)
 
 libs = [libdeflate_dep, zlib_dep, curl_dep, bz2_dep, lzma_dep, 
-        cc.find_library('m', required: false), cc.find_library('stdc++fs', required: true)]
+        cc.find_library('m', required: false), cc.find_library('stdc++fs', required: false)]
 
 # Paths to external directories
 # htslib_dir = 'htslib'

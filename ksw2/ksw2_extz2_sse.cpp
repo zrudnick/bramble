@@ -2,15 +2,29 @@
 #include <assert.h>
 #include "ksw2.h"
 
+#if defined(__aarch64__) || defined(__arm__)
+# ifndef __SSE2__
+#  define __SSE2__
+# endif
+# ifndef __SSE4_1__
+#  define __SSE4_1__
+# endif
+# include "sse2neon.h"
+#endif
+
 #ifdef __SSE2__
-#include <emmintrin.h>
+# if !defined(__aarch64__) && !defined(__arm__)
+#  include <emmintrin.h>
+# endif
 
 #ifdef KSW_SSE2_ONLY
 #undef __SSE4_1__
 #endif
 
 #ifdef __SSE4_1__
-#include <smmintrin.h>
+# if !defined(__aarch64__) && !defined(__arm__)
+#  include <smmintrin.h>
+# endif
 #endif
 
 #ifdef KSW_CPU_DISPATCH
