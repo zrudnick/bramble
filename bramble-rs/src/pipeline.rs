@@ -5,12 +5,12 @@ use crate::evaluate::{CigarOp, ExonChainMatch, ReadAln, ReadEvaluator};
 use crate::g2t::G2TTree;
 use crate::types::{ReadId, RefId, Tid};
 use anyhow::Result;
-use crossfire::mpmc;
+use flume;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use noodles::{bam, sam};
 use noodles::core::Position;
 use sam::alignment::io::Write as _;
-use sam::alignment::record::cigar::{op::Kind as CigarKind, Op as SamCigarOp};
+use sam::alignment::record::cigar::{op::Kind as CigarKind, Op as SamCigarOp}; // CigarKind also used in ReadAln construction
 use sam::alignment::record::data::field::Tag;
 use sam::alignment::record::Flags;
 use sam::alignment::record::MappingQuality;
@@ -42,37 +42,37 @@ struct ReadRec {
 }
 
 #[derive(Debug)]
-struct ReadEval {
-    record_idx: usize,
-    matches: HashMap<Tid, ExonChainMatch>,
-    read_len: usize,
-    flags: Flags,
-    alignment_start: Option<u32>,
-    mate_alignment_start: Option<u32>,
-    ref_id: Option<RefId>,
-    mate_ref_id: Option<RefId>,
-    hit_index: i32,
+pub(crate) struct ReadEval {
+    pub(crate) record_idx: usize,
+    pub(crate) matches: HashMap<Tid, ExonChainMatch>,
+    pub(crate) read_len: usize,
+    pub(crate) flags: Flags,
+    pub(crate) alignment_start: Option<u32>,
+    pub(crate) mate_alignment_start: Option<u32>,
+    pub(crate) ref_id: Option<RefId>,
+    pub(crate) mate_ref_id: Option<RefId>,
+    pub(crate) hit_index: i32,
 }
 
 #[derive(Debug, Clone)]
-struct MateInfo {
-    tid: Tid,
-    pos: u32,
-    read_len: usize,
-    is_reverse: bool,
+pub(crate) struct MateInfo {
+    pub(crate) tid: Tid,
+    pub(crate) pos: u32,
+    pub(crate) read_len: usize,
+    pub(crate) is_reverse: bool,
 }
 
 #[derive(Debug, Clone)]
-struct OutputEntry {
-    record_idx: usize,
-    tid: Tid,
-    align: ExonChainMatch,
-    read_len: usize,
-    mate: Option<MateInfo>,
-    is_first: bool,
-    is_last: bool,
-    same_transcript: bool,
-    nh: u32,
+pub(crate) struct OutputEntry {
+    pub(crate) record_idx: usize,
+    pub(crate) tid: Tid,
+    pub(crate) align: ExonChainMatch,
+    pub(crate) read_len: usize,
+    pub(crate) mate: Option<MateInfo>,
+    pub(crate) is_first: bool,
+    pub(crate) is_last: bool,
+    pub(crate) same_transcript: bool,
+    pub(crate) nh: u32,
 }
 
 pub fn run(
@@ -112,10 +112,9 @@ pub fn run(
     let mut group: Vec<ReadRec> = Vec::new();
 
     if args.threads > 1 && args.unordered {
-        crossfire::detect_backoff_cfg();
         let worker_count = args.threads as usize;
         let cap = worker_count.saturating_mul(4).max(8);
-        let (tx_work, rx_work) = mpmc::bounded_blocking::<WorkItem>(cap);
+        let (tx_work, rx_work) = flume::bounded::<WorkItem>(cap);
         let writer_mutex = Mutex::new(writer);
         let mut group_idx: usize = 0;
         let mut total_groups: usize = 0;
@@ -243,11 +242,10 @@ pub fn run(
     }
 
     if args.threads > 1 {
-        crossfire::detect_backoff_cfg();
         let worker_count = args.threads as usize;
         let cap = worker_count.saturating_mul(4).max(8);
-        let (tx_work, rx_work) = mpmc::bounded_blocking::<WorkItem>(cap);
-        let (tx_res, rx_res) = mpmc::unbounded_blocking::<ResultItem>();
+        let (tx_work, rx_work) = flume::bounded::<WorkItem>(cap);
+        let (tx_res, rx_res) = flume::unbounded::<ResultItem>();
 
         let mut group_idx: usize = 0;
         let mut total_groups: usize = 0;
@@ -480,13 +478,25 @@ fn process_group_records(
 
         let (strand, strand_from_tag) = splice_strand(&rec.record);
 
+        let cigar_ops: Vec<(u32, CigarKind)> = rec.record.cigar().iter()
+            .filter_map(|r| r.ok())
+            .map(|op| (op.len() as u32, op.kind()))
+            .collect();
+        let sequence: Option<Vec<u8>> = {
+            let s: Vec<u8> = rec.record.sequence().iter().collect();
+            if s.is_empty() { None } else { Some(s) }
+        };
+        let name = rec.record.name().map(|n| n.to_string()).unwrap_or_default();
+
         let read = ReadAln {
             strand,
             strand_from_tag,
             refid: refid.unwrap(),
             nh: 0,
             segs: rec.segs.clone(),
-            record: rec.record.clone(),
+            cigar_ops,
+            sequence,
+            name,
         };
 
         let matches: HashMap<Tid, ExonChainMatch> = evaluator
@@ -537,7 +547,9 @@ fn process_group_records(
         output_groups.extend(build_unpaired_groups(read));
     }
 
-    let new_nh = output_groups.len() as u32;
+    // Count total output records (both read1 and read2 for paired), matching
+    // C++ total_matches which increments once per r_align and once per m_align.
+    let new_nh: u32 = output_groups.iter().map(|g| g.len() as u32).sum();
     let mut entries: Vec<OutputEntry> = output_groups.into_iter().flatten().collect();
     entries.sort_by(|a, b| {
         (
@@ -573,7 +585,7 @@ fn process_group_records(
     Ok(output)
 }
 
-fn get_mapq(nh: u32, long_reads: bool) -> u8 {
+pub(crate) fn get_mapq(nh: u32, long_reads: bool) -> u8 {
     if !long_reads {
         if nh == 1 {
             255
@@ -591,7 +603,7 @@ fn get_mapq(nh: u32, long_reads: bool) -> u8 {
     }
 }
 
-fn assign_hit_indices(entries: &mut [OutputEntry]) {
+pub(crate) fn assign_hit_indices(entries: &mut [OutputEntry]) {
     let mut by_read: HashMap<usize, Vec<usize>> = HashMap::new();
     for (idx, entry) in entries.iter().enumerate() {
         by_read.entry(entry.record_idx).or_default().push(idx);
@@ -718,7 +730,7 @@ fn get_hit_index(record: &bam::Record) -> i32 {
     }
 }
 
-fn find_mate_pairs(reads: &[ReadEval]) -> Vec<(usize, usize)> {
+pub(crate) fn find_mate_pairs(reads: &[ReadEval]) -> Vec<(usize, usize)> {
     let mut pending: HashMap<(u32, i32), usize> = HashMap::new();
     let mut pairs = Vec::new();
 
@@ -754,7 +766,7 @@ fn find_mate_pairs(reads: &[ReadEval]) -> Vec<(usize, usize)> {
     pairs
 }
 
-fn assign_pair_order(i: usize, j: usize, reads: &[ReadEval]) -> (usize, usize) {
+pub(crate) fn assign_pair_order(i: usize, j: usize, reads: &[ReadEval]) -> (usize, usize) {
     let flags_i = reads[i].flags;
     let flags_j = reads[j].flags;
 
@@ -783,7 +795,7 @@ fn assign_pair_order(i: usize, j: usize, reads: &[ReadEval]) -> (usize, usize) {
     }
 }
 
-fn build_paired_groups(read: &ReadEval, mate: &ReadEval) -> Vec<Vec<OutputEntry>> {
+pub(crate) fn build_paired_groups(read: &ReadEval, mate: &ReadEval) -> Vec<Vec<OutputEntry>> {
     let read_transcripts: HashSet<Tid> = read.matches.keys().copied().collect();
     let mate_transcripts: HashSet<Tid> = mate.matches.keys().copied().collect();
     let read_nh = read.matches.len() as u32;
@@ -896,7 +908,7 @@ fn build_paired_groups(read: &ReadEval, mate: &ReadEval) -> Vec<Vec<OutputEntry>
     groups
 }
 
-fn build_unpaired_groups(read: &ReadEval) -> Vec<Vec<OutputEntry>> {
+pub(crate) fn build_unpaired_groups(read: &ReadEval) -> Vec<Vec<OutputEntry>> {
     let mut groups = Vec::new();
     let read_nh = read.matches.len() as u32;
 
@@ -917,7 +929,7 @@ fn build_unpaired_groups(read: &ReadEval) -> Vec<Vec<OutputEntry>> {
     groups
 }
 
-fn align_pos(match_info: &ExonChainMatch) -> u32 {
+pub(crate) fn align_pos(match_info: &ExonChainMatch) -> u32 {
     if match_info.align.strand == '+' {
         match_info.align.fwpos
     } else {
@@ -925,7 +937,7 @@ fn align_pos(match_info: &ExonChainMatch) -> u32 {
     }
 }
 
-fn compute_template_length(
+pub(crate) fn compute_template_length(
     pos: u32,
     mate_pos: u32,
     read_len: usize,
@@ -1635,3 +1647,52 @@ fn runs_to_sam_cigar(runs: &[(u32, char)]) -> SamCigar {
 
     ops.into_iter().collect()
 }
+
+// ── Library API helpers ────────────────────────────────────────────────────────
+
+/// Convert a SAM op-code byte (0–8) to a noodles `CigarKind`.
+pub(crate) fn sam_op_to_kind(op: u8) -> Option<CigarKind> {
+    match op {
+        0 => Some(CigarKind::Match),
+        1 => Some(CigarKind::Insertion),
+        2 => Some(CigarKind::Deletion),
+        3 => Some(CigarKind::Skip),
+        4 => Some(CigarKind::SoftClip),
+        5 => Some(CigarKind::HardClip),
+        6 => Some(CigarKind::Pad),
+        7 => Some(CigarKind::SequenceMatch),
+        8 => Some(CigarKind::SequenceMismatch),
+        _ => None,
+    }
+}
+
+/// Compute exon segments from a raw CIGAR op list and a 1-based reference start.
+pub(crate) fn segs_from_ops(ref_start: i64, ops: &[(u32, CigarKind)]) -> Vec<alignment::Segment> {
+    let mut ref_pos = ref_start as u32;
+    let mut exon_start = ref_pos;
+    let mut segs = Vec::new();
+    for &(len, kind) in ops {
+        match kind {
+            CigarKind::Match
+            | CigarKind::SequenceMatch
+            | CigarKind::SequenceMismatch
+            | CigarKind::Deletion => {
+                ref_pos = ref_pos.saturating_add(len);
+            }
+            CigarKind::Skip => {
+                if ref_pos > exon_start {
+                    segs.push(alignment::Segment { start: exon_start, end: ref_pos });
+                }
+                ref_pos = ref_pos.saturating_add(len);
+                exon_start = ref_pos;
+            }
+            _ => {}
+        }
+    }
+    if ref_pos > exon_start {
+        segs.push(alignment::Segment { start: exon_start, end: ref_pos });
+    }
+    segs
+}
+
+

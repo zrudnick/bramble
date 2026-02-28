@@ -228,8 +228,11 @@ namespace bramble {
     std::vector<BamInfo*> bam_info;
     bam_info.reserve(CHUNK_SIZE*1.2);
 
-    // Buffer for grouping by read name before filtering
-    std::unordered_map<const char *, std::vector<BamInfo*>> pairs_by_name;
+    // Buffer for grouping by read name before filtering.
+    // Must use std::string keys — const char* would use pointer comparison,
+    // causing each genomic alignment of the same read to land in a separate
+    // bucket and receive an incorrect per-alignment NH count.
+    std::unordered_map<std::string, std::vector<BamInfo*>> pairs_by_name;
     uint32_t n_pairs = 0;
 
     auto flush = [&]() {
@@ -306,15 +309,12 @@ namespace bramble {
       n_pairs = 0;
     };
 
-    auto emit_pair = [&](BamInfo* pair, bool is_last) {
+    auto emit_pair = [&](BamInfo* pair, bool /*is_last*/) {
       if (pair && pair->read1) {
-        const char *read_name = pair->read1->brec->name();
-        pairs_by_name[read_name].push_back(pair);
+        pairs_by_name[pair->read1->brec->name()].push_back(pair);
         n_pairs++;
-        
-        if (is_last && n_pairs >= CHUNK_SIZE) {
-          flush();
-        }
+        // Flushing is deferred to the end of each read-name group so that all
+        // genomic alignments of a multi-mapper are grouped before NH is computed.
       }
     };
 
@@ -383,6 +383,12 @@ namespace bramble {
       }
 
       if (dropped) dropped_reads++;
+
+      // All genomic alignments for this read name have been emitted.
+      // Flush the accumulated buffer if it has grown large enough.
+      if (n_pairs >= CHUNK_SIZE) {
+        flush();
+      }
     }
 
     if (!pairs_by_name.empty()) flush();

@@ -1,5 +1,5 @@
-use bramble_rs::evaluate::{Cigar, CigarOp};
-use bramble_rs::pipeline::update_cigar_for_test;
+use bramble_rs::{Cigar, CigarOp};
+use bramble_rs::update_cigar_for_test;
 use noodles::sam::alignment::record::cigar::{op::Kind as CigarKind, Op as SamCigarOp};
 
 fn build_ideal(ops: &[(u32, CigarOp)]) -> Cigar {

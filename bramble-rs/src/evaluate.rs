@@ -2,8 +2,7 @@ use crate::alignment;
 use crate::g2t::{G2TTree, GuideExon};
 use crate::sw::{self, Anchor};
 use crate::types::{ReadId, RefId, Tid};
-use anyhow::{anyhow, Result};
-use noodles::bam;
+use anyhow::Result;
 use ahash::RandomState;
 use noodles::sam::alignment::record::cigar::op::Kind as CigarKind;
 use std::hash::{BuildHasher, Hash, Hasher};
@@ -39,22 +38,47 @@ pub struct ReadEvaluationConfig {
     pub use_fasta: bool,
 }
 
-impl Default for ReadEvaluationConfig {
-    fn default() -> Self {
+impl ReadEvaluationConfig {
+    /// Parameters matching C++ ShortReadEvaluator.
+    pub fn short_read() -> Self {
         Self {
-            max_clip: 25,
-            max_ins: 5,
-            max_gap: 5,
+            max_clip: 5,
+            max_ins: 0,
+            max_gap: 0,
             ignore_small_exons: false,
             small_exon_size: 0,
             max_junc_gap: 0,
-            similarity_threshold: 0.80,
+            similarity_threshold: 0.90,
             print: false,
             name: String::new(),
             soft_clips: true,
             strict: false,
             use_fasta: false,
         }
+    }
+
+    /// Parameters matching C++ LongReadEvaluator.
+    pub fn long_read() -> Self {
+        Self {
+            max_clip: 40,
+            max_ins: 40,
+            max_gap: 40,
+            ignore_small_exons: true,
+            small_exon_size: 35,
+            max_junc_gap: 40,
+            similarity_threshold: 0.60,
+            print: false,
+            name: String::new(),
+            soft_clips: true,
+            strict: false,
+            use_fasta: false,
+        }
+    }
+}
+
+impl Default for ReadEvaluationConfig {
+    fn default() -> Self {
+        Self::short_read()
     }
 }
 
@@ -226,7 +250,12 @@ pub struct ReadAln {
     #[allow(dead_code)]
     pub nh: u16,
     pub segs: Vec<alignment::Segment>,
-    pub record: bam::Record,
+    /// Raw CIGAR ops: (length, noodles CigarKind).
+    pub cigar_ops: Vec<(u32, CigarKind)>,
+    /// Query sequence bytes (optional; needed for clip rescue).
+    pub sequence: Option<Vec<u8>>,
+    /// Read name (used for deterministic tie-breaking in multi-hit selection).
+    pub name: String,
 }
 
 pub fn get_exon_status(exon_count: usize, j: usize) -> ExonStatus {
@@ -263,47 +292,38 @@ pub fn get_clips(
     let mut n_left_clip = 0;
     let mut n_right_clip = 0;
 
-    let ops: Vec<_> = read
-        .record
-        .cigar()
-        .iter()
-        .collect::<std::io::Result<Vec<_>>>()
-        .map_err(|e| anyhow!(e))?;
+    let ops: Vec<_> = read.cigar_ops.iter().copied().collect();
 
     if ops.is_empty() {
         return Ok((false, false, 0, 0));
     }
 
-    let left0 = ops.first().unwrap();
+    let (left0_len, left0_kind) = ops.first().unwrap();
     let left1 = ops.get(1);
-    if left0.kind() == CigarKind::HardClip {
-        if let Some(op) = left1
-            && op.kind() == CigarKind::SoftClip
+    if *left0_kind == CigarKind::HardClip {
+        if let Some((op_len, op_kind)) = left1
+            && *op_kind == CigarKind::SoftClip
         {
             has_left_clip = config.soft_clips;
-            n_left_clip = op.len() as u32;
+            n_left_clip = *op_len;
         }
-    } else if left0.kind() == CigarKind::SoftClip {
+    } else if *left0_kind == CigarKind::SoftClip {
         has_left_clip = config.soft_clips;
-        n_left_clip = left0.len() as u32;
+        n_left_clip = *left0_len;
     }
 
-    let right0 = ops.last().unwrap();
-    let right1 = if ops.len() >= 2 {
-        ops.get(ops.len() - 2)
-    } else {
-        None
-    };
-    if right0.kind() == CigarKind::HardClip {
-        if let Some(op) = right1
-            && op.kind() == CigarKind::SoftClip
+    let (right0_len, right0_kind) = ops.last().unwrap();
+    let right1 = if ops.len() >= 2 { ops.get(ops.len() - 2) } else { None };
+    if *right0_kind == CigarKind::HardClip {
+        if let Some((op_len, op_kind)) = right1
+            && *op_kind == CigarKind::SoftClip
         {
             has_right_clip = config.soft_clips;
-            n_right_clip = op.len() as u32;
+            n_right_clip = *op_len;
         }
-    } else if right0.kind() == CigarKind::SoftClip {
+    } else if *right0_kind == CigarKind::SoftClip {
         has_right_clip = config.soft_clips;
-        n_right_clip = right0.len() as u32;
+        n_right_clip = *right0_len;
     }
 
     Ok((has_left_clip, has_right_clip, n_left_clip, n_right_clip))
@@ -430,15 +450,15 @@ fn seq_slice_from_shared(shared: Option<&[u8]>, read: &ReadAln, start: usize, le
         return out;
     }
 
-    let seq = read.record.sequence();
-    let end = (start + len).min(seq.len());
-    let mut out = String::with_capacity(end.saturating_sub(start));
-    for i in start..end {
-        if let Some(b) = seq.get(i) {
+    if let Some(seq) = &read.sequence {
+        let end = (start + len).min(seq.len());
+        let mut out = String::with_capacity(end.saturating_sub(start));
+        for &b in &seq[start..end] {
             out.push(b as char);
         }
+        return out;
     }
-    out
+    String::new()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -657,7 +677,7 @@ pub fn right_clip_rescue(
     {
         seq.len()
     } else {
-        read.record.sequence().len()
+        read.sequence.as_ref().map_or(0, |s| s.len())
     };
     let start_pos = seq_len.saturating_sub(total_bases);
     let mut remaining_qseq = seq_slice_from_shared(shared_seq, read, start_pos, total_bases);
@@ -1115,7 +1135,7 @@ pub fn evaluate_exon_chains(
 ) -> HashMap<Tid, ExonChainMatch> {
     let exon_count = read.segs.len();
     let refid = read.refid;
-    config.name = read.record.name().map(|n| n.to_string()).unwrap_or_default();
+    config.name = read.name.clone();
     let mut matches_by_strand: HashMap<Tid, ExonChainMatch> = HashMap::new();
 
     let (has_left_clip, has_right_clip, n_left_clip, n_right_clip) = if long_reads {
@@ -1392,9 +1412,9 @@ impl ReadEvaluator {
     ) -> HashMap<Tid, ExonChainMatch> {
         let (max_clip, max_ins, max_gap, max_junc_gap, similarity_threshold, ignore_small_exons, small_exon_size) =
             if self.long_reads {
-                (40, 40, 40, 40, 0.60, true, 35)
+                (40, 40, 40, 40, 0.60_f32, true, 35)
             } else {
-                (25, 5, 5, 0, 0.80, false, 0)
+                (5, 0, 0, 0, 0.90_f32, false, 0)
             };
 
         let config = ReadEvaluationConfig {
