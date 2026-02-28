@@ -1,7 +1,8 @@
-[wrap-git]
-url = https://github.com/lh3/cgranges
-revision = b3d5e2c5b9a0a379f54592ab85f6cff5d58c387e
-depth = 1
+[wrap-file]
+directory = cgranges-b3d5e2c5b9a0a379f54592ab85f6cff5d58c387e
+source_url = https://github.com/lh3/cgranges/archive/b3d5e2c5b9a0a379f54592ab85f6cff5d58c387e.tar.gz
+source_filename = cgranges-b3d5e2c5b9a0a379f54592ab85f6cff5d58c387e.tar.gz
+source_hash = a9367a2411fda61c41614a035aa61e89d12468c76e022b329a80fd84bd304101
 patch_directory = cgranges
 
 [provide]

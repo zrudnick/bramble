@@ -567,22 +567,20 @@ int main(int argc, char *argv[]) {
 
   auto g2t = build_g2t_tree(refguides, io);
 
-  // Delete gffreader data
-  // for (int i = 0; i < gffreader->gflst.Count(); i++) {
-  //   GffObj *guide = gffreader->gflst[i];
-  //   delete guide;
-  // }
-  // GffReader destructor will handle cleanup of GffObj objects via freeUnused()
-  // --> valgrind always complains when I remove this :(
-
-  // Sources:
-  // LEAK SUMMARY:
-  // ==2552304==    definitely lost: 64,844,416 bytes in 311,752 blocks
-  // ==2552304==    indirectly lost: 389,888,373 bytes in 11,525,861 blocks
-  // ==2552304==      possibly lost: 32,427 bytes in 870 blocks
-  // ==2552304==    still reachable: 376 bytes in 12 blocks
-  // ==2552304==         suppressed: 0 bytes in 0 blocks
-  delete gffreader;
+  // freeUnused() (called by ~GffReader) only frees guides with isUsed()==false.
+  // Guides marked isUsed(true) by grefdata.add() would be leaked without this.
+  // Collect used guides first, let the destructor free the unused set, then
+  // delete the used set — avoids double-free of any guide object.
+  std::vector<GffObj*> used_guides;
+  used_guides.reserve(gffreader->gflst.Count());
+  for (int i = 0; i < gffreader->gflst.Count(); i++) {
+    GffObj *guide = gffreader->gflst[i];
+    if (guide && guide->isUsed())
+      used_guides.push_back(guide);
+  }
+  delete gffreader;          // frees unused guides via freeUnused(), clears list
+  for (GffObj* guide : used_guides)
+    delete guide;            // free used guides (skipped by freeUnused)
 
   #ifndef NOTHREADS
 

@@ -1,0 +1,17 @@
+[package]
+name = "bramble-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0"
+ahash = "0.8"
+bio = "3.0"
+clap = { version = "4.5", features = ["derive"] }
+coitrees = "0.4"
+crossfire = "3.0"
+indicatif = "0.18.3"
+mimalloc = "0.1"
+noodles = { version = "0.101", features = ["bam", "sam", "bgzf", "gff", "gtf", "fasta", "core"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

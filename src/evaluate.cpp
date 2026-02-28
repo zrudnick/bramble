@@ -264,10 +264,10 @@ namespace bramble {
                         int sc_mis, int gapo, int gape, int zdrop) {
     kswResult result;
     int i, a = sc_mch, b = sc_mis < 0? sc_mis : -sc_mis;
-    int8_t mat[25] = { a,b,b,b,0, 
-                       b,a,b,b,0, 
-                       b,b,a,b,0, 
-                       b,b,b,a,0, 
+    int8_t mat[25] = { (int8_t)a,(int8_t)b,(int8_t)b,(int8_t)b,0,
+                       (int8_t)b,(int8_t)a,(int8_t)b,(int8_t)b,0,
+                       (int8_t)b,(int8_t)b,(int8_t)a,(int8_t)b,0,
+                       (int8_t)b,(int8_t)b,(int8_t)b,(int8_t)a,0,
                        0,0,0,0,0 };
     int tl = strlen(tseq), ql = strlen(qseq);
     uint8_t *ts, *qs, c[256];
