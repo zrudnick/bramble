@@ -85,7 +85,7 @@ namespace bramble {
 
   private:
   
-    IntervalTree *getTreeForStrand(uint8_t refid, char strand);
+    IntervalTree *getTreeForStrand(int refid, char strand);
 
   public:
     // If tid_name is already part of the tree, then return the existing
@@ -98,20 +98,20 @@ namespace bramble {
     void createTree(int refid);
 
     // Add guide exon with TID and transcript start
-    void addInterval(refid_t refid, const tid_t &tid, 
+    void addInterval(refid_t refid, const tid_t &tid,
                     IntervalData interval, char strand,
                     const char* ref_name);
 
     // Index tree after guides have been added
-    void indexTrees(uint8_t refid);
+    void indexTrees(int refid);
 
     bool
-    getGuideExonForTid(uint8_t refid, char strand, tid_t tid, 
+    getGuideExonForTid(int refid, char strand, tid_t tid,
                       uint32_t start, uint32_t end, GuideExon &gexon);
 
     // Find all guide exons that overlap with a read exon
     bool
-    getGuideExons(uint8_t refid, char strand, GSeg exon, 
+    getGuideExons(int refid, char strand, GSeg exon,
                  ReadEvaluationConfig config, ExonStatus status,
                  std::vector<GuideExon> &gexons);
 

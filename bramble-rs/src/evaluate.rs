@@ -271,7 +271,10 @@ pub fn get_exon_status(exon_count: usize, j: usize) -> ExonStatus {
 }
 
 pub fn get_strands_to_check(read: &ReadAln, long_reads: bool) -> Vec<char> {
-    if long_reads && read.segs.len() == 1 {
+    // C++ always checks both strands for long reads, regardless of splice-strand
+    // tags. The strand tag is an informed guess that may be wrong for long reads,
+    // so both are always evaluated and filtered by similarity.
+    if long_reads {
         return vec!['+', '-'];
     }
     if read.strand == '+' {

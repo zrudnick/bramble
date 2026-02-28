@@ -102,12 +102,24 @@ namespace bramble {
 
   bool ReadEvaluator::correct_for_gaps(TidData &td, tid_t tid,
                                       Segment &seg2,
-                                      ReadEvaluationConfig &config, 
+                                      ReadEvaluationConfig &config,
                                       std::shared_ptr<g2tTree> g2t,
                                       char strand, refid_t refid) {
+    // Find the last segment that has a guide exon (skip InsExon segments whose
+    // gexon field is uninitialised). Comparing against an InsExon's exon_id is
+    // undefined behaviour and accidentally over-filters transcripts with many
+    // exons before the matched region.
     size_t n_segs = td.segments.size();
-    const auto &seg1 = td.segments[n_segs - 1];
+    const Segment *prev_guide = nullptr;
+    for (int k = (int)n_segs - 1; k >= 0; k--) {
+      if (td.segments[k].has_gexon) {
+        prev_guide = &td.segments[k];
+        break;
+      }
+    }
+    if (!prev_guide) return true; // no prior guide exon to compare against
 
+    const auto &seg1 = *prev_guide;
     uint8_t gap = seg2.gexon.exon_id - seg1.gexon.exon_id;
 
     // short reads: require strict continuity
