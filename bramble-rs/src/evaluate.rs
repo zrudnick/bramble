@@ -272,6 +272,8 @@ pub(crate) struct EvalContext {
     pub(crate) guide_exons: HashMap<Tid, GuideExon>,
     /// Reusable scratch buffer for tid keys during evaluate_exon_chains.
     tids_buf: Vec<Tid>,
+    /// Reusable ksw2 aligner (workspace + result buffers) for clip rescue SW.
+    pub(crate) aligner: ksw2rs::Aligner,
 }
 
 impl EvalContext {
@@ -282,6 +284,7 @@ impl EvalContext {
             candidate_tids: HashSet::new(),
             guide_exons: HashMap::new(),
             tids_buf: Vec::new(),
+            aligner: ksw2rs::Aligner::new(),
         }
     }
 }
@@ -497,6 +500,7 @@ pub fn left_clip_rescue(
     config: &ReadEvaluationConfig,
     read: &ReadAln,
     shared_seq: Option<&[u8]>,
+    aligner: &mut ksw2rs::Aligner,
 ) {
     if !config.use_fasta {
         return;
@@ -583,7 +587,7 @@ pub fn left_clip_rescue(
             tid_data.has_left_clip = false;
             return;
         }
-        let result = sw::smith_waterman(&remaining_qseq, next_gseq.as_bytes(), Anchor::End);
+        let result = sw::smith_waterman(aligner, &remaining_qseq, next_gseq.as_bytes(), Anchor::End);
         if result.accuracy <= 0.70 || result.score < 10 {
             tid_data.has_left_clip = false;
             return;
@@ -641,6 +645,7 @@ pub fn right_clip_rescue(
     config: &ReadEvaluationConfig,
     read: &ReadAln,
     shared_seq: Option<&[u8]>,
+    aligner: &mut ksw2rs::Aligner,
 ) {
     if !config.use_fasta {
         return;
@@ -726,7 +731,7 @@ pub fn right_clip_rescue(
             return;
         }
 
-        let result = sw::smith_waterman(&remaining_qseq, right_gexon.seq.as_bytes(), Anchor::Start);
+        let result = sw::smith_waterman(aligner, &remaining_qseq, right_gexon.seq.as_bytes(), Anchor::Start);
         if result.accuracy <= 0.70 || result.score < 10 {
             tid_data.has_right_clip = false;
             return;
@@ -1194,6 +1199,7 @@ pub fn evaluate_exon_chains(
                             &config,
                             read,
                             shared_seq,
+                            &mut ctx.aligner,
                         );
                     } else {
                         td.has_left_clip = false;
@@ -1212,6 +1218,7 @@ pub fn evaluate_exon_chains(
                             &config,
                             read,
                             shared_seq,
+                            &mut ctx.aligner,
                         );
                     } else {
                         td.has_left_clip = false;
@@ -1232,6 +1239,7 @@ pub fn evaluate_exon_chains(
                             &config,
                             read,
                             shared_seq,
+                            &mut ctx.aligner,
                         );
                     } else {
                         td.has_right_clip = false;
@@ -1250,6 +1258,7 @@ pub fn evaluate_exon_chains(
                             &config,
                             read,
                             shared_seq,
+                            &mut ctx.aligner,
                         );
                     } else {
                         td.has_right_clip = false;

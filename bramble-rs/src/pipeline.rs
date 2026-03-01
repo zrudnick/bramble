@@ -23,11 +23,10 @@ const PROGRESS_UPDATE_INTERVAL: u64 = 1000;
 const BATCH_SIZE: usize = 64;
 
 /// Tags to strip from output records (they are invalid in projected coordinates
-/// or will be replaced with new values).
+/// or will be replaced with bramble-computed values).
 const SKIP_TAGS: &[[u8; 2]] = &[
     *b"NH", *b"HI", *b"AS", *b"NM", *b"CG",
-    *b"XS", *b"SA", *b"ms", *b"nn", *b"ts",
-    *b"tp", *b"cm", *b"s1", *b"s2", *b"de", *b"rl",
+    *b"XS", *b"SA",
 ];
 
 #[derive(Debug, Default)]
@@ -860,18 +859,16 @@ fn build_projected_record(
     let mut out = record.clone();
 
     let original_reverse = record.is_reverse();
-    let align_reverse = entry.align.align.is_reverse;
     let has_sequence = record.seq_len() > 0;
+    // C++ approach: XOR FLAG_REVERSE when transcript strand is '-'.
+    // For long reads, reverse_action = (strand == '-').
+    // For short reads, reverse_action = original was reverse-mapped.
     let reverse_action = if long_reads {
-        !original_reverse && align_reverse
+        entry.align.align.strand == '-'
     } else {
         original_reverse && has_sequence
     };
-    let output_reverse = if reverse_action {
-        !original_reverse
-    } else {
-        original_reverse
-    };
+    let output_reverse = original_reverse ^ reverse_action;
 
     // Build flags via u16 bit manipulation
     let mut flags = record.flags();
@@ -1039,7 +1036,7 @@ fn filter_aux_tags(out: &mut hts_bam::Record) {
             break;
         }
 
-        let should_skip = SKIP_TAGS.iter().any(|s| *s == tag);
+        let should_skip = SKIP_TAGS.contains(&tag);
         if !should_skip {
             kept.extend_from_slice(&aux_bytes[pos..pos + entry_len]);
         }

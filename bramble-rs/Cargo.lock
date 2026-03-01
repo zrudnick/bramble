@@ -141,6 +141,7 @@ dependencies = [
  "coitrees",
  "flume",
  "indicatif",
+ "ksw2rs",
  "mimalloc",
  "noodles",
  "rust-htslib",
@@ -667,6 +668,14 @@ checksum = "8c942ebf8e95485ca0d52d97da7c5a2c387d0e7f0ba4c35e93bfcaee045955b3"
 dependencies = [
  "once_cell",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "ksw2rs"
+version = "0.1.0"
+source = "git+https://github.com/COMBINE-lab/ksw2rs#05babed1ab64240cce37776b4eb99f748acde269"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
