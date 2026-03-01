@@ -4,12 +4,12 @@
 use crate::alignment;
 use crate::bam_input::BamInput;
 use crate::cli::Args;
-use crate::evaluate::{CigarOp, ExonChainMatch, ReadAln, ReadEvaluator};
+use crate::evaluate::{CigarOp, EvalContext, ExonChainMatch, ReadAln, ReadEvaluator};
 use crate::g2t::G2TTree;
-use crate::types::{ReadId, RefId, Tid};
+use crate::types::{HashMap, HashMapExt, HashSet, ReadId, RefId, Tid};
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use noodles::{bam, sam};
+use noodles::{bam, bgzf, sam};
 use noodles::core::Position;
 use sam::alignment::io::Write as _;
 use sam::alignment::record::cigar::{op::Kind as CigarKind, Op as SamCigarOp}; // CigarKind also used in ReadAln construction
@@ -17,7 +17,7 @@ use sam::alignment::record::data::field::Tag;
 use sam::alignment::record::Flags;
 use sam::alignment::record::MappingQuality;
 use sam::alignment::record_buf::{data::field::Value, Cigar as SamCigar, Data as SamData, QualityScores, Sequence};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::sync::Mutex;
 use std::thread;
@@ -84,7 +84,11 @@ pub fn run(
     fasta: Option<&crate::fasta::FastaDb>,
 ) -> Result<Stats> {
     let out_file = File::create(&args.out_bam)?;
-    let mut writer = bam::io::Writer::new(out_file);
+    let mt_writer = bgzf::io::MultithreadedWriter::with_worker_count(
+        std::num::NonZeroUsize::new(4).unwrap(),
+        out_file,
+    );
+    let mut writer = bam::io::Writer::from(mt_writer);
     writer.write_header(out_header)?;
 
     let progress = if !args.quiet {
@@ -93,7 +97,7 @@ pub fn run(
         pb.set_style(
             ProgressStyle::default_spinner()
                 .template("{spinner:.green} [{elapsed_precise}] {msg}")
-                .expect("Failed to set progress bar template")
+                .expect("Failed to set progress bar template"),
         );
         pb.set_message("Processing alignments...");
         Some(pb)
@@ -101,51 +105,46 @@ pub fn run(
         None
     };
 
-    let evaluator = ReadEvaluator {
-        long_reads: args.long,
-        use_fasta: fasta.is_some(),
-    };
-
+    let evaluator = ReadEvaluator { long_reads: args.long, use_fasta: fasta.is_some() };
     let fr = args.fr;
     let rf = args.rf;
     let paired_end = args.paired_end;
+    let worker_count = args.threads as usize;
+    let cap = worker_count.saturating_mul(4).max(8);
+    let flush_records = args.unordered_flush_records.max(1);
+    let evaluator_ref = &evaluator;
+    let g2t_ref = g2t;
 
-    let mut stats = Stats::default();
-    let mut next_read_id: ReadId = 0;
+    // Always spawn a dedicated reader thread so BAM parsing overlaps with projection.
+    // The reader thread reads, groups, and sends WorkItems; the main thread (and any
+    // additional worker threads) handles projection and writing.
 
-    let mut current_name: Option<String> = None;
-    let mut group: Vec<ReadRec> = Vec::new();
-
-    if args.threads > 1 && args.unordered {
-        let worker_count = args.threads as usize;
-        let cap = worker_count.saturating_mul(4).max(8);
+    let stats = if args.unordered {
+        // Unordered: N worker threads write via a mutex; output order is not guaranteed.
         let (tx_work, rx_work) = flume::bounded::<WorkItem>(cap);
         let writer_mutex = Mutex::new(writer);
-        let mut group_idx: usize = 0;
-        let mut total_groups: usize = 0;
 
-        let evaluator_ref = &evaluator;
-        let g2t_ref = g2t;
-        let flush_records = args.unordered_flush_records.max(1);
-        thread::scope(|scope| -> Result<()> {
+        thread::scope(|scope| -> Result<Stats> {
             for _ in 0..worker_count {
                 let rx_work = rx_work.clone();
                 let writer_mutex = &writer_mutex;
                 scope.spawn(move || {
+                    let mut ctx = EvalContext::new();
                     let mut buffered: Vec<sam::alignment::RecordBuf> = Vec::new();
                     let mut buffered_groups: usize = 0;
                     while let Ok(item) = rx_work.recv() {
-                        let result = process_group_records(&item.group, g2t_ref, evaluator_ref, fr, rf, paired_end);
+                        let result = process_group_records(
+                            &item.group, g2t_ref, evaluator_ref, fr, rf, paired_end, &mut ctx,
+                        );
                         if let Ok(records) = result {
                             buffered_groups += 1;
                             buffered.extend(records);
                             if buffered_groups >= UNORDERED_FLUSH_GROUPS
                                 || buffered.len() >= flush_records
                             {
-                                if let Ok(mut writer) = writer_mutex.lock() {
+                                if let Ok(mut w) = writer_mutex.lock() {
                                     for record in buffered.drain(..) {
-                                        let _ =
-                                            writer.write_alignment_record(out_header, &record);
+                                        let _ = w.write_alignment_record(out_header, &record);
                                     }
                                 } else {
                                     buffered.clear();
@@ -155,194 +154,80 @@ pub fn run(
                         }
                     }
                     if !buffered.is_empty()
-                        && let Ok(mut writer) = writer_mutex.lock()
+                        && let Ok(mut w) = writer_mutex.lock()
                     {
                         for record in buffered.drain(..) {
-                            let _ = writer.write_alignment_record(out_header, &record);
+                            let _ = w.write_alignment_record(out_header, &record);
                         }
                     }
                 });
             }
 
-            for result in bam.reader.records() {
-                let record = result?;
-                stats.total_reads += 1;
-                if record.flags().is_unmapped() {
-                    stats.unmapped_reads += 1;
-                }
+            // Reader thread: reads BAM, groups by name, sends WorkItems.
+            let reader_jh =
+                scope.spawn(|| read_and_group(&mut bam.reader, tx_work, &progress));
 
-                // Update progress bar periodically
-                if let Some(ref pb) = progress
-                    && stats.total_reads.is_multiple_of(PROGRESS_UPDATE_INTERVAL)
-                {
-                    pb.set_message(format!("Processed {} reads", stats.total_reads));
-                    pb.tick();
-                }
+            // Main thread waits; workers and reader joined by scope exit.
+            let stats = reader_jh
+                .join()
+                .map_err(|_| anyhow::anyhow!("reader thread panicked"))?;
+            Ok(stats)
+        })?
+    } else if worker_count == 1 {
+        // Single processing thread (main) + dedicated reader thread.
+        // Main processes groups serially and writes in order as they arrive.
+        let (tx_work, rx_work) = flume::bounded::<WorkItem>(cap);
 
-                let exons = alignment::extract_exons(&record)?;
-                stats.total_exons += exons.len() as u64;
+        thread::scope(|scope| -> Result<Stats> {
+            let reader_jh =
+                scope.spawn(|| read_and_group(&mut bam.reader, tx_work, &progress));
 
-                let read_id = next_read_id;
-                next_read_id = next_read_id.saturating_add(1);
-
-                let name = record.name().map(|n| n.to_string()).unwrap_or_default();
-                match &current_name {
-                    None => {
-                        current_name = Some(name);
-                        group.push(ReadRec {
-                            id: read_id,
-                            record,
-                            segs: exons,
-                        });
-                    }
-                    Some(curr) if *curr == name => {
-                        group.push(ReadRec {
-                            id: read_id,
-                            record,
-                            segs: exons,
-                        });
-                    }
-                    Some(_) => {
-                        stats.read_groups += 1;
-                        tx_work.send(WorkItem {
-                            idx: group_idx,
-                            group: std::mem::take(&mut group),
-                        })?;
-                        total_groups += 1;
-                        group_idx += 1;
-                        current_name = Some(name);
-                        group.push(ReadRec {
-                            id: read_id,
-                            record,
-                            segs: exons,
-                        });
-                    }
+            let mut ctx = EvalContext::new();
+            while let Ok(item) = rx_work.recv() {
+                let records = process_group_records(
+                    &item.group, g2t_ref, evaluator_ref, fr, rf, paired_end, &mut ctx,
+                )?;
+                for record in records {
+                    writer.write_alignment_record(out_header, &record)?;
                 }
             }
 
-            if !group.is_empty() {
-                stats.read_groups += 1;
-                tx_work.send(WorkItem {
-                    idx: group_idx,
-                    group: std::mem::take(&mut group),
-                })?;
-                total_groups += 1;
-                group_idx += 1;
-            }
-
-            drop(tx_work);
-
-            Ok(())
-        })?;
-
-        if let Some(pb) = progress {
-            pb.finish_with_message(format!("Completed: {} reads processed", stats.total_reads));
-        }
-
-        return Ok(stats);
-    }
-
-    if args.threads > 1 {
-        let worker_count = args.threads as usize;
-        let cap = worker_count.saturating_mul(4).max(8);
+            let stats = reader_jh
+                .join()
+                .map_err(|_| anyhow::anyhow!("reader thread panicked"))?;
+            Ok(stats)
+        })?
+    } else {
+        // N worker threads + dedicated reader thread + main writes in order.
         let (tx_work, rx_work) = flume::bounded::<WorkItem>(cap);
         let (tx_res, rx_res) = flume::unbounded::<ResultItem>();
 
-        let mut group_idx: usize = 0;
-        let mut total_groups: usize = 0;
-
-        let evaluator_ref = &evaluator;
-        let g2t_ref = g2t;
-        thread::scope(|scope| -> Result<()> {
+        thread::scope(|scope| -> Result<Stats> {
             for _ in 0..worker_count {
                 let rx_work = rx_work.clone();
                 let tx_res = tx_res.clone();
                 scope.spawn(move || {
+                    let mut ctx = EvalContext::new();
                     while let Ok(item) = rx_work.recv() {
-                        let result = process_group_records(&item.group, g2t_ref, evaluator_ref, fr, rf, paired_end);
+                        let result = process_group_records(
+                            &item.group, g2t_ref, evaluator_ref, fr, rf, paired_end, &mut ctx,
+                        );
                         let _ = tx_res.send(ResultItem { idx: item.idx, result });
                     }
                 });
             }
-            drop(tx_res);
+            drop(tx_res); // workers own the only remaining senders
 
-            for result in bam.reader.records() {
-                let record = result?;
-                stats.total_reads += 1;
-                if record.flags().is_unmapped() {
-                    stats.unmapped_reads += 1;
-                }
+            // Reader thread: send WorkItems; dropping tx_work when done signals workers.
+            let reader_jh =
+                scope.spawn(|| read_and_group(&mut bam.reader, tx_work, &progress));
 
-                // Update progress bar periodically
-                if let Some(ref pb) = progress
-                    && stats.total_reads.is_multiple_of(PROGRESS_UPDATE_INTERVAL)
-                {
-                    pb.set_message(format!("Processed {} reads", stats.total_reads));
-                    pb.tick();
-                }
-
-                let exons = alignment::extract_exons(&record)?;
-                stats.total_exons += exons.len() as u64;
-
-                let read_id = next_read_id;
-                next_read_id = next_read_id.saturating_add(1);
-
-                let name = record.name().map(|n| n.to_string()).unwrap_or_default();
-                match &current_name {
-                    None => {
-                        current_name = Some(name);
-                        group.push(ReadRec {
-                            id: read_id,
-                            record,
-                            segs: exons,
-                        });
-                    }
-                    Some(curr) if *curr == name => {
-                        group.push(ReadRec {
-                            id: read_id,
-                            record,
-                            segs: exons,
-                        });
-                    }
-                    Some(_) => {
-                        stats.read_groups += 1;
-                        tx_work.send(WorkItem {
-                            idx: group_idx,
-                            group: std::mem::take(&mut group),
-                        })?;
-                        total_groups += 1;
-                        group_idx += 1;
-                        current_name = Some(name);
-                        group.push(ReadRec {
-                            id: read_id,
-                            record,
-                            segs: exons,
-                        });
-                    }
-                }
-            }
-
-            if !group.is_empty() {
-                stats.read_groups += 1;
-                tx_work.send(WorkItem {
-                    idx: group_idx,
-                    group: std::mem::take(&mut group),
-                })?;
-                total_groups += 1;
-                group_idx += 1;
-            }
-
-            drop(tx_work);
-
+            // Main: receive results and write in index order.
             let mut pending: BTreeMap<usize, Result<Vec<sam::alignment::RecordBuf>>> =
                 BTreeMap::new();
             let mut next_idx = 0usize;
-            let mut written = 0usize;
-
-            while written < total_groups {
-                let res = rx_res
-                    .recv()
-                    .map_err(|_| anyhow::anyhow!("worker result channel closed"))?;
+            // rx_res closes when all workers exit (all tx_res clones dropped).
+            while let Ok(res) = rx_res.recv() {
                 pending.insert(res.idx, res.result);
                 while let Some(result) = pending.remove(&next_idx) {
                     let records = result?;
@@ -350,88 +235,90 @@ pub fn run(
                         writer.write_alignment_record(out_header, &record)?;
                     }
                     next_idx += 1;
-                    written += 1;
                 }
             }
 
-            Ok(())
-        })?;
-
-        if let Some(pb) = progress {
-            pb.finish_with_message(format!("Completed: {} reads processed", stats.total_reads));
-        }
-
-        return Ok(stats);
-    }
-
-    for result in bam.reader.records() {
-        let record = result?;
-        stats.total_reads += 1;
-        if record.flags().is_unmapped() {
-            stats.unmapped_reads += 1;
-        }
-
-        // Update progress bar periodically
-        if let Some(ref pb) = progress
-            && stats.total_reads.is_multiple_of(PROGRESS_UPDATE_INTERVAL)
-        {
-            pb.set_message(format!("Processed {} reads", stats.total_reads));
-            pb.tick();
-        }
-
-        let exons = alignment::extract_exons(&record)?;
-        stats.total_exons += exons.len() as u64;
-
-        let read_id = next_read_id;
-        next_read_id = next_read_id.saturating_add(1);
-
-        let name = record.name().map(|n| n.to_string()).unwrap_or_default();
-        match &current_name {
-            None => {
-                current_name = Some(name);
-                group.push(ReadRec {
-                    id: read_id,
-                    record,
-                    segs: exons,
-                });
-            }
-            Some(curr) if *curr == name => {
-                group.push(ReadRec {
-                    id: read_id,
-                    record,
-                    segs: exons,
-                });
-            }
-            Some(_) => {
-                stats.read_groups += 1;
-                let records = process_group_records(&group, g2t, &evaluator, fr, rf, paired_end)?;
-                for record in records {
-                    writer.write_alignment_record(out_header, &record)?;
-                }
-                group.clear();
-                current_name = Some(name);
-                group.push(ReadRec {
-                    id: read_id,
-                    record,
-                    segs: exons,
-                });
-            }
-        }
-    }
-
-    if !group.is_empty() {
-        stats.read_groups += 1;
-        let records = process_group_records(&group, g2t, &evaluator, fr, rf, paired_end)?;
-        for record in records {
-            writer.write_alignment_record(out_header, &record)?;
-        }
-    }
+            let stats = reader_jh
+                .join()
+                .map_err(|_| anyhow::anyhow!("reader thread panicked"))?;
+            Ok(stats)
+        })?
+    };
 
     if let Some(pb) = progress {
         pb.finish_with_message(format!("Completed: {} reads processed", stats.total_reads));
     }
 
     Ok(stats)
+}
+
+/// Reads BAM records, groups them by query name, and sends each complete group
+/// to `tx` as a [`WorkItem`].  Returns accumulated statistics.
+///
+/// Dropping `tx` (when this function returns) closes the channel, signalling
+/// downstream consumers to exit their recv loops.
+fn read_and_group(
+    reader: &mut bam::io::Reader<bgzf::io::Reader<File>>,
+    tx: flume::Sender<WorkItem>,
+    progress: &Option<ProgressBar>,
+) -> Stats {
+    let mut stats = Stats::default();
+    let mut current_name: Option<String> = None;
+    let mut group: Vec<ReadRec> = Vec::new();
+    let mut group_idx: usize = 0;
+    let mut next_read_id: ReadId = 0;
+
+    for result in reader.records() {
+        let record = match result {
+            Ok(r) => r,
+            Err(_) => break,
+        };
+        stats.total_reads += 1;
+        if record.flags().is_unmapped() {
+            stats.unmapped_reads += 1;
+        }
+        if let Some(pb) = progress
+            && stats.total_reads.is_multiple_of(PROGRESS_UPDATE_INTERVAL)
+        {
+            pb.set_message(format!("Processed {} reads", stats.total_reads));
+            pb.tick();
+        }
+        let exons = match alignment::extract_exons(&record) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        stats.total_exons += exons.len() as u64;
+        let read_id = next_read_id;
+        next_read_id = next_read_id.saturating_add(1);
+        let name = record.name().map(|n| n.to_string()).unwrap_or_default();
+        match &current_name {
+            None => {
+                current_name = Some(name);
+                group.push(ReadRec { id: read_id, record, segs: exons });
+            }
+            Some(curr) if *curr == name => {
+                group.push(ReadRec { id: read_id, record, segs: exons });
+            }
+            Some(_) => {
+                stats.read_groups += 1;
+                if tx
+                    .send(WorkItem { idx: group_idx, group: std::mem::take(&mut group) })
+                    .is_err()
+                {
+                    break;
+                }
+                group_idx += 1;
+                current_name = Some(name);
+                group.push(ReadRec { id: read_id, record, segs: exons });
+            }
+        }
+    }
+    if !group.is_empty() {
+        stats.read_groups += 1;
+        let _ = tx.send(WorkItem { idx: group_idx, group });
+    }
+    // `tx` drops here, closing the channel.
+    stats
 }
 
 struct WorkItem {
@@ -451,6 +338,7 @@ fn process_group_records(
     fr: bool,
     rf: bool,
     paired_end: bool,
+    ctx: &mut EvalContext,
 ) -> Result<Vec<sam::alignment::RecordBuf>> {
     let mut output: Vec<sam::alignment::RecordBuf> = Vec::new();
 
@@ -501,9 +389,9 @@ fn process_group_records(
             name,
         };
 
-        let matches: HashMap<Tid, ExonChainMatch> = evaluator
-            .evaluate(&read, rec.id, g2t, shared_seq.as_deref())
-            .into_iter()
+        evaluator.evaluate(&read, rec.id, g2t, shared_seq.as_deref(), ctx);
+        let matches: HashMap<Tid, ExonChainMatch> = ctx.matches
+            .drain()
             .filter(|(_, m)| m.align.cigar.is_some())
             .collect();
         let read_len = rec.record.sequence().len();

@@ -28,7 +28,7 @@ pub struct AlignmentResult {
     pub accuracy: f64,
 }
 
-pub fn smith_waterman(seq1: &str, seq2: &str, anchor: Anchor) -> AlignmentResult {
+pub fn smith_waterman(seq1: &[u8], seq2: &[u8], anchor: Anchor) -> AlignmentResult {
     let m = seq1.len();
     let n = seq2.len();
 
@@ -61,8 +61,8 @@ pub fn smith_waterman(seq1: &str, seq2: &str, anchor: Anchor) -> AlignmentResult
     let mut max_i = 0usize;
     let mut max_j = 0usize;
 
-    let s1 = seq1.as_bytes();
-    let s2 = seq2.as_bytes();
+    let s1 = seq1;
+    let s2 = seq2;
 
     for i in 1..=m {
         for j in 1..=n {

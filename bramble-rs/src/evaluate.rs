@@ -4,8 +4,8 @@ use crate::sw::{self, Anchor};
 use crate::types::{ReadId, RefId, Tid};
 use anyhow::Result;
 use ahash::RandomState;
+use crate::types::{HashMap, HashMapExt, HashSet, HashSetExt};
 use noodles::sam::alignment::record::cigar::op::Kind as CigarKind;
-use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)]
@@ -258,6 +258,30 @@ pub struct ReadAln {
     pub name: String,
 }
 
+/// Reusable scratch space for one evaluation pass.
+/// Allocate once per worker thread; cleared between reads automatically.
+pub(crate) struct EvalContext {
+    /// Final output: transcript → chain match.  Filled by evaluate(); drained by caller.
+    pub(crate) matches: HashMap<Tid, ExonChainMatch>,
+    /// Per-strand working map: tid → accumulated TidData.
+    pub(crate) data: HashMap<Tid, TidData>,
+    /// Working set of matched tids for the current exon.
+    pub(crate) candidate_tids: HashSet<Tid>,
+    /// Scratch buffer for guide exon queries.
+    pub(crate) guide_exons: HashMap<Tid, GuideExon>,
+}
+
+impl EvalContext {
+    pub(crate) fn new() -> Self {
+        Self {
+            matches: HashMap::new(),
+            data: HashMap::new(),
+            candidate_tids: HashSet::new(),
+            guide_exons: HashMap::new(),
+        }
+    }
+}
+
 pub fn get_exon_status(exon_count: usize, j: usize) -> ExonStatus {
     if exon_count == 1 {
         ExonStatus::OnlyExon
@@ -334,7 +358,7 @@ pub fn get_clips(
 
 #[allow(clippy::too_many_arguments)]
 pub fn get_intervals(
-    data: &mut HashMap<Tid, TidData>,
+    ctx: &mut EvalContext,
     read: &ReadAln,
     j: usize,
     exon_count: usize,
@@ -353,14 +377,14 @@ pub fn get_intervals(
     let qexon = read.segs[j];
     let status = get_exon_status(exon_count, j);
     let is_small_exon = (qexon.end - qexon.start) <= config.small_exon_size;
-    let data_empty = data.is_empty();
+    let data_empty = ctx.data.is_empty();
 
-    let guide_exons = g2t.get_guide_exons(refid, strand, qexon.start, qexon.end, config, status);
-    if !guide_exons.is_empty() {
-        let mut candidate_tids: HashSet<Tid> = HashSet::new();
+    g2t.get_guide_exons(refid, strand, qexon.start, qexon.end, config, status, &mut ctx.guide_exons);
+    if !ctx.guide_exons.is_empty() {
+        ctx.candidate_tids.clear();
 
-        for (tid, gexon) in guide_exons {
-            candidate_tids.insert(tid);
+        for (tid, gexon) in ctx.guide_exons.drain() {
+            ctx.candidate_tids.insert(tid);
 
             if data_empty && status != ExonStatus::InsExon {
                 let tid_data = TidData {
@@ -373,13 +397,13 @@ pub fn get_intervals(
                 if gexon.left_gap > 0 {
                     *has_gap = true;
                 }
-                data.insert(tid, tid_data);
-            } else if !data.contains_key(&tid) || data.get(&tid).map(|d| d.elim).unwrap_or(true) {
+                ctx.data.insert(tid, tid_data);
+            } else if !ctx.data.contains_key(&tid) || ctx.data.get(&tid).map(|d| d.elim).unwrap_or(true) {
                 continue;
             }
 
             if matches!(status, ExonStatus::LastExon | ExonStatus::OnlyExon)
-                && let Some(tid_data) = data.get_mut(&tid)
+                && let Some(tid_data) = ctx.data.get_mut(&tid)
             {
                 tid_data.has_right_ins = gexon.right_ins > 0;
                 tid_data.n_right_ins = gexon.right_ins;
@@ -388,7 +412,7 @@ pub fn get_intervals(
                 }
             }
 
-            if let Some(tid_data) = data.get_mut(&tid) {
+            if let Some(tid_data) = ctx.data.get_mut(&tid) {
                 let seg = EvalSegment {
                     is_valid: true,
                     has_qexon: true,
@@ -403,8 +427,8 @@ pub fn get_intervals(
             }
         }
 
-        for (tid, td) in data.iter_mut() {
-            if !candidate_tids.contains(tid) {
+        for (tid, td) in ctx.data.iter_mut() {
+            if !ctx.candidate_tids.contains(tid) {
                 td.elim = true;
             }
         }
@@ -415,11 +439,11 @@ pub fn get_intervals(
     // guide exons empty
     if status != ExonStatus::OnlyExon && config.ignore_small_exons && is_small_exon {
         if status == ExonStatus::MiddleExon {
-            if data.is_empty() {
+            if ctx.data.is_empty() {
                 *failure = true;
                 return;
             }
-            for td in data.values_mut() {
+            for td in ctx.data.values_mut() {
                 let seg = EvalSegment {
                     is_valid: true,
                     has_qexon: true,
@@ -441,27 +465,19 @@ pub fn get_intervals(
     *failure = true;
 }
 
-fn seq_slice_from_shared(shared: Option<&[u8]>, read: &ReadAln, start: usize, len: usize) -> String {
+fn seq_slice_from_shared(shared: Option<&[u8]>, read: &ReadAln, start: usize, len: usize) -> Vec<u8> {
     if let Some(seq) = shared
         && !seq.is_empty()
     {
         let end = (start + len).min(seq.len());
-        let mut out = String::with_capacity(end.saturating_sub(start));
-        for &b in &seq[start..end] {
-            out.push(b as char);
-        }
-        return out;
+        return seq[start..end].to_vec();
     }
 
     if let Some(seq) = &read.sequence {
         let end = (start + len).min(seq.len());
-        let mut out = String::with_capacity(end.saturating_sub(start));
-        for &b in &seq[start..end] {
-            out.push(b as char);
-        }
-        return out;
+        return seq[start..end].to_vec();
     }
-    String::new()
+    Vec::new()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -563,7 +579,7 @@ pub fn left_clip_rescue(
             tid_data.has_left_clip = false;
             return;
         }
-        let result = sw::smith_waterman(&remaining_qseq, &next_gseq, Anchor::End);
+        let result = sw::smith_waterman(&remaining_qseq, next_gseq.as_bytes(), Anchor::End);
         if result.accuracy <= 0.70 || result.score < 10 {
             tid_data.has_left_clip = false;
             return;
@@ -593,7 +609,7 @@ pub fn left_clip_rescue(
         tid_data.has_left_clip = true;
 
         if result.start_i > 1 {
-            remaining_qseq = remaining_qseq[..result.start_i as usize].to_string();
+            remaining_qseq.truncate(result.start_i as usize);
         } else {
             remaining_qseq.clear();
         }
@@ -706,7 +722,7 @@ pub fn right_clip_rescue(
             return;
         }
 
-        let result = sw::smith_waterman(&remaining_qseq, &right_gexon.seq, Anchor::Start);
+        let result = sw::smith_waterman(&remaining_qseq, right_gexon.seq.as_bytes(), Anchor::Start);
         if result.accuracy <= 0.70 || result.score < 10 {
             tid_data.has_right_clip = false;
             return;
@@ -736,7 +752,7 @@ pub fn right_clip_rescue(
 
         let query_consumed = result.end_i + 1;
         if query_consumed < remaining_qseq.len() as i32 {
-            remaining_qseq = remaining_qseq[query_consumed as usize..].to_string();
+            remaining_qseq.drain(..query_consumed as usize);
         } else {
             remaining_qseq.clear();
         }
@@ -1096,11 +1112,12 @@ pub fn evaluate_exon_chains(
     mut config: ReadEvaluationConfig,
     long_reads: bool,
     shared_seq: Option<&[u8]>,
-) -> HashMap<Tid, ExonChainMatch> {
+    ctx: &mut EvalContext,
+) {
+    ctx.matches.clear();
     let exon_count = read.segs.len();
     let refid = read.refid;
     config.name = read.name.clone();
-    let mut matches_by_strand: HashMap<Tid, ExonChainMatch> = HashMap::new();
 
     let (has_left_clip, has_right_clip, n_left_clip, n_right_clip) = if long_reads {
         get_clips(read, &config).unwrap_or((false, false, 0, 0))
@@ -1110,7 +1127,7 @@ pub fn evaluate_exon_chains(
 
     let strands_to_check = get_strands_to_check(read, long_reads);
     for strand in strands_to_check {
-        let mut data: HashMap<Tid, TidData> = HashMap::new();
+        ctx.data.clear();
         let mut failure = false;
         let mut has_gap = false;
         let mut start_ignore = EvalSegment::default();
@@ -1118,7 +1135,7 @@ pub fn evaluate_exon_chains(
 
         for j in 0..exon_count {
             get_intervals(
-                &mut data,
+                ctx,
                 read,
                 j,
                 exon_count,
@@ -1141,9 +1158,9 @@ pub fn evaluate_exon_chains(
             continue;
         }
 
-        let tids: Vec<Tid> = data.keys().copied().collect();
+        let tids: Vec<Tid> = ctx.data.keys().copied().collect();
         for tid in &tids {
-            let td = data.get_mut(tid).unwrap();
+            let td = ctx.data.get_mut(tid).unwrap();
             if td.elim {
                 continue;
             }
@@ -1152,7 +1169,7 @@ pub fn evaluate_exon_chains(
 
         if long_reads && config.use_fasta {
             for tid in &tids {
-                let td = data.get_mut(tid).unwrap();
+                let td = ctx.data.get_mut(tid).unwrap();
                 if td.elim {
                     continue;
                 }
@@ -1234,7 +1251,7 @@ pub fn evaluate_exon_chains(
             }
         }
 
-        for (tid, td) in data.iter_mut() {
+        for (tid, td) in ctx.data.iter_mut() {
             if td.elim {
                 continue;
             }
@@ -1349,16 +1366,14 @@ pub fn evaluate_exon_chains(
             }
 
             if !td.elim {
-                matches_by_strand.insert(*tid, td.match_info.clone());
+                ctx.matches.insert(*tid, td.match_info.clone());
             }
         }
     }
 
-    if !matches_by_strand.is_empty() {
-        filter_by_similarity(&mut matches_by_strand, &config);
+    if !ctx.matches.is_empty() {
+        filter_by_similarity(&mut ctx.matches, &config);
     }
-
-    matches_by_strand
 }
 #[derive(Debug, Default)]
 pub struct ReadEvaluator {
@@ -1373,7 +1388,8 @@ impl ReadEvaluator {
         id: ReadId,
         g2t: &G2TTree,
         seq: Option<&[u8]>,
-    ) -> HashMap<Tid, ExonChainMatch> {
+        ctx: &mut EvalContext,
+    ) {
         let (max_clip, max_ins, max_gap, max_junc_gap, similarity_threshold, ignore_small_exons, small_exon_size) =
             if self.long_reads {
                 (40, 40, 40, 40, 0.60_f32, true, 35)
@@ -1396,6 +1412,6 @@ impl ReadEvaluator {
             use_fasta: self.use_fasta,
         };
 
-        evaluate_exon_chains(read, id, g2t, config, self.long_reads, seq)
+        evaluate_exon_chains(read, id, g2t, config, self.long_reads, seq, ctx);
     }
 }

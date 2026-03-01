@@ -48,7 +48,7 @@
 //! // };
 //! ```
 
-use crate::evaluate::{ReadAln, ReadEvaluator, ExonChainMatch};
+use crate::evaluate::{EvalContext, ReadAln, ReadEvaluator, ExonChainMatch};
 use crate::g2t::G2TTree;
 use crate::pipeline::{
     ReadEval, OutputEntry,
@@ -57,10 +57,9 @@ use crate::pipeline::{
     assign_hit_indices, align_pos, compute_template_length,
     sam_op_to_kind, segs_from_ops,
 };
-use crate::types::{ReadId, Tid};
+use crate::types::{HashMap, ReadId, Tid};
 use noodles::sam::alignment::record::cigar::op::Kind as CigarKind;
 use noodles::sam::alignment::record::Flags;
-use std::collections::HashMap;
 
 /// A genomic alignment ready for projection into transcriptome coordinates.
 ///
@@ -224,6 +223,7 @@ pub fn project_group(
     config: &ProjectionConfig,
 ) -> Vec<ProjectedAlignment> {
     let evaluator = ReadEvaluator { long_reads: config.long_reads, use_fasta: config.use_fasta };
+    let mut ctx = EvalContext::new();
 
     let shared_seq: Option<Vec<u8>> = alignments.iter().find_map(|a| a.sequence.clone());
 
@@ -252,9 +252,9 @@ pub fn project_group(
             name: a.query_name.clone(),
         };
 
-        let matches: HashMap<Tid, ExonChainMatch> = evaluator
-            .evaluate(&read, idx as ReadId, index, shared_seq.as_deref())
-            .into_iter()
+        evaluator.evaluate(&read, idx as ReadId, index, shared_seq.as_deref(), &mut ctx);
+        let matches: HashMap<Tid, ExonChainMatch> = ctx.matches
+            .drain()
             .filter(|(_, m)| m.align.cigar.is_some())
             .collect();
 

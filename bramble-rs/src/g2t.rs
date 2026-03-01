@@ -1,10 +1,9 @@
 use crate::annotation::{Exon, Transcript};
 use crate::evaluate::{ExonStatus, ReadEvaluationConfig};
 use crate::fasta::FastaDb;
-use crate::types::{RefId, Tid};
+use crate::types::{HashMap, HashMapExt, HashSet, HashSetExt, RefId, Tid};
 use anyhow::{anyhow, Result};
 use coitrees::{BasicCOITree, Interval, IntervalTree as CoitreeIntervalTree};
-use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub struct IntervalData {
@@ -162,11 +161,12 @@ impl IntervalTree {
         strand: char,
         config: &ReadEvaluationConfig,
         status: ExonStatus,
-    ) -> HashMap<Tid, GuideExon> {
-        let mut exons: HashMap<Tid, GuideExon> = HashMap::new();
+        out: &mut HashMap<Tid, GuideExon>,
+    ) {
+        out.clear();
         let tree = match self.tree.as_ref() {
             Some(t) => t,
-            None => return exons,
+            None => return,
         };
 
         let q_last = qend.saturating_sub(1) as i32;
@@ -288,11 +288,9 @@ impl IntervalTree {
             }
 
             if !rejected {
-                exons.insert(data.tid, exon);
+                out.insert(data.tid, exon);
             }
         });
-
-        exons
     }
 }
 
@@ -369,6 +367,7 @@ impl G2TTree {
         tree.find_overlapping_for_tid(start, end, tid)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn get_guide_exons(
         &self,
         refid: RefId,
@@ -377,11 +376,12 @@ impl G2TTree {
         end: u32,
         config: &ReadEvaluationConfig,
         status: ExonStatus,
-    ) -> HashMap<Tid, GuideExon> {
+        out: &mut HashMap<Tid, GuideExon>,
+    ) {
         if let Some(tree) = self.get_tree(refid, strand) {
-            tree.find_overlapping(start, end, strand, config, status)
+            tree.find_overlapping(start, end, strand, config, status, out);
         } else {
-            HashMap::new()
+            out.clear();
         }
     }
 

@@ -1,9 +1,8 @@
 // bam_input.rs is used only by the binary (BAM I/O path).
 #![allow(dead_code)]
-use crate::types::RefId;
+use crate::types::{HashMap, HashMapExt, RefId};
 use anyhow::Result;
 use noodles::{bam, bgzf, sam};
-use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
 
