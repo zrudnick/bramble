@@ -50,48 +50,60 @@ pub fn smith_waterman(seq1: &[u8], seq2: &[u8], anchor: Anchor) -> AlignmentResu
         };
     }
 
-    let match_score = 2;
-    let mismatch_score = -1;
-    let gap_score = -1;
+    let match_score: i32 = 2;
+    let mismatch_score: i32 = -1;
+    let gap_score: i32 = -1;
 
-    let mut score = vec![vec![0i32; n + 1]; m + 1];
-    let mut traceback = vec![vec![b'X'; n + 1]; m + 1];
+    let cols = n + 1;
+    // Use flat 1D arrays to avoid Vec<Vec<>> allocation overhead and enable
+    // unchecked indexing.  Traceback is packed alongside the score to improve
+    // cache locality (score in bits 2.., traceback in bits 0..1).
+    let total = (m + 1) * cols;
+    let mut score: Vec<i32> = vec![0i32; total];
+    // Traceback: 0=stop, 1=diag, 2=up, 3=left
+    let mut tb: Vec<u8> = vec![0u8; total];
 
     let mut max_score = 0i32;
     let mut max_i = 0usize;
     let mut max_j = 0usize;
 
-    let s1 = seq1;
-    let s2 = seq2;
+    // SAFETY: All indices are in bounds because i ∈ [1, m] and j ∈ [1, n],
+    // so i*cols+j ∈ [cols, (m+1)*cols-1] which is within the allocated `total`.
+    // (i-1)*cols+(j-1) is always ≥ 0.  seq1[i-1] and seq2[j-1] are in bounds
+    // because i-1 ∈ [0, m-1] and j-1 ∈ [0, n-1].
+    unsafe {
+        for i in 1..=m {
+            let row = i * cols;
+            let prev_row = (i - 1) * cols;
+            let s1_byte = *seq1.get_unchecked(i - 1);
 
-    for i in 1..=m {
-        for j in 1..=n {
-            let diag = score[i - 1][j - 1]
-                + if s1[i - 1] == s2[j - 1] {
-                    match_score
+            for j in 1..=n {
+                let s2_byte = *seq2.get_unchecked(j - 1);
+                let match_bonus = if s1_byte == s2_byte { match_score } else { mismatch_score };
+
+                let diag = *score.get_unchecked(prev_row + j - 1) + match_bonus;
+                let up = *score.get_unchecked(prev_row + j) + gap_score;
+                let left = *score.get_unchecked(row + j - 1) + gap_score;
+
+                let cell = 0.max(diag.max(up.max(left)));
+                *score.get_unchecked_mut(row + j) = cell;
+
+                let tb_val = if cell == 0 {
+                    0 // stop
+                } else if cell == diag {
+                    1 // diag
+                } else if cell == up {
+                    2 // up
                 } else {
-                    mismatch_score
+                    3 // left
                 };
-            let up = score[i - 1][j] + gap_score;
-            let left = score[i][j - 1] + gap_score;
+                *tb.get_unchecked_mut(row + j) = tb_val;
 
-            let cell = 0.max(diag.max(up.max(left)));
-            score[i][j] = cell;
-
-            if cell == 0 {
-                traceback[i][j] = b'X';
-            } else if cell == diag {
-                traceback[i][j] = b'D';
-            } else if cell == up {
-                traceback[i][j] = b'U';
-            } else {
-                traceback[i][j] = b'L';
-            }
-
-            if cell > max_score {
-                max_score = cell;
-                max_i = i;
-                max_j = j;
+                if cell > max_score {
+                    max_score = cell;
+                    max_i = i;
+                    max_j = j;
+                }
             }
         }
     }
@@ -101,17 +113,18 @@ pub fn smith_waterman(seq1: &[u8], seq2: &[u8], anchor: Anchor) -> AlignmentResu
     let end_i = max_i as i32 - 1;
     let end_j = max_j as i32 - 1;
 
-    let mut matches = 0;
-    let mut mismatches = 0;
-    let mut insertions = 0;
-    let mut deletions = 0;
+    let mut matches = 0i32;
+    let mut mismatches = 0i32;
+    let mut insertions = 0i32;
+    let mut deletions = 0i32;
     let mut cigar = Cigar::default();
 
-    while i > 0 && j > 0 && score[i][j] > 0 {
-        match traceback[i][j] {
-            b'D' => {
+    while i > 0 && j > 0 && score[i * cols + j] > 0 {
+        match tb[i * cols + j] {
+            1 => {
+                // diagonal
                 cigar.add_operation(1, CigarOp::MatchOverride);
-                if s1[i - 1] == s2[j - 1] {
+                if seq1[i - 1] == seq2[j - 1] {
                     matches += 1;
                 } else {
                     mismatches += 1;
@@ -119,12 +132,14 @@ pub fn smith_waterman(seq1: &[u8], seq2: &[u8], anchor: Anchor) -> AlignmentResu
                 i -= 1;
                 j -= 1;
             }
-            b'L' => {
+            3 => {
+                // left
                 cigar.add_operation(1, CigarOp::DelOverride);
                 deletions += 1;
                 j -= 1;
             }
-            b'U' => {
+            2 => {
+                // up
                 cigar.add_operation(1, CigarOp::InsOverride);
                 insertions += 1;
                 i -= 1;

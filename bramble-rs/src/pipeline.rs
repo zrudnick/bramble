@@ -1390,110 +1390,40 @@ fn align_and_merge(real: &[u8], ideal: &[u8]) -> Vec<u8> {
     merged
 }
 
+#[inline(always)]
 fn merge_ops(real_op: u8, ideal_op: u8) -> u8 {
+    // Override ops from clip rescue — handle first as they dominate in FASTA mode.
+    match ideal_op {
+        b';' => return if real_op == b'D' { b'_' } else { b'S' },
+        b',' => return if real_op == b'D' { b'D' } else if real_op == b'I' { b'I' } else { b'M' },
+        b'/' => return if real_op == b'D' || real_op == b'I' { b'_' } else { b'I' },
+        b'.' => return if real_op == b'D' || real_op == b'I' { b'_' } else { b'D' },
+        b'*' => return real_op,
+        b'_' => return real_op,
+        _ => {}
+    }
+
+    // real_op == I with non-override ideal: special-case _
     if real_op == b'I' && ideal_op == b'_' {
         return b'I';
-    }
-
-    if (real_op == b'M' || real_op == b'S') && ideal_op == b';' {
-        return b'S';
-    }
-    if (real_op == b'M' || real_op == b'S') && ideal_op == b',' {
-        return b'M';
-    }
-    if (real_op == b'M' || real_op == b'S') && ideal_op == b'/' {
-        return b'I';
-    }
-    if (real_op == b'M' || real_op == b'S') && ideal_op == b'.' {
-        return b'D';
-    }
-
-    if real_op == b'D' && ideal_op == b';' {
-        return b'_';
-    }
-    if real_op == b'D' && ideal_op == b',' {
-        return b'D';
-    }
-    if real_op == b'D' && ideal_op == b'/' {
-        return b'_';
-    }
-    if real_op == b'D' && ideal_op == b'.' {
-        return b'_';
-    }
-
-    if real_op == b'I' && ideal_op == b';' {
-        return b'S';
-    }
-    if real_op == b'I' && ideal_op == b',' {
-        return b'I';
-    }
-    if real_op == b'D' && ideal_op == b'/' {
-        return b'_';
-    }
-    if real_op == b'I' && ideal_op == b'.' {
-        return b'_';
-    }
-
-    if ideal_op == b';' {
-        return b'S';
-    }
-    if ideal_op == b',' {
-        return b'M';
-    }
-    if ideal_op == b'/' {
-        return b'I';
-    }
-    if ideal_op == b'.' {
-        return b'D';
-    }
-
-    if ideal_op == b'*' {
-        return real_op;
-    }
-    if real_op == b'*' {
-        return ideal_op;
     }
 
     if real_op == b'H' {
         return b'H';
     }
 
-    if real_op == b'D' && ideal_op == b'S' {
-        return b'_';
-    }
-    if real_op == b'I' && ideal_op == b'S' {
-        return b'S';
-    }
-    if real_op == b'D' && ideal_op == b'I' {
-        return b'_';
-    }
-
-    if ideal_op == b'S' || ideal_op == b'D' || ideal_op == b'I' {
-        return ideal_op;
-    }
-
-    if real_op == b'S' || real_op == b'D' || real_op == b'I' {
-        return real_op;
-    }
-
-    if ideal_op == b'M' || ideal_op == b'=' || ideal_op == b'X' {
-        return b'M';
-    }
-    if real_op == b'M' || real_op == b'=' || real_op == b'X' {
-        return b'M';
-    }
-
-    if real_op == b'_' {
-        return ideal_op;
-    }
-    if ideal_op == b'_' {
-        return real_op;
-    }
-
-    if real_op != b'*' {
-        real_op
-    } else {
-        ideal_op
+    // Standard CIGAR ops
+    match (real_op, ideal_op) {
+        (b'D', b'S') => b'_',
+        (b'I', b'S') => b'S',
+        (b'D', b'I') => b'_',
+        _ if ideal_op == b'S' || ideal_op == b'D' || ideal_op == b'I' => ideal_op,
+        _ if real_op == b'S' || real_op == b'D' || real_op == b'I' => real_op,
+        _ if ideal_op == b'M' || ideal_op == b'=' || ideal_op == b'X' => b'M',
+        _ if real_op == b'M' || real_op == b'=' || real_op == b'X' => b'M',
+        (b'_', _) => ideal_op,
+        (_, b'_') => real_op,
+        _ => if real_op != b'*' { real_op } else { ideal_op },
     }
 }
 
