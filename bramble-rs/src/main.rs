@@ -42,8 +42,8 @@ fn main() -> Result<()> {
     };
     let mut bam = bam_input::open_bam(&args.in_bam)?;
     let g2t = g2t::build_g2t(&transcripts, &bam.refname_to_id, fasta.as_ref())?;
-    let out_header = header::build_header(&transcripts);
-    let stats = pipeline::run(&args, &out_header, &mut bam, &g2t, fasta.as_ref())?;
+    let hts_header = header::build_hts_header(&transcripts);
+    let stats = pipeline::run(&args, &hts_header, &mut bam, &g2t, fasta.as_ref())?;
     tracing::info!(
         total_reads = stats.total_reads,
         unmapped_reads = stats.unmapped_reads,

@@ -31,7 +31,7 @@ pub struct ReadEvaluationConfig {
     pub similarity_threshold: f32,
     #[allow(dead_code)]
     pub print: bool,
-    pub name: String,
+    pub name: Vec<u8>,
     pub soft_clips: bool,
     pub strict: bool,
     pub use_fasta: bool,
@@ -49,7 +49,7 @@ impl ReadEvaluationConfig {
             max_junc_gap: 0,
             similarity_threshold: 0.90,
             print: false,
-            name: String::new(),
+            name: Vec::new(),
             soft_clips: true,
             strict: false,
             use_fasta: false,
@@ -68,7 +68,7 @@ impl ReadEvaluationConfig {
             max_junc_gap: 40,
             similarity_threshold: 0.60,
             print: false,
-            name: String::new(),
+            name: Vec::new(),
             soft_clips: true,
             strict: false,
             use_fasta: false,
@@ -255,7 +255,7 @@ pub struct ReadAln {
     /// Query sequence bytes (optional; needed for clip rescue).
     pub sequence: Option<Vec<u8>>,
     /// Read name (used for deterministic tie-breaking in multi-hit selection).
-    pub name: String,
+    pub name: Vec<u8>,
 }
 
 /// Reusable scratch space for one evaluation pass.
@@ -1027,7 +1027,7 @@ pub fn build_cigar_clip(segment: &EvalSegment, match_info: &mut ExonChainMatch) 
     match_info.align.clip_score += segment.score;
 }
 
-fn deterministic_index(name: &str, n: usize) -> usize {
+fn deterministic_index(name: &[u8], n: usize) -> usize {
     if n == 0 {
         return 0;
     }
@@ -1406,7 +1406,7 @@ impl ReadEvaluator {
             max_junc_gap,
             similarity_threshold,
             print: false,
-            name: String::new(),
+            name: Vec::new(),
             soft_clips: true,
             strict: false,
             use_fasta: self.use_fasta,

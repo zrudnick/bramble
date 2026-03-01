@@ -59,7 +59,6 @@ use crate::pipeline::{
 };
 use crate::types::{HashMap, ReadId, Tid};
 use noodles::sam::alignment::record::cigar::op::Kind as CigarKind;
-use noodles::sam::alignment::record::Flags;
 
 /// A genomic alignment ready for projection into transcriptome coordinates.
 ///
@@ -249,7 +248,7 @@ pub fn project_group(
             segs,
             cigar_ops,
             sequence: a.sequence.clone(),
-            name: a.query_name.clone(),
+            name: a.query_name.as_bytes().to_vec(),
         };
 
         evaluator.evaluate(&read, idx as ReadId, index, shared_seq.as_deref(), &mut ctx);
@@ -261,17 +260,17 @@ pub fn project_group(
         let read_len = if a.read_len > 0 { a.read_len }
             else { a.sequence.as_ref().map_or(0, |s| s.len()) };
 
-        let mut flags = Flags::default();
+        let mut flags: u16 = 0;
         if a.is_paired {
-            flags.insert(Flags::SEGMENTED);
-            if a.mate_is_unmapped { flags.insert(Flags::MATE_UNMAPPED); }
+            flags |= 0x1; // PAIRED
+            if a.mate_is_unmapped { flags |= 0x8; } // MATE_UNMAPPED
             if a.is_first_in_pair {
-                flags.insert(Flags::FIRST_SEGMENT);
+                flags |= 0x40; // READ1
             } else {
-                flags.insert(Flags::LAST_SEGMENT);
+                flags |= 0x80; // READ2
             }
         }
-        if a.is_reverse { flags.insert(Flags::REVERSE_COMPLEMENTED); }
+        if a.is_reverse { flags |= 0x10; } // REVERSE
 
         read_evals.push(ReadEval {
             record_idx: idx,

@@ -1,34 +1,22 @@
 // header.rs is used only by the binary.
 #![allow(dead_code)]
 use crate::annotation::Transcript;
-use noodles::sam::{
-    self,
-    header::record::value::{
-        map::{self, header::Version, ReferenceSequence},
-        Map,
-    },
-};
-use std::num::NonZeroUsize;
 
-pub fn build_header(transcripts: &[Transcript]) -> sam::Header {
-    let mut header = sam::Header::builder();
-
-    let hd = Map::<map::Header>::builder()
-        .set_version(Version::new(1, 0))
-        .build()
-        .unwrap_or_default();
-    header = header.set_header(hd);
-
-    let mut refs = sam::header::ReferenceSequences::default();
+pub fn build_hts_header(transcripts: &[Transcript]) -> rust_htslib::bam::Header {
+    use rust_htslib::bam::header::HeaderRecord;
+    let mut header = rust_htslib::bam::Header::new();
+    let mut hd = HeaderRecord::new(b"HD");
+    hd.push_tag(b"VN", "1.0");
+    header.push_record(&hd);
     for tx in transcripts {
-        let len = tx.length() as usize;
-        let Some(nz) = NonZeroUsize::new(len) else {
+        let len = tx.length();
+        if len == 0 {
             continue;
-        };
-        let rs = Map::<ReferenceSequence>::new(nz);
-        refs.insert(tx.id.clone().into(), rs);
+        }
+        let mut sq = HeaderRecord::new(b"SQ");
+        sq.push_tag(b"SN", &tx.id);
+        sq.push_tag(b"LN", len);
+        header.push_record(&sq);
     }
-
-    header = header.set_reference_sequences(refs);
-    header.build()
+    header
 }

@@ -9,23 +9,26 @@ use crate::g2t::G2TTree;
 use crate::types::{HashMap, HashMapExt, HashSet, ReadId, RefId, Tid};
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use noodles::{bam, bgzf, sam};
-use noodles::core::Position;
-use sam::alignment::io::Write as _;
-use sam::alignment::record::cigar::{op::Kind as CigarKind, Op as SamCigarOp}; // CigarKind also used in ReadAln construction
-use sam::alignment::record::data::field::Tag;
-use sam::alignment::record::Flags;
-use sam::alignment::record::MappingQuality;
-use sam::alignment::record_buf::{data::field::Value, Cigar as SamCigar, Data as SamData, QualityScores, Sequence};
+use noodles::sam::alignment::record::cigar::{op::Kind as CigarKind, Op as SamCigarOp};
+use noodles::sam::alignment::record_buf::Cigar as SamCigar;
+use rust_htslib::bam as hts_bam;
+use rust_htslib::bam::Read as HtsRead;
+use rust_htslib::bam::record::{Aux, CigarString};
 use std::collections::BTreeMap;
-use std::fs::File;
 use std::sync::Mutex;
 use std::thread;
 
 const UNORDERED_FLUSH_GROUPS: usize = 8;
 const PROGRESS_UPDATE_INTERVAL: u64 = 1000;
+const BATCH_SIZE: usize = 64;
 
-// FR_STRAND and RF_STRAND are now runtime values passed via Args (--fr / --rf).
+/// Tags to strip from output records (they are invalid in projected coordinates
+/// or will be replaced with new values).
+const SKIP_TAGS: &[[u8; 2]] = &[
+    *b"NH", *b"HI", *b"AS", *b"NM", *b"CG",
+    *b"XS", *b"SA", *b"ms", *b"nn", *b"ts",
+    *b"tp", *b"cm", *b"s1", *b"s2", *b"de", *b"rl",
+];
 
 #[derive(Debug, Default)]
 pub struct Stats {
@@ -38,8 +41,9 @@ pub struct Stats {
 #[derive(Debug)]
 struct ReadRec {
     id: ReadId,
-    record: bam::Record,
+    record: hts_bam::Record,
     segs: Vec<alignment::Segment>,
+    decoded_seq: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -47,13 +51,24 @@ pub(crate) struct ReadEval {
     pub(crate) record_idx: usize,
     pub(crate) matches: HashMap<Tid, ExonChainMatch>,
     pub(crate) read_len: usize,
-    pub(crate) flags: Flags,
+    pub(crate) flags: u16,
     pub(crate) alignment_start: Option<u32>,
     pub(crate) mate_alignment_start: Option<u32>,
     pub(crate) ref_id: Option<RefId>,
     pub(crate) mate_ref_id: Option<RefId>,
     pub(crate) hit_index: i32,
 }
+
+// BAM flag constants
+const FLAG_PAIRED: u16       = 0x1;
+const FLAG_PROPER_PAIR: u16  = 0x2;
+const FLAG_UNMAPPED: u16     = 0x4;
+const FLAG_MATE_UNMAPPED: u16 = 0x8;
+const FLAG_REVERSE: u16      = 0x10;
+const FLAG_MATE_REVERSE: u16 = 0x20;
+const FLAG_READ1: u16        = 0x40;
+const FLAG_READ2: u16        = 0x80;
+const FLAG_SECONDARY: u16    = 0x100;
 
 #[derive(Debug, Clone)]
 pub(crate) struct MateInfo {
@@ -78,18 +93,13 @@ pub(crate) struct OutputEntry {
 
 pub fn run(
     args: &Args,
-    out_header: &sam::Header,
+    hts_header: &rust_htslib::bam::Header,
     bam: &mut BamInput,
     g2t: &G2TTree,
     fasta: Option<&crate::fasta::FastaDb>,
 ) -> Result<Stats> {
-    let out_file = File::create(&args.out_bam)?;
-    let mt_writer = bgzf::io::MultithreadedWriter::with_worker_count(
-        std::num::NonZeroUsize::new(4).unwrap(),
-        out_file,
-    );
-    let mut writer = bam::io::Writer::from(mt_writer);
-    writer.write_header(out_header)?;
+    let mut writer = hts_bam::Writer::from_path(&args.out_bam, hts_header, hts_bam::Format::Bam)?;
+    writer.set_threads(4)?;
 
     let progress = if !args.quiet {
         let pb = ProgressBar::new_spinner();
@@ -130,34 +140,36 @@ pub fn run(
                 let writer_mutex = &writer_mutex;
                 scope.spawn(move || {
                     let mut ctx = EvalContext::new();
-                    let mut buffered: Vec<sam::alignment::RecordBuf> = Vec::new();
+                    let mut buffered: Vec<hts_bam::Record> = Vec::new();
                     let mut buffered_groups: usize = 0;
                     while let Ok(item) = rx_work.recv() {
-                        let result = process_group_records(
-                            &item.group, g2t_ref, evaluator_ref, fr, rf, paired_end, &mut ctx,
-                        );
-                        if let Ok(records) = result {
-                            buffered_groups += 1;
-                            buffered.extend(records);
-                            if buffered_groups >= UNORDERED_FLUSH_GROUPS
-                                || buffered.len() >= flush_records
-                            {
-                                if let Ok(mut w) = writer_mutex.lock() {
-                                    for record in buffered.drain(..) {
-                                        let _ = w.write_alignment_record(out_header, &record);
-                                    }
-                                } else {
-                                    buffered.clear();
-                                }
-                                buffered_groups = 0;
+                        for (_, group) in &item.groups {
+                            let result = process_group_records(
+                                group, g2t_ref, evaluator_ref, fr, rf, paired_end, &mut ctx,
+                            );
+                            if let Ok(records) = result {
+                                buffered_groups += 1;
+                                buffered.extend(records);
                             }
+                        }
+                        if buffered_groups >= UNORDERED_FLUSH_GROUPS
+                            || buffered.len() >= flush_records
+                        {
+                            if let Ok(mut w) = writer_mutex.lock() {
+                                for record in buffered.drain(..) {
+                                    let _ = w.write(&record);
+                                }
+                            } else {
+                                buffered.clear();
+                            }
+                            buffered_groups = 0;
                         }
                     }
                     if !buffered.is_empty()
                         && let Ok(mut w) = writer_mutex.lock()
                     {
                         for record in buffered.drain(..) {
-                            let _ = w.write_alignment_record(out_header, &record);
+                            let _ = w.write(&record);
                         }
                     }
                 });
@@ -184,11 +196,13 @@ pub fn run(
 
             let mut ctx = EvalContext::new();
             while let Ok(item) = rx_work.recv() {
-                let records = process_group_records(
-                    &item.group, g2t_ref, evaluator_ref, fr, rf, paired_end, &mut ctx,
-                )?;
-                for record in records {
-                    writer.write_alignment_record(out_header, &record)?;
+                for (_, group) in &item.groups {
+                    let records = process_group_records(
+                        group, g2t_ref, evaluator_ref, fr, rf, paired_end, &mut ctx,
+                    )?;
+                    for record in &records {
+                        writer.write(record)?;
+                    }
                 }
             }
 
@@ -209,10 +223,14 @@ pub fn run(
                 scope.spawn(move || {
                     let mut ctx = EvalContext::new();
                     while let Ok(item) = rx_work.recv() {
-                        let result = process_group_records(
-                            &item.group, g2t_ref, evaluator_ref, fr, rf, paired_end, &mut ctx,
-                        );
-                        let _ = tx_res.send(ResultItem { idx: item.idx, result });
+                        let mut results: Vec<(usize, Result<Vec<hts_bam::Record>>)> = Vec::with_capacity(item.groups.len());
+                        for (idx, group) in &item.groups {
+                            let result = process_group_records(
+                                group, g2t_ref, evaluator_ref, fr, rf, paired_end, &mut ctx,
+                            );
+                            results.push((*idx, result));
+                        }
+                        let _ = tx_res.send(ResultItem { results });
                     }
                 });
             }
@@ -223,16 +241,17 @@ pub fn run(
                 scope.spawn(|| read_and_group(&mut bam.reader, tx_work, &progress));
 
             // Main: receive results and write in index order.
-            let mut pending: BTreeMap<usize, Result<Vec<sam::alignment::RecordBuf>>> =
+            let mut pending: BTreeMap<usize, Result<Vec<hts_bam::Record>>> =
                 BTreeMap::new();
             let mut next_idx = 0usize;
-            // rx_res closes when all workers exit (all tx_res clones dropped).
             while let Ok(res) = rx_res.recv() {
-                pending.insert(res.idx, res.result);
+                for (idx, result) in res.results {
+                    pending.insert(idx, result);
+                }
                 while let Some(result) = pending.remove(&next_idx) {
                     let records = result?;
-                    for record in records {
-                        writer.write_alignment_record(out_header, &record)?;
+                    for record in &records {
+                        writer.write(record)?;
                     }
                     next_idx += 1;
                 }
@@ -252,29 +271,32 @@ pub fn run(
     Ok(stats)
 }
 
-/// Reads BAM records, groups them by query name, and sends each complete group
-/// to `tx` as a [`WorkItem`].  Returns accumulated statistics.
+/// Reads BAM records, groups them by query name, batches groups, and sends
+/// batches to `tx` as [`WorkItem`]s.  Returns accumulated statistics.
 ///
 /// Dropping `tx` (when this function returns) closes the channel, signalling
 /// downstream consumers to exit their recv loops.
 fn read_and_group(
-    reader: &mut bam::io::Reader<bgzf::io::Reader<File>>,
+    reader: &mut hts_bam::Reader,
     tx: flume::Sender<WorkItem>,
     progress: &Option<ProgressBar>,
 ) -> Stats {
     let mut stats = Stats::default();
-    let mut current_name: Option<String> = None;
+    let mut current_qname: Option<Vec<u8>> = None;
     let mut group: Vec<ReadRec> = Vec::new();
     let mut group_idx: usize = 0;
     let mut next_read_id: ReadId = 0;
+    let mut batch: Vec<(usize, Vec<ReadRec>)> = Vec::with_capacity(BATCH_SIZE);
 
-    for result in reader.records() {
-        let record = match result {
-            Ok(r) => r,
-            Err(_) => break,
-        };
+    let mut record = hts_bam::Record::new();
+    loop {
+        match reader.read(&mut record) {
+            None => break,
+            Some(Err(_)) => break,
+            Some(Ok(())) => {}
+        }
         stats.total_reads += 1;
-        if record.flags().is_unmapped() {
+        if record.is_unmapped() {
             stats.unmapped_reads += 1;
         }
         if let Some(pb) = progress
@@ -290,45 +312,45 @@ fn read_and_group(
         stats.total_exons += exons.len() as u64;
         let read_id = next_read_id;
         next_read_id = next_read_id.saturating_add(1);
-        let name = record.name().map(|n| n.to_string()).unwrap_or_default();
-        match &current_name {
-            None => {
-                current_name = Some(name);
-                group.push(ReadRec { id: read_id, record, segs: exons });
+        let qname = record.qname();
+        let decoded_seq = record.seq().as_bytes();
+        let same_name = current_qname.as_deref() == Some(qname);
+        if same_name || current_qname.is_none() {
+            if current_qname.is_none() {
+                current_qname = Some(qname.to_vec());
             }
-            Some(curr) if *curr == name => {
-                group.push(ReadRec { id: read_id, record, segs: exons });
+            group.push(ReadRec { id: read_id, record: record.clone(), segs: exons, decoded_seq });
+        } else {
+            // Name changed: flush current group into batch
+            stats.read_groups += 1;
+            batch.push((group_idx, std::mem::take(&mut group)));
+            group_idx += 1;
+            if batch.len() >= BATCH_SIZE
+                && tx.send(WorkItem { groups: std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE)) }).is_err()
+            {
+                break;
             }
-            Some(_) => {
-                stats.read_groups += 1;
-                if tx
-                    .send(WorkItem { idx: group_idx, group: std::mem::take(&mut group) })
-                    .is_err()
-                {
-                    break;
-                }
-                group_idx += 1;
-                current_name = Some(name);
-                group.push(ReadRec { id: read_id, record, segs: exons });
-            }
+            current_qname = Some(qname.to_vec());
+            group.push(ReadRec { id: read_id, record: record.clone(), segs: exons, decoded_seq });
         }
     }
     if !group.is_empty() {
         stats.read_groups += 1;
-        let _ = tx.send(WorkItem { idx: group_idx, group });
+        batch.push((group_idx, group));
+    }
+    if !batch.is_empty() {
+        let _ = tx.send(WorkItem { groups: batch });
     }
     // `tx` drops here, closing the channel.
     stats
 }
 
 struct WorkItem {
-    idx: usize,
-    group: Vec<ReadRec>,
+    groups: Vec<(usize, Vec<ReadRec>)>,
 }
 
 struct ResultItem {
-    idx: usize,
-    result: Result<Vec<sam::alignment::RecordBuf>>,
+    results: Vec<(usize, Result<Vec<hts_bam::Record>>)>,
 }
 
 fn process_group_records(
@@ -339,44 +361,34 @@ fn process_group_records(
     rf: bool,
     paired_end: bool,
     ctx: &mut EvalContext,
-) -> Result<Vec<sam::alignment::RecordBuf>> {
-    let mut output: Vec<sam::alignment::RecordBuf> = Vec::new();
+) -> Result<Vec<hts_bam::Record>> {
+    let mut output: Vec<hts_bam::Record> = Vec::with_capacity(group.len() * 2);
 
-    let mut read_evals: Vec<ReadEval> = Vec::new();
-    let shared_seq: Option<Vec<u8>> = group
+    let mut read_evals: Vec<ReadEval> = Vec::with_capacity(group.len());
+    let shared_seq: Option<&[u8]> = group
         .iter()
-        .find(|rec| !rec.record.flags().is_unmapped())
-        .map(|rec| rec.record.sequence().iter().collect());
+        .find(|rec| !rec.record.is_unmapped() && !rec.decoded_seq.is_empty())
+        .map(|rec| rec.decoded_seq.as_slice());
 
     for (idx, rec) in group.iter().enumerate() {
-        if rec.record.flags().is_unmapped() {
+        if rec.record.is_unmapped() {
             continue;
         }
 
-        let refid = match rec.record.reference_sequence_id() {
-            Some(Ok(id)) => Some(id as RefId),
-            Some(Err(_)) | None => None,
-        };
+        let refid = if rec.record.tid() >= 0 { Some(rec.record.tid() as RefId) } else { None };
         if refid.is_none() {
             continue;
         }
 
-        let mate_refid = match rec.record.mate_reference_sequence_id() {
-            Some(Ok(id)) => Some(id as RefId),
-            Some(Err(_)) | None => None,
-        };
+        let mate_refid = if rec.record.mtid() >= 0 { Some(rec.record.mtid() as RefId) } else { None };
 
         let (strand, strand_from_tag) = splice_strand(&rec.record, fr, rf, paired_end);
 
         let cigar_ops: Vec<(u32, CigarKind)> = rec.record.cigar().iter()
-            .filter_map(|r| r.ok())
-            .map(|op| (op.len() as u32, op.kind()))
+            .map(hts_cigar_to_kind)
             .collect();
-        let sequence: Option<Vec<u8>> = {
-            let s: Vec<u8> = rec.record.sequence().iter().collect();
-            if s.is_empty() { None } else { Some(s) }
-        };
-        let name = rec.record.name().map(|n| n.to_string()).unwrap_or_default();
+        let sequence: Option<&[u8]> = if rec.decoded_seq.is_empty() { None } else { Some(&rec.decoded_seq) };
+        let name = rec.record.qname().to_vec();
 
         let read = ReadAln {
             strand,
@@ -385,16 +397,16 @@ fn process_group_records(
             nh: 0,
             segs: rec.segs.clone(),
             cigar_ops,
-            sequence,
+            sequence: sequence.map(|s| s.to_vec()),
             name,
         };
 
-        evaluator.evaluate(&read, rec.id, g2t, shared_seq.as_deref(), ctx);
+        evaluator.evaluate(&read, rec.id, g2t, shared_seq, ctx);
         let matches: HashMap<Tid, ExonChainMatch> = ctx.matches
             .drain()
             .filter(|(_, m)| m.align.cigar.is_some())
             .collect();
-        let read_len = rec.record.sequence().len();
+        let read_len = rec.record.seq_len();
         let hit_index = get_hit_index(&rec.record);
 
         read_evals.push(ReadEval {
@@ -467,8 +479,8 @@ fn process_group_records(
         } else {
             0
         };
-        let rec = &group[entry.record_idx].record;
-        let out = build_projected_record(rec, &entry, nh, mapq, evaluator.long_reads)?;
+        let rec = &group[entry.record_idx];
+        let out = build_projected_record(&rec.record, &rec.decoded_seq, &entry, nh, mapq, evaluator.long_reads)?;
         output.push(out);
     }
 
@@ -533,28 +545,23 @@ pub(crate) fn assign_hit_indices(entries: &mut [OutputEntry]) {
     }
 }
 
-fn get_alignment_start(record: &bam::Record) -> Option<u32> {
-    record
-        .alignment_start()
-        .and_then(|res| res.ok())
-        .map(|pos| pos.get() as u32)
+fn get_alignment_start(record: &hts_bam::Record) -> Option<u32> {
+    let pos = record.pos();
+    if pos < 0 { None } else { Some((pos + 1) as u32) }
 }
 
-fn splice_strand(record: &bam::Record, fr: bool, rf: bool, paired_end: bool) -> (char, bool) {
-    let xs_tag = Tag::new(b'X', b'S');
-    let ts_tag = Tag::new(b't', b's');
-
-    if let Some(c) = get_char_tag(record, xs_tag) {
+fn splice_strand(record: &hts_bam::Record, fr: bool, rf: bool, paired_end: bool) -> (char, bool) {
+    if let Some(c) = get_char_tag(record, b"XS") {
         let strand = c as char;
         if strand == '+' || strand == '-' {
             return (strand, true);
         }
     }
 
-    if let Some(c) = get_char_tag(record, ts_tag) {
+    if let Some(c) = get_char_tag(record, b"ts") {
         let mut strand = c as char;
         if strand == '+' || strand == '-' {
-            if record.flags().is_reverse_complemented() {
+            if record.is_reverse() {
                 strand = if strand == '+' { '-' } else { '+' };
             }
             return (strand, true);
@@ -563,14 +570,13 @@ fn splice_strand(record: &bam::Record, fr: bool, rf: bool, paired_end: bool) -> 
     // Match C++ behavior: if no splice-strand tags and no strand library flags,
     // return '.' (unspecified) so the evaluator checks both strands.
     // Only infer a definite strand when FR / RF is set.
-    let flags = record.flags();
-    let rev = flags.is_reverse_complemented();
+    let rev = record.is_reverse();
     if fr || rf {
         // Treat read as paired if it has the SEGMENTED flag OR if --paired-end
         // was passed (C++: is_paired = brec->isPaired() || PAIRED_END).
-        let is_paired = flags.is_segmented() || paired_end;
+        let is_paired = record.is_paired() || paired_end;
         let strand = if is_paired {
-            if flags.is_first_segment() {
+            if record.is_first_in_template() {
                 if (rf && rev) || (fr && !rev) { '+' } else { '-' }
             } else if (rf && rev) || (fr && !rev) {
                 '-'
@@ -588,32 +594,22 @@ fn splice_strand(record: &bam::Record, fr: bool, rf: bool, paired_end: bool) -> 
     }
 }
 
-fn get_char_tag(record: &bam::Record, tag: Tag) -> Option<u8> {
-    let data = record.data();
-    let value = data.get(&tag)?;
-    let value = value.ok()?;
-    match value {
-        noodles::sam::alignment::record::data::field::Value::Character(c) => Some(c),
-        noodles::sam::alignment::record::data::field::Value::String(s) => s.first().copied(),
+fn get_char_tag(record: &hts_bam::Record, tag: &[u8; 2]) -> Option<u8> {
+    match record.aux(tag).ok()? {
+        Aux::Char(c) => Some(c),
+        Aux::String(s) => s.as_bytes().first().copied(),
         _ => None,
     }
 }
 
-fn get_mate_start(record: &bam::Record) -> Option<u32> {
-    record
-        .mate_alignment_start()
-        .and_then(|res| res.ok())
-        .map(|pos| pos.get() as u32)
+fn get_mate_start(record: &hts_bam::Record) -> Option<u32> {
+    if record.mtid() < 0 { return None; }
+    let mpos = record.mpos();
+    if mpos < 0 { None } else { Some((mpos + 1) as u32) }
 }
 
-fn get_hit_index(record: &bam::Record) -> i32 {
-    let data = record.data();
-    let value = data.get(&Tag::HIT_INDEX);
-    if let Some(Ok(v)) = value {
-        v.as_int().unwrap_or(0) as i32
-    } else {
-        0
-    }
+fn get_hit_index(record: &hts_bam::Record) -> i32 {
+    hts_aux_as_int(record.aux(b"HI").ok()).unwrap_or(0) as i32
 }
 
 pub(crate) fn find_mate_pairs(reads: &[ReadEval]) -> Vec<(usize, usize)> {
@@ -621,7 +617,7 @@ pub(crate) fn find_mate_pairs(reads: &[ReadEval]) -> Vec<(usize, usize)> {
     let mut pairs = Vec::new();
 
     for (idx, read) in reads.iter().enumerate() {
-        if !read.flags.is_segmented() || read.flags.is_mate_unmapped() {
+        if (read.flags & FLAG_PAIRED) == 0 || (read.flags & FLAG_MATE_UNMAPPED) != 0 {
             continue;
         }
 
@@ -656,10 +652,10 @@ pub(crate) fn assign_pair_order(i: usize, j: usize, reads: &[ReadEval]) -> (usiz
     let flags_i = reads[i].flags;
     let flags_j = reads[j].flags;
 
-    let i_first = flags_i.is_first_segment();
-    let i_last = flags_i.is_last_segment();
-    let j_first = flags_j.is_first_segment();
-    let j_last = flags_j.is_last_segment();
+    let i_first = (flags_i & FLAG_READ1) != 0;
+    let i_last = (flags_i & FLAG_READ2) != 0;
+    let j_first = (flags_j & FLAG_READ1) != 0;
+    let j_last = (flags_j & FLAG_READ2) != 0;
 
     if i_first && j_last {
         return (i, j);
@@ -854,21 +850,18 @@ pub(crate) fn compute_template_length(
 }
 
 fn build_projected_record(
-    record: &bam::Record,
+    record: &hts_bam::Record,
+    decoded_seq: &[u8],
     entry: &OutputEntry,
     nh: u32,
     mapq: u8,
     long_reads: bool,
-) -> Result<sam::alignment::RecordBuf> {
-    let mut out = sam::alignment::RecordBuf::default();
+) -> Result<hts_bam::Record> {
+    let mut out = record.clone();
 
-    if let Some(name) = record.name() {
-        *out.name_mut() = Some(name.to_vec().into());
-    }
-
-    let original_reverse = record.flags().is_reverse_complemented();
+    let original_reverse = record.is_reverse();
     let align_reverse = entry.align.align.is_reverse;
-    let has_sequence = !record.sequence().is_empty();
+    let has_sequence = record.seq_len() > 0;
     let reverse_action = if long_reads {
         !original_reverse && align_reverse
     } else {
@@ -880,27 +873,22 @@ fn build_projected_record(
         original_reverse
     };
 
+    // Build flags via u16 bit manipulation
     let mut flags = record.flags();
-    flags.remove(
-        Flags::UNMAPPED
-            | Flags::MATE_UNMAPPED
-            | Flags::MATE_REVERSE_COMPLEMENTED
-            | Flags::PROPERLY_SEGMENTED
-            | Flags::SEGMENTED
-            | Flags::FIRST_SEGMENT
-            | Flags::LAST_SEGMENT,
-    );
+    // Clear: UNMAPPED, MATE_UNMAPPED, MATE_REVERSE, PROPER_PAIR, PAIRED, READ1, READ2
+    flags &= !(FLAG_UNMAPPED | FLAG_MATE_UNMAPPED | FLAG_MATE_REVERSE | FLAG_PROPER_PAIR
+                | FLAG_PAIRED | FLAG_READ1 | FLAG_READ2);
 
     if entry.align.align.primary_alignment {
-        flags.remove(Flags::SECONDARY);
+        flags &= !FLAG_SECONDARY;
     } else {
-        flags.insert(Flags::SECONDARY);
+        flags |= FLAG_SECONDARY;
     }
 
     if output_reverse {
-        flags.insert(Flags::REVERSE_COMPLEMENTED);
+        flags |= FLAG_REVERSE;
     } else {
-        flags.remove(Flags::REVERSE_COMPLEMENTED);
+        flags &= !FLAG_REVERSE;
     }
 
     let pos0 = if entry.align.align.strand == '+' {
@@ -909,115 +897,172 @@ fn build_projected_record(
         entry.align.align.rcpos
     };
 
-    let pos1 = pos0.saturating_add(1) as usize;
-    let alignment_start = Position::try_from(pos1)
-        .map_err(|_| anyhow::anyhow!("alignment start out of range: {pos1}"))?;
-
-    *out.reference_sequence_id_mut() = Some(entry.tid as usize);
-    *out.alignment_start_mut() = Some(alignment_start);
-
-    let mapping_quality = if mapq == 255 {
-        None
-    } else {
-        Some(MappingQuality::try_from(mapq).unwrap_or(MappingQuality::MIN))
-    };
-    *out.mapping_quality_mut() = mapping_quality;
-
-    let (mut cigar, nm) = update_cigar(record, entry.align.align.cigar.as_ref().unwrap())?;
+    // Compute CIGAR
+    let (mut cigar_ops, nm) = update_cigar_hts(record, entry.align.align.cigar.as_ref().unwrap())?;
     if reverse_action {
-        cigar.as_mut().reverse();
+        cigar_ops.0.reverse();
     }
-    *out.cigar_mut() = cigar;
+
+    // If reverse_action, we need to set seq+qual+cigar together
+    if reverse_action {
+        let mut seq = decoded_seq.to_vec();
+        let raw_qual = record.qual();
+        let qual_missing = raw_qual.first().copied() == Some(255);
+        let mut qual: Vec<u8> = if qual_missing {
+            vec![255u8; seq.len()]
+        } else {
+            raw_qual.to_vec()
+        };
+        reverse_complement(&mut seq);
+        qual.reverse();
+        out.set(record.qname(), Some(&cigar_ops), &seq, &qual);
+    } else {
+        out.set_cigar(Some(&cigar_ops));
+    }
+
+    out.set_tid(entry.tid as i32);
+    out.set_pos(pos0 as i64);
+    out.set_mapq(mapq);
+    out.set_flags(flags);
 
     if let Some(mate) = entry.mate.as_ref() {
-        flags.insert(Flags::SEGMENTED);
-        flags.insert(Flags::PROPERLY_SEGMENTED);
-        if entry.is_first {
-            flags.insert(Flags::FIRST_SEGMENT);
-        }
-        if entry.is_last {
-            flags.insert(Flags::LAST_SEGMENT);
-        }
+        flags |= FLAG_PAIRED | FLAG_PROPER_PAIR;
+        if entry.is_first { flags |= FLAG_READ1; }
+        if entry.is_last { flags |= FLAG_READ2; }
         if mate.is_reverse {
-            flags.insert(Flags::MATE_REVERSE_COMPLEMENTED);
+            flags |= FLAG_MATE_REVERSE;
         } else {
-            flags.remove(Flags::MATE_REVERSE_COMPLEMENTED);
+            flags &= !FLAG_MATE_REVERSE;
         }
+        out.set_flags(flags);
 
-        let mate_pos = mate.pos.saturating_add(1) as usize;
-        let mate_alignment_start = Position::try_from(mate_pos)
-            .map_err(|_| anyhow::anyhow!("mate alignment start out of range: {mate_pos}"))?;
-
-        *out.mate_reference_sequence_id_mut() = Some(mate.tid as usize);
-        *out.mate_alignment_start_mut() = Some(mate_alignment_start);
-        *out.template_length_mut() = compute_template_length(
+        out.set_mtid(mate.tid as i32);
+        out.set_mpos(mate.pos as i64);
+        out.set_insert_size(compute_template_length(
             pos0,
             mate.pos,
             entry.read_len,
             mate.read_len,
             entry.is_first,
             entry.same_transcript,
-        );
+        ) as i64);
     } else {
-        flags.remove(
-            Flags::SEGMENTED
-                | Flags::PROPERLY_SEGMENTED
-                | Flags::MATE_UNMAPPED
-                | Flags::MATE_REVERSE_COMPLEMENTED
-                | Flags::FIRST_SEGMENT
-                | Flags::LAST_SEGMENT,
-        );
-        *out.mate_reference_sequence_id_mut() = None;
-        *out.mate_alignment_start_mut() = None;
-        *out.template_length_mut() = 0;
+        flags &= !(FLAG_PAIRED | FLAG_PROPER_PAIR | FLAG_MATE_UNMAPPED
+                    | FLAG_MATE_REVERSE | FLAG_READ1 | FLAG_READ2);
+        out.set_flags(flags);
+        out.set_mtid(-1);
+        out.set_mpos(-1);
+        out.set_insert_size(0);
     }
 
-    *out.flags_mut() = flags;
-
-    let mut seq: Vec<u8> = record.sequence().iter().collect();
-    let mut qual: Vec<u8> = record.quality_scores().iter().collect();
-
-    if reverse_action {
-        reverse_complement(&mut seq);
-        qual.reverse();
-    }
-
-    *out.sequence_mut() = Sequence::from(seq);
-    *out.quality_scores_mut() = QualityScores::from(qual);
-
-    let mut data: SamData = record
-        .data()
-        .try_into()
-        .map_err(|e: std::io::Error| anyhow::anyhow!(e))?;
-    remove_unwanted_tags(&mut data);
-    data.insert(Tag::ALIGNMENT_HIT_COUNT, Value::from(nh as i32));
-    data.insert(Tag::HIT_INDEX, Value::from(entry.align.align.hit_index));
-    data.insert(
-        Tag::new(b'X', b'S'),
-        Value::Character(entry.align.align.strand as u8),
-    );
-
+    // Extract AS from the *original* record before we modify aux on the clone.
     let gn_as = extract_alignment_score(record).unwrap_or(0) as f64;
+
+    // Single-pass filter: remove SKIP_TAGS, preserve everything else.
+    filter_aux_tags(&mut out);
+
+    // Append our projected tags.  filter_aux_tags guarantees none of these
+    // exist, so push_aux_unchecked is safe (skips the duplicate scan).
+    out.push_aux_unchecked(b"NH", Aux::I32(nh as i32))?;
+    out.push_aux_unchecked(b"HI", Aux::I32(entry.align.align.hit_index))?;
+    out.push_aux_unchecked(b"XS", Aux::Char(entry.align.align.strand as u8))?;
     let score = if !long_reads {
         (1.0 + entry.align.align.similarity_score).powi(3) * 100.0
     } else {
         (gn_as + (entry.align.align.clip_score as f64)) * entry.align.align.similarity_score
     };
-    let as_tag = score as i32;
-    data.insert(Tag::ALIGNMENT_SCORE, Value::from(as_tag));
-    data.insert(Tag::EDIT_DISTANCE, Value::from(nm));
-
-    *out.data_mut() = data;
+    out.push_aux_unchecked(b"AS", Aux::I32(score as i32))?;
+    out.push_aux_unchecked(b"NM", Aux::I32(nm))?;
 
     Ok(out)
 }
 
 
-fn extract_alignment_score(record: &bam::Record) -> Option<i32> {
-    let data = record.data();
-    let value = data.get(&Tag::ALIGNMENT_SCORE)?;
-    let value = value.ok()?;
-    value.as_int().map(|v| v as i32)
+/// Single-pass aux tag filter: iterate raw aux bytes once, copy everything
+/// except tags in `SKIP_TAGS`, then truncate the record's aux block and write
+/// the filtered bytes back.  O(n) total instead of O(|SKIP_TAGS| * n).
+fn filter_aux_tags(out: &mut hts_bam::Record) {
+    let aux_start = out.inner.core.l_qname as usize
+        + out.cigar_len() * std::mem::size_of::<u32>()
+        + out.seq_len().div_ceil(2)
+        + out.seq_len();
+
+    let l_data = out.inner.l_data as usize;
+    if aux_start >= l_data {
+        return;
+    }
+
+    // Copy aux bytes so we can read while mutating the record.
+    let aux_bytes: Vec<u8> = unsafe {
+        std::slice::from_raw_parts(out.inner.data.add(aux_start), l_data - aux_start)
+    }
+    .to_vec();
+
+    let mut kept = Vec::with_capacity(aux_bytes.len());
+    let mut pos = 0;
+    while pos + 3 <= aux_bytes.len() {
+        let tag = [aux_bytes[pos], aux_bytes[pos + 1]];
+        let type_byte = aux_bytes[pos + 2];
+        let val_len = match type_byte {
+            b'A' | b'c' | b'C' => 1,
+            b's' | b'S' => 2,
+            b'i' | b'I' | b'f' => 4,
+            b'd' => 8,
+            b'Z' | b'H' => match aux_bytes[pos + 3..].iter().position(|&b| b == 0) {
+                Some(end) => end + 1,
+                None => break,
+            },
+            b'B' => {
+                if pos + 8 > aux_bytes.len() {
+                    break;
+                }
+                let subtype = aux_bytes[pos + 3];
+                let count = u32::from_le_bytes([
+                    aux_bytes[pos + 4],
+                    aux_bytes[pos + 5],
+                    aux_bytes[pos + 6],
+                    aux_bytes[pos + 7],
+                ]) as usize;
+                let elem_size = match subtype {
+                    b'c' | b'C' => 1,
+                    b's' | b'S' => 2,
+                    b'i' | b'I' | b'f' => 4,
+                    b'd' => 8,
+                    _ => break,
+                };
+                5 + count * elem_size
+            }
+            _ => break,
+        };
+        let entry_len = 3 + val_len; // tag(2) + type(1) + value
+        if pos + entry_len > aux_bytes.len() {
+            break;
+        }
+
+        let should_skip = SKIP_TAGS.iter().any(|s| *s == tag);
+        if !should_skip {
+            kept.extend_from_slice(&aux_bytes[pos..pos + entry_len]);
+        }
+        pos += entry_len;
+    }
+
+    // Truncate aux, then write back kept bytes.
+    // kept.len() <= original aux size, so it fits within the already-allocated m_data.
+    out.inner.l_data = aux_start as i32;
+    if !kept.is_empty() {
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                kept.as_ptr(),
+                out.inner.data.add(aux_start),
+                kept.len(),
+            );
+        }
+        out.inner.l_data = (aux_start + kept.len()) as i32;
+    }
+}
+
+fn extract_alignment_score(record: &hts_bam::Record) -> Option<i32> {
+    hts_aux_as_int(record.aux(b"AS").ok()).map(|v| v as i32)
 }
 
 fn reverse_complement(seq: &mut [u8]) {
@@ -1034,41 +1079,71 @@ fn reverse_complement(seq: &mut [u8]) {
     }
 }
 
-fn remove_unwanted_tags(data: &mut SamData) {
-    let tags = [
-        Tag::ALIGNMENT_HIT_COUNT,
-        Tag::HIT_INDEX,
-        Tag::ALIGNMENT_SCORE,
-        Tag::EDIT_DISTANCE,
-        Tag::CIGAR,
-        Tag::new(b'X', b'S'),
-        Tag::new(b'S', b'A'),
-        Tag::new(b'm', b's'),
-        Tag::new(b'n', b'n'),
-        Tag::new(b't', b's'),
-        Tag::new(b't', b'p'),
-        Tag::new(b'c', b'm'),
-        Tag::new(b's', b'1'),
-        Tag::new(b's', b'2'),
-        Tag::new(b'd', b'e'),
-        Tag::new(b'r', b'l'),
-    ];
 
-    for tag in tags {
-        data.remove(&tag);
+/// Extract an integer value from any numeric Aux variant.
+fn hts_aux_as_int(aux: Option<Aux<'_>>) -> Option<i64> {
+    match aux? {
+        Aux::I8(v)  => Some(v as i64),
+        Aux::U8(v)  => Some(v as i64),
+        Aux::I16(v) => Some(v as i64),
+        Aux::U16(v) => Some(v as i64),
+        Aux::I32(v) => Some(v as i64),
+        Aux::U32(v) => Some(v as i64),
+        _ => None,
     }
 }
 
-fn update_cigar(
-    record: &bam::Record,
-    ideal: &crate::evaluate::Cigar,
-) -> Result<(SamCigar, i32)> {
-    let mut real_ops: Vec<SamCigarOp> = Vec::new();
-    for result in record.cigar().iter() {
-        real_ops.push(result?);
+/// Convert a rust-htslib Cigar operation to a `(length, CigarKind)` pair.
+fn hts_cigar_to_kind(op: &hts_bam::record::Cigar) -> (u32, CigarKind) {
+    use hts_bam::record::Cigar::*;
+    match op {
+        Match(n)    => (*n, CigarKind::Match),
+        Ins(n)      => (*n, CigarKind::Insertion),
+        Del(n)      => (*n, CigarKind::Deletion),
+        RefSkip(n)  => (*n, CigarKind::Skip),
+        SoftClip(n) => (*n, CigarKind::SoftClip),
+        HardClip(n) => (*n, CigarKind::HardClip),
+        Pad(n)      => (*n, CigarKind::Pad),
+        Equal(n)    => (*n, CigarKind::SequenceMatch),
+        Diff(n)     => (*n, CigarKind::SequenceMismatch),
     }
+}
 
-    Ok(update_cigar_ops(&real_ops, ideal))
+/// Convert a rust-htslib Cigar operation to a noodles SamCigarOp.
+fn hts_cigar_to_sam_op(op: &hts_bam::record::Cigar) -> SamCigarOp {
+    let (len, kind) = hts_cigar_to_kind(op);
+    SamCigarOp::new(kind, len as usize)
+}
+
+fn update_cigar_hts(
+    record: &hts_bam::Record,
+    ideal: &crate::evaluate::Cigar,
+) -> Result<(CigarString, i32)> {
+    let real_ops: Vec<SamCigarOp> = record.cigar().iter()
+        .map(hts_cigar_to_sam_op)
+        .collect();
+    let (sam_cigar, nm) = update_cigar_ops(&real_ops, ideal);
+    // Convert SamCigar to htslib CigarString
+    let hts_ops: Vec<hts_bam::record::Cigar> = sam_cigar.as_ref().iter()
+        .map(|op| {
+            let kind = op.kind();
+            let len = op.len();
+            use hts_bam::record::Cigar::*;
+            let n = len as u32;
+            match kind {
+                CigarKind::Match => Match(n),
+                CigarKind::Insertion => Ins(n),
+                CigarKind::Deletion => Del(n),
+                CigarKind::Skip => RefSkip(n),
+                CigarKind::SoftClip => SoftClip(n),
+                CigarKind::HardClip => HardClip(n),
+                CigarKind::Pad => Pad(n),
+                CigarKind::SequenceMatch => Equal(n),
+                CigarKind::SequenceMismatch => Diff(n),
+            }
+        })
+        .collect();
+    Ok((CigarString(hts_ops), nm))
 }
 
 fn update_cigar_ops(real_ops: &[SamCigarOp], ideal: &crate::evaluate::Cigar) -> (SamCigar, i32) {

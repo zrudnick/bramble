@@ -1,9 +1,8 @@
 // alignment.rs is used by the binary (BAM I/O path); suppress dead-code warnings
 // when compiling as a library-only target.
 #![allow(dead_code)]
-use anyhow::{anyhow, Result};
-use noodles::bam;
-use noodles::sam::alignment::record::cigar::op::Kind;
+use anyhow::Result;
+use rust_htslib::bam::record::{Cigar, Record};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Segment {
@@ -15,44 +14,37 @@ pub struct Segment {
 ///
 /// CIGAR `N` operations split exons (splice junctions).
 /// Coordinates are returned as 1-based, half-open [start, end) to match gclib.
-pub fn extract_exons(record: &bam::Record) -> Result<Vec<Segment>> {
-    let Some(start_pos) = record.alignment_start() else {
+pub fn extract_exons(record: &Record) -> Result<Vec<Segment>> {
+    if record.is_unmapped() || record.pos() < 0 {
         return Ok(Vec::new());
-    };
-    let start_pos = start_pos.map_err(|e| anyhow!(e))?;
-    let mut ref_pos = start_pos.get() as u32;
+    }
+    // pos() is 0-based; convert to 1-based to match noodles convention used downstream.
+    let mut ref_pos = (record.pos() + 1) as u32;
     let mut exon_start = ref_pos;
     let mut exons: Vec<Segment> = Vec::new();
 
-    for result in record.cigar().iter() {
-        let op = result?;
-        let len = op.len() as u32;
-        match op.kind() {
-            // Reference-consuming ops
-            Kind::Match | Kind::SequenceMatch | Kind::SequenceMismatch | Kind::Deletion => {
-                ref_pos = ref_pos.saturating_add(len);
+    for op in record.cigar().iter() {
+        match op {
+            Cigar::Match(n)
+            | Cigar::Equal(n)
+            | Cigar::Diff(n)
+            | Cigar::Del(n) => {
+                ref_pos = ref_pos.saturating_add(*n);
             }
-            Kind::Skip => {
-                // End current exon before the intron
+            Cigar::RefSkip(n) => {
                 if ref_pos > exon_start {
-                    exons.push(Segment {
-                        start: exon_start,
-                        end: ref_pos,
-                    });
+                    exons.push(Segment { start: exon_start, end: ref_pos });
                 }
-                ref_pos = ref_pos.saturating_add(len);
+                ref_pos = ref_pos.saturating_add(*n);
                 exon_start = ref_pos;
             }
-            // Non-reference-consuming ops: insertion, soft clip, hard clip, pad
+            // Non-reference-consuming: Ins, SoftClip, HardClip, Pad
             _ => {}
         }
     }
 
     if ref_pos > exon_start {
-        exons.push(Segment {
-            start: exon_start,
-            end: ref_pos,
-        });
+        exons.push(Segment { start: exon_start, end: ref_pos });
     }
 
     Ok(exons)
