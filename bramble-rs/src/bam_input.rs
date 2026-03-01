@@ -1,3 +1,5 @@
+// bam_input.rs is used only by the binary (BAM I/O path).
+#![allow(dead_code)]
 use crate::types::RefId;
 use anyhow::Result;
 use noodles::{bam, bgzf, sam};

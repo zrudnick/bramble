@@ -343,14 +343,16 @@ pub fn project_group(
 /// Returns `('.'`, false)` when no strand tag is present, signalling the
 /// evaluator to check both strands.
 fn infer_strand(a: &GenomicAlignment) -> (char, bool) {
-    if let Some(s) = a.xs_strand {
-        if s == '+' || s == '-' { return (s, true); }
+    if let Some(s) = a.xs_strand
+        && (s == '+' || s == '-')
+    {
+        return (s, true);
     }
-    if let Some(s) = a.ts_strand {
-        if s == '+' || s == '-' {
-            let flipped = if a.is_reverse { if s == '+' { '-' } else { '+' } } else { s };
-            return (flipped, true);
-        }
+    if let Some(s) = a.ts_strand
+        && (s == '+' || s == '-')
+    {
+        let flipped = if a.is_reverse { if s == '+' { '-' } else { '+' } } else { s };
+        return (flipped, true);
     }
     // No strand tag present — return '.' so the evaluator checks both strands,
     // matching C++ get_strand() behavior when no --fr/--rf flag is set.

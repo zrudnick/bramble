@@ -1,3 +1,6 @@
+// alignment.rs is used by the binary (BAM I/O path); suppress dead-code warnings
+// when compiling as a library-only target.
+#![allow(dead_code)]
 use anyhow::{anyhow, Result};
 use noodles::bam;
 use noodles::sam::alignment::record::cigar::op::Kind;

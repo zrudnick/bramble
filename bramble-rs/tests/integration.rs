@@ -14,7 +14,6 @@
 ///
 /// The golden BAMs were produced by the C++ bramble binary after fixing three long-read
 /// bugs (correct_for_gaps UB, Rust get_strands_to_check, and C++ uint8_t refid overflow).
-
 use noodles::bam;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -31,7 +30,7 @@ fn test_data_dir() -> Option<PathBuf> {
 }
 
 fn count_bam_records(path: &Path) -> usize {
-    let mut reader = bam::io::reader::Builder::default()
+    let mut reader = bam::io::reader::Builder
         .build_from_path(path)
         .expect("open BAM");
     reader.read_header().expect("read header");

@@ -5,7 +5,6 @@ use crate::types::{ReadId, RefId, Tid};
 use anyhow::Result;
 use ahash::RandomState;
 use noodles::sam::alignment::record::cigar::op::Kind as CigarKind;
-use std::hash::{BuildHasher, Hash, Hasher};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +57,7 @@ impl ReadEvaluationConfig {
     }
 
     /// Parameters matching C++ LongReadEvaluator.
+    #[allow(dead_code)]
     pub fn long_read() -> Self {
         Self {
             max_clip: 40,
@@ -295,7 +295,7 @@ pub fn get_clips(
     let mut n_left_clip = 0;
     let mut n_right_clip = 0;
 
-    let ops: Vec<_> = read.cigar_ops.iter().copied().collect();
+    let ops: Vec<_> = read.cigar_ops.to_vec();
 
     if ops.is_empty() {
         return Ok((false, false, 0, 0));
@@ -513,29 +513,18 @@ pub fn left_clip_rescue(
     }
 
     let current_gexon = gexon.clone();
-    let max_exons = 20;
-    let mut exons_processed = 0;
-    let use_same_exon = false;
+    // NOTE: structured as a labeled block rather than a loop so that early exits via
+    // `break 'left_clip` are explicit.  The loop was intentionally single-iteration;
+    // the label preserves the ability to extend to multi-exon rescue in the future.
+    'left_clip: {
+        if remaining_qseq.is_empty() {
+            break 'left_clip;
+        }
 
-    while !remaining_qseq.is_empty() && exons_processed < max_exons {
-        exons_processed += 1;
-
-        let (left_gexon, next_gseq) = if use_same_exon && exons_processed == 1 {
-            let size = segment
-                .qexon
-                .start
-                .saturating_sub(current_gexon.start) as usize;
-            (
-                current_gexon.clone(),
-                current_gexon.seq[..size.min(current_gexon.seq.len())].to_string(),
-            )
-        } else if strand == '+' {
+        let (left_gexon, next_gseq) = if strand == '+' {
             if !current_gexon.has_prev {
-                if exons_processed == 1 {
-                    tid_data.has_left_clip = false;
-                    return;
-                }
-                break;
+                tid_data.has_left_clip = false;
+                return;
             }
             let left = g2t.get_guide_exon_for_tid(
                 refid,
@@ -552,11 +541,8 @@ pub fn left_clip_rescue(
             (left, next)
         } else {
             if !current_gexon.has_next {
-                if exons_processed == 1 {
-                    tid_data.has_left_clip = false;
-                    return;
-                }
-                break;
+                tid_data.has_left_clip = false;
+                return;
             }
             let left = g2t.get_guide_exon_for_tid(
                 refid,
@@ -578,7 +564,7 @@ pub fn left_clip_rescue(
             return;
         }
         let result = sw::smith_waterman(&remaining_qseq, &next_gseq, Anchor::End);
-        if exons_processed == 1 && (result.accuracy <= 0.70 || result.score < 10) {
+        if result.accuracy <= 0.70 || result.score < 10 {
             tid_data.has_left_clip = false;
             return;
         }
@@ -588,13 +574,8 @@ pub fn left_clip_rescue(
         let mut left_gexon = left_gexon;
         left_gexon.pos = (result.pos as u32) + left_gexon.pos_start;
 
-        if exons_processed == 1 {
-            if n_left_ins > 0 {
-                segment.qexon.start = gexon.start;
-            }
-            if use_same_exon {
-                segment.qexon.start = gexon.start;
-            }
+        if n_left_ins > 0 {
+            segment.qexon.start = gexon.start;
         }
 
         let left_clip = EvalSegment {
@@ -616,12 +597,6 @@ pub fn left_clip_rescue(
         } else {
             remaining_qseq.clear();
         }
-
-        if remaining_qseq.is_empty() {
-            break;
-        }
-
-        break;
     }
 
     if !remaining_qseq.is_empty()
@@ -690,19 +665,16 @@ pub fn right_clip_rescue(
     }
 
     let current_gexon = gexon.clone();
-    let max_exons = 20;
-    let mut exons_processed = 0;
-
-    while !remaining_qseq.is_empty() && exons_processed < max_exons {
-        exons_processed += 1;
+    // NOTE: structured as a labeled block — see left_clip_rescue for rationale.
+    'right_clip: {
+        if remaining_qseq.is_empty() {
+            break 'right_clip;
+        }
 
         let right_gexon = if strand == '+' {
             if !current_gexon.has_next {
-                if exons_processed == 1 {
-                    tid_data.has_right_clip = false;
-                    return;
-                }
-                break;
+                tid_data.has_right_clip = false;
+                return;
             }
             g2t.get_guide_exon_for_tid(
                 refid,
@@ -713,11 +685,8 @@ pub fn right_clip_rescue(
             )
         } else {
             if !current_gexon.has_prev {
-                if exons_processed == 1 {
-                    tid_data.has_right_clip = false;
-                    return;
-                }
-                break;
+                tid_data.has_right_clip = false;
+                return;
             }
             g2t.get_guide_exon_for_tid(
                 refid,
@@ -738,7 +707,7 @@ pub fn right_clip_rescue(
         }
 
         let result = sw::smith_waterman(&remaining_qseq, &right_gexon.seq, Anchor::Start);
-        if exons_processed == 1 && (result.accuracy <= 0.70 || result.score < 10) {
+        if result.accuracy <= 0.70 || result.score < 10 {
             tid_data.has_right_clip = false;
             return;
         }
@@ -747,7 +716,7 @@ pub fn right_clip_rescue(
         let qend = right_gexon.start + result.end_j as u32;
         right_gexon.pos = (result.pos as u32) + right_gexon.pos_start;
 
-        if exons_processed == 1 && n_right_ins > 0 {
+        if n_right_ins > 0 {
             segment.qexon.end = gexon.end;
         }
 
@@ -771,12 +740,6 @@ pub fn right_clip_rescue(
         } else {
             remaining_qseq.clear();
         }
-
-        if remaining_qseq.is_empty() {
-            break;
-        }
-
-        break;
     }
 
     if !remaining_qseq.is_empty()
@@ -1053,9 +1016,7 @@ fn deterministic_index(name: &str, n: usize) -> usize {
         return 0;
     }
     let state = RandomState::with_seeds(0, 0, 0, 0);
-    let mut hasher = state.build_hasher();
-    name.hash(&mut hasher);
-    (hasher.finish() % (n as u64)) as usize
+    (state.hash_one(name) % (n as u64)) as usize
 }
 
 pub fn filter_by_similarity(

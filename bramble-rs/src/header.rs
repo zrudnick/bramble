@@ -1,3 +1,5 @@
+// header.rs is used only by the binary.
+#![allow(dead_code)]
 use crate::annotation::Transcript;
 use noodles::sam::{
     self,

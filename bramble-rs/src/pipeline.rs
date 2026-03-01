@@ -1,3 +1,6 @@
+// pipeline.rs is shared between the library and binary targets.  Functions used only
+// by one target look "unused" to the other — suppress those false-positive warnings.
+#![allow(dead_code)]
 use crate::alignment;
 use crate::bam_input::BamInput;
 use crate::cli::Args;
@@ -5,7 +8,6 @@ use crate::evaluate::{CigarOp, ExonChainMatch, ReadAln, ReadEvaluator};
 use crate::g2t::G2TTree;
 use crate::types::{ReadId, RefId, Tid};
 use anyhow::Result;
-use flume;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use noodles::{bam, sam};
 use noodles::core::Position;
@@ -128,11 +130,7 @@ pub fn run(
         thread::scope(|scope| -> Result<()> {
             for _ in 0..worker_count {
                 let rx_work = rx_work.clone();
-                let evaluator_ref = evaluator_ref;
-                let g2t_ref = g2t_ref;
                 let writer_mutex = &writer_mutex;
-                let flush_records = flush_records;
-                let out_header = out_header;
                 scope.spawn(move || {
                     let mut buffered: Vec<sam::alignment::RecordBuf> = Vec::new();
                     let mut buffered_groups: usize = 0;
@@ -156,11 +154,11 @@ pub fn run(
                             }
                         }
                     }
-                    if !buffered.is_empty() {
-                        if let Ok(mut writer) = writer_mutex.lock() {
-                            for record in buffered.drain(..) {
-                                let _ = writer.write_alignment_record(out_header, &record);
-                            }
+                    if !buffered.is_empty()
+                        && let Ok(mut writer) = writer_mutex.lock()
+                    {
+                        for record in buffered.drain(..) {
+                            let _ = writer.write_alignment_record(out_header, &record);
                         }
                     }
                 });
@@ -174,11 +172,11 @@ pub fn run(
                 }
 
                 // Update progress bar periodically
-                if let Some(ref pb) = progress {
-                    if stats.total_reads.is_multiple_of(PROGRESS_UPDATE_INTERVAL) {
-                        pb.set_message(format!("Processed {} reads", stats.total_reads));
-                        pb.tick();
-                    }
+                if let Some(ref pb) = progress
+                    && stats.total_reads.is_multiple_of(PROGRESS_UPDATE_INTERVAL)
+                {
+                    pb.set_message(format!("Processed {} reads", stats.total_reads));
+                    pb.tick();
                 }
 
                 let exons = alignment::extract_exons(&record)?;
@@ -259,8 +257,6 @@ pub fn run(
             for _ in 0..worker_count {
                 let rx_work = rx_work.clone();
                 let tx_res = tx_res.clone();
-                let evaluator_ref = evaluator_ref;
-                let g2t_ref = g2t_ref;
                 scope.spawn(move || {
                     while let Ok(item) = rx_work.recv() {
                         let result = process_group_records(&item.group, g2t_ref, evaluator_ref, fr, rf, paired_end);
@@ -278,11 +274,11 @@ pub fn run(
                 }
 
                 // Update progress bar periodically
-                if let Some(ref pb) = progress {
-                    if stats.total_reads.is_multiple_of(PROGRESS_UPDATE_INTERVAL) {
-                        pb.set_message(format!("Processed {} reads", stats.total_reads));
-                        pb.tick();
-                    }
+                if let Some(ref pb) = progress
+                    && stats.total_reads.is_multiple_of(PROGRESS_UPDATE_INTERVAL)
+                {
+                    pb.set_message(format!("Processed {} reads", stats.total_reads));
+                    pb.tick();
                 }
 
                 let exons = alignment::extract_exons(&record)?;
@@ -376,11 +372,11 @@ pub fn run(
         }
 
         // Update progress bar periodically
-        if let Some(ref pb) = progress {
-            if stats.total_reads.is_multiple_of(PROGRESS_UPDATE_INTERVAL) {
-                pb.set_message(format!("Processed {} reads", stats.total_reads));
-                pb.tick();
-            }
+        if let Some(ref pb) = progress
+            && stats.total_reads.is_multiple_of(PROGRESS_UPDATE_INTERVAL)
+        {
+            pb.set_message(format!("Processed {} reads", stats.total_reads));
+            pb.tick();
         }
 
         let exons = alignment::extract_exons(&record)?;
@@ -634,12 +630,11 @@ pub(crate) fn assign_hit_indices(entries: &mut [OutputEntry]) {
             if score > best_score + 1e-12 {
                 best_score = score;
                 best_idx = Some(entry_idx);
-            } else if (score - best_score).abs() <= 1e-12 {
-                if let Some(current) = best_idx {
-                    if entry.tid < entries[current].tid {
-                        best_idx = Some(entry_idx);
-                    }
-                }
+            } else if (score - best_score).abs() <= 1e-12
+                && let Some(current) = best_idx
+                && entry.tid < entries[current].tid
+            {
+                best_idx = Some(entry_idx);
             }
         }
 
@@ -689,8 +684,10 @@ fn splice_strand(record: &bam::Record, fr: bool, rf: bool, paired_end: bool) -> 
         let strand = if is_paired {
             if flags.is_first_segment() {
                 if (rf && rev) || (fr && !rev) { '+' } else { '-' }
+            } else if (rf && rev) || (fr && !rev) {
+                '-'
             } else {
-                if (rf && rev) || (fr && !rev) { '-' } else { '+' }
+                '+'
             }
         } else if (rf && rev) || (fr && !rev) {
             '+'
