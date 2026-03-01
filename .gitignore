@@ -11,6 +11,9 @@ tx_header.sam
 /subprojects/bzip2-*
 /subprojects/htslib-*
 /subprojects/libdeflate-*
+/subprojects/ksw2-*
+/subprojects/cgranges-*
+/subprojects/unordered_dense-*
 !/subprojects/*.wrap
 !/subprojects/packagefiles/libhts/meson.build
 !/subprojects/packagefiles/libdeflate/meson.build
@@ -132,3 +135,6 @@ test_output/*.bam
 
 # Test data — large files, not committed
 test_data/
+
+# Rust build artifacts
+bramble-rs/target/

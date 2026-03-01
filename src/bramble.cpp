@@ -63,7 +63,6 @@ bool RF_STRAND = false;   // Read 1 is on sense strand, --fr
 bool USE_FASTA = false;   // Use FASTA for reducing soft clips
 bool SOFT_CLIPS = true;   // Add soft clips
 bool STRICT = false;      // Use for strict boundary adherence
-bool PAIRED_END = false;   // Are reads paired-end?
 
 FILE *f_out = NULL;       // Default: stdout
 uint8_t n_threads = 1;    // Threads, -p
@@ -199,7 +198,7 @@ char get_strand(GSamRecord* brec) {
   // Set strand if stranded library
   if ((strand == '.') && (FR_STRAND || RF_STRAND)) {
 
-    bool is_paired = (brec->isPaired() || PAIRED_END);
+    bool is_paired = (brec->isPaired());
     bool is_rev    = (brec->revStrand());
 
     if (is_paired) {
@@ -227,35 +226,34 @@ char get_strand(GSamRecord* brec) {
 }
 
 void process_exons(std::shared_ptr<GSamRecord> brec, 
-                  CReadAln &read) {
+                  std::vector<CReadAln> &reads, 
+                  read_id_t id) {
   auto exons = brec->exons;
   for (int i = 0; i < exons.Count(); i++) {
     auto &exon = exons[i];
     exon.end++; // switch to exclusive end
-    read.segs.Add(exon);
+    reads[id].segs.Add(exon);
   }
 }
 
 std::string 
-create_read_id(const char *read_name, int32_t pos, int32_t hi) {
-  std::string id(read_name);
-  id += '-'; id += pos; id += ".="; id += hi;
-  return id;
+create_read_id(const char *read_name, int32_t pos) {
+  return std::string(read_name) + '-' + std::to_string(pos);
 }
 
-void add_pair_if_new(CReadAln &read, int pair_id) {
-  for (int i = 0; i < read.pair_idx.Count(); i++) {
-    if (read.pair_idx[i] == pair_id) {
+void add_pair_if_new(std::vector<CReadAln> &reads, 
+                    read_id_t id, int pair_id) {
+  for (int i = 0; i < reads[id].pair_idx.Count(); i++) {
+    if (reads[id].pair_idx[i] == pair_id) {
       return; // pairing already exists
     }
   }
-
-  read.pair_idx.Add(pair_id);
+  reads[id].pair_idx.Add(pair_id);
 }
 
 void process_pairs(std::vector<CReadAln> &reads, 
                   read_id_t id, GSamRecord *brec, 
-                  GHash<int> &hashread) {
+                  unordered_map<std::string, read_id_t> &hashread) {
 
   // Only process pairs on same chromosome/contig
   if (brec->refId() != brec->mate_refId())
@@ -265,36 +263,34 @@ void process_pairs(std::vector<CReadAln> &reads,
   int32_t mate_start = brec->mate_start();
 
   if (mate_start <= read_start) {
-    std::string read_id =
-      create_read_id(reads[id].brec->name(), mate_start, 
-        brec->tag_int("HI"));
-    int *mate_id = hashread[read_id.c_str()];
-    if (mate_id) {
-      add_pair_if_new(reads[id], *mate_id);
-      add_pair_if_new(reads[*mate_id], id);
-      hashread.Remove(read_id.c_str());
+    std::string key =
+      create_read_id(reads[id].brec->name(), mate_start);
+    auto it = hashread.find(key);
+    if (it != hashread.end()) {
+      add_pair_if_new(reads, id, it->second);
+      add_pair_if_new(reads, it->second, id);
+      hashread.erase(it);
     }
   } else {
-    std::string read_id = create_read_id(brec->name(), read_start, 
-      brec->tag_int("HI"));
-    hashread.Add(read_id.c_str(), id);
+    std::string key = create_read_id(brec->name(), read_start);
+    hashread[key] = id;  // unambiguously stores the value
   }
 }
 
 void process_read_in(std::vector<CReadAln> &reads, read_id_t id,
                     std::shared_ptr<GSamRecord> brec, char strand, 
-                    refid_t refid, GHash<int> &hashread) {
+                    refid_t refid, unordered_map<std::string, read_id_t> &hashread) {
   CReadAln read;
   read.strand = strand;
   read.refid = refid;
   read.brec = brec;
+  read.start = brec->start;
   
-  process_exons(brec, read);
-  if (PAIRED_END) {
+  reads.emplace_back(read);
+  process_exons(brec, reads, id);
+  if (brec->isPaired()) {
     process_pairs(reads, id, brec.get(), hashread);
   }
-
-  reads.emplace_back(read);
 }
 
 void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,  
@@ -316,7 +312,6 @@ void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,
   total_complete = 0;
   total_unique = 0;
   total_processed = 0;
-
   
   seen_last_out = 0;
   print_mod = LONG_READS ? 100000 : 10000000;
@@ -326,9 +321,10 @@ void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,
   bool more_alignments = true;
 
   std::shared_ptr<GSamRecord> brec = nullptr;
-  std::vector<CReadAln> reads;
-  GHash<int> hashread;
+  unordered_map<std::string, read_id_t> hashread;
 
+  hashread.clear();
+  bundle->reads.clear();
   read_id_t id = 0;
   uint32_t chunk_size = 100000;
 
@@ -375,7 +371,7 @@ void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,
     }
 
     if (new_bundle) {
-      hashread.Clear();
+      hashread.clear();
       bundle->logger = logger;
       bundle->g2t = g2t;
       bundle->evaluator = evaluator;
@@ -430,7 +426,6 @@ int main(int argc, char *argv[]) {
   app.add_flag("--long", LONG_READS, "alignments are from long reads?");
   app.add_flag("--fr", FR_STRAND, "assume stranded library (first-strand, read2 sense)");
   app.add_flag("--rf", RF_STRAND, "assume stranded library (second-strand, read1 sense)");
-  app.add_flag("--paired-end", PAIRED_END, "library is paired end");
   app.add_option("-G", gff,
                  "reference annotation to use for guiding the assembly process "
                  "(GTF/GFF)")
@@ -451,11 +446,6 @@ int main(int argc, char *argv[]) {
   app.add_flag_function("-V,--version", version_callback, "print version.");
 
   CLI11_PARSE(app, argc, argv);
-
-  // Set strand information
-  if (LONG_READS) {
-    PAIRED_END = false;
-  }
 
   bam_file_in = in_bam.c_str();
   guide_gff = gff.c_str();

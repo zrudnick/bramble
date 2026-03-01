@@ -202,6 +202,7 @@ namespace bramble {
     }
 
     // Sort to enable std::set_intersection
+    std::sort(read_transcripts.begin(), read_transcripts.end());
     std::sort(mate_transcripts.begin(), mate_transcripts.end());
 
     // *^*^*^ *^*^*^ *^*^*^ *^*^*^
