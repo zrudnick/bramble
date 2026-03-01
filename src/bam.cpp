@@ -540,10 +540,6 @@ namespace bramble {
       return;
     }
       
-    // Get match tid and position
-    int32_t tid = b->core.tid;
-    int32_t pos = b->core.pos;
-    
     // Set basic paired flags
     b->core.flag |= BAM_FPAIRED;
     
@@ -558,35 +554,33 @@ namespace bramble {
     // Mates map to same transcript
     if (this_pair->same_transcript) {
       // Both mates map to same transcript - use "=" for mate reference 
-      b->core.mtid = tid; // Same as current read's tid
-      b->core.mpos = pos;
+      int32_t r_pos = (this_pair->r_align.strand == '+') ? this_pair->r_align.fwpos : this_pair->r_align.rcpos;
+      int32_t m_pos = (this_pair->m_align.strand == '+') ? this_pair->m_align.fwpos : this_pair->m_align.rcpos;
+
+      int32_t my_pos   = first_read ? r_pos : m_pos;
+      int32_t mate_pos = first_read ? m_pos : r_pos;
+
+
+      b->core.mtid = b->core.tid;
+      b->core.mpos = mate_pos;
       b->core.flag |= BAM_FPROPER_PAIR;
       
-      // Calculate insert size for same transcript
-      int32_t isize = 0;
-      if (first_read) {
-        if (b->core.mpos > b->core.pos) {
-          isize = ((b->core.mpos + b->core.l_qseq) - b->core.pos);
-        } else {
-          isize = -((b->core.pos + b->core.l_qseq) - b->core.mpos);
-        }
-        
+      // SAM spec: positive for leftmost read, negative for rightmost
+      if (my_pos <= mate_pos) {
+        b->core.isize = (mate_pos + b->core.l_qseq) - my_pos;
       } else {
-        if (b->core.pos > b->core.mpos) {
-          isize = -((b->core.pos + b->core.l_qseq) - b->core.mpos);
-        } else {
-          isize = ((b->core.mpos + b->core.l_qseq) - b->core.pos);
-        }
-        
+        b->core.isize = -((my_pos + b->core.l_qseq) - mate_pos);
       }
-      b->core.isize = isize;
               
     // Mates map to different transcripts
     } else {
-      b->core.mtid = tid;
-      b->core.mpos = pos;
+      int32_t r_pos = (this_pair->r_align.strand == '+') ? this_pair->r_align.fwpos : this_pair->r_align.rcpos;
+      int32_t m_pos = (this_pair->m_align.strand == '+') ? this_pair->m_align.fwpos : this_pair->m_align.rcpos;
+      
+      b->core.mtid = first_read ? this_pair->m_tid : this_pair->r_tid;
+      b->core.mpos = first_read ? m_pos : r_pos;  // use the same fwpos/rcpos logic
       b->core.isize = 0;
-      b->core.flag |= BAM_FPROPER_PAIR;
+      b->core.flag &= ~BAM_FPROPER_PAIR;
     }
   }
 

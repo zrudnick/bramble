@@ -240,49 +240,54 @@ namespace bramble {
 
         // Determine primary/secondary alignment status
         auto best_it = pairs.end();
-        int which = 0;
         double best_score = -std::numeric_limits<double>::infinity();
-        int32_t hit_index = 1;
         int count_at_best = 0;
+        int32_t hit_index = 1;
         int total_matches = 0;
+
         for (auto it = pairs.begin(); it != pairs.end(); ++it) {
           auto &info = (*it);
           info->r_align.hit_index = hit_index++;
           total_matches++;
 
-          if (info->r_align.similarity_score > best_score) {
-            best_score = info->r_align.similarity_score;
-            best_it = it;
-            which = 0;
-            count_at_best = 1;
-          } else if (info->r_align.similarity_score == best_score) {
-            count_at_best++;
+          if (info->is_paired) {
+            info->m_align.hit_index = hit_index++;
+            total_matches++;
           }
 
+          // Best score for this pair is the higher of the two
+          double pair_score = info->r_align.similarity_score;
           if (info->is_paired) {
-            info->r_align.hit_index = hit_index++;
-            total_matches++;
-            if (info->m_align.similarity_score > best_score) {
-              best_score = info->m_align.similarity_score;
-              best_it = it;
-              which = 1;
-              count_at_best = 1;
-            } else if (info->m_align.similarity_score == best_score) {
-              count_at_best++;
-            }
+            pair_score = std::max(pair_score, info->m_align.similarity_score);
+          }
+
+          if (pair_score > best_score) {
+            best_score = pair_score;
+            best_it = it;
+            count_at_best = 1;
+          } else if (pair_score == best_score) {
+            count_at_best++;
           }
         }
 
-        if (best_it != pairs.end() && count_at_best == 1) {
+        if (best_it != pairs.end()) {
           auto &best_info = (*best_it);
-          if (which == 0) best_info->r_align.primary_alignment = true;
-          else best_info->m_align.primary_alignment = true;
-        } else {
-          int32_t rand_idx = get_rand(pairs.size());
-          auto it = pairs.begin();
-          std::advance(it, rand_idx);
-          auto &secondary = (*it);
-          secondary->r_align.primary_alignment = true;  // read1 always chosen in this case
+          if (count_at_best == 1) {
+            best_info->r_align.primary_alignment = true;
+            if (best_info->is_paired) {
+              best_info->m_align.primary_alignment = true;
+            }
+          } else {
+            // Tie: pick randomly
+            int32_t rand_idx = get_rand(pairs.size());
+            auto it = pairs.begin();
+            std::advance(it, rand_idx);
+            auto &secondary = (*it);
+            secondary->r_align.primary_alignment = true;
+            if (secondary->is_paired) {
+              secondary->m_align.primary_alignment = true;
+            }
+          }
         }
 
         // Recalculate NH and MAPQ based on number of kept alignments
@@ -296,6 +301,10 @@ namespace bramble {
         for (auto* pair : pairs) {
           pair->read1->nh = new_nh;
           pair->read1->mapq = new_mapq;
+          if (pair->is_paired && pair->read2) {
+            pair->read2->nh = new_nh;
+            pair->read2->mapq = new_mapq;
+          }
           filtered_bam_info.push_back(pair);
         }
       }
