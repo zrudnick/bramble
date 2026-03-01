@@ -1,18 +1,51 @@
 //! Public library API for projecting spliced genomic alignments into transcriptome space.
 //!
-//! # Example
+//! The entry point is [`project_group`]: given a slice of [`GenomicAlignment`]s for the
+//! same query name and a pre-built [`G2TTree`] index, it returns one
+//! [`ProjectedAlignment`] per successful transcript match.
+//!
+//! # Quick start
 //!
 //! ```no_run
 //! use bramble_rs::{GenomicAlignment, ProjectionConfig, project_group};
-//! use bramble_rs::g2t::G2TTree;
+//! use bramble_rs::annotation::load_transcripts;
+//! use bramble_rs::g2t::{G2TTree, build_g2t};
+//! use std::collections::HashMap;
 //!
-//! // Build the index from a GTF/GFF annotation:
-//! // let transcripts = bramble_rs::annotation::load_transcripts(path)?;
-//! // let index = bramble_rs::g2t::build_g2t(&transcripts, &refname_to_id, None)?;
-//! //
+//! // 1. Build the index once from a GTF/GFF annotation.
+//! // let transcripts = load_transcripts("annotation.gtf")?;
+//! // let refname_to_id: HashMap<String, usize> = /* from your BAM header */;
+//! // let index = build_g2t(&transcripts, &refname_to_id, None)?;
+//!
+//! // 2. Choose short-read or long-read parameters.
 //! // let config = ProjectionConfig { long_reads: false, use_fasta: false };
-//! // let alns: Vec<GenomicAlignment> = /* from minimap2-rs or noodles */;
-//! // let projected = project_group(&alns, &index, &config);
+//!
+//! // 3. For each read-name group, project all alignments at once.
+//! // let alns: Vec<GenomicAlignment> = /* built from noodles RecordBuf or minimap2-rs Mapping */;
+//! // let projected: Vec<ProjectedAlignment> = project_group(&alns, &index, &config);
+//! ```
+//!
+//! # minimap2-rs integration sketch
+//!
+//! ```no_run
+//! # use bramble_rs::GenomicAlignment;
+//! // let mapping: minimap2::Mapping = /* ... */;
+//! // let aln = GenomicAlignment {
+//! //     query_name: read_name.clone(),
+//! //     ref_id: mapping.target_name
+//! //         .and_then(|n| refname_to_id.get(n).copied())
+//! //         .unwrap_or(-1) as i32,
+//! //     ref_start: mapping.target_start as i64 + 1, // convert 0-based → 1-based
+//! //     is_reverse: mapping.strand == minimap2::Strand::Reverse,
+//! //     cigar: mapping.alignment.as_ref()
+//! //         .map(|a| a.cigar.iter().map(|&(len, op)| (len, op)).collect())
+//! //         .unwrap_or_default(),
+//! //     sequence: Some(read_sequence.clone()),
+//! //     is_paired: false, is_first_in_pair: false,
+//! //     xs_strand: None, ts_strand: mapping.strand_from_tag,
+//! //     hit_index: 0, mate_ref_id: None, mate_ref_start: None,
+//! //     mate_is_unmapped: false, read_len: read_sequence.len(),
+//! // };
 //! ```
 
 use crate::evaluate::{ReadAln, ReadEvaluator, ExonChainMatch};
@@ -31,79 +64,160 @@ use std::collections::HashMap;
 
 /// A genomic alignment ready for projection into transcriptome coordinates.
 ///
-/// Construct from noodles `RecordBuf` or from minimap2-rs `Mapping`.
+/// Construct one of these from your alignment source (noodles `RecordBuf`,
+/// minimap2-rs `Mapping`, etc.) and pass a slice of them to [`project_group`].
+///
+/// # Coordinate conventions
+///
+/// - `ref_id` is a **0-based** index into the same reference-sequence table that
+///   was used to build the [`G2TTree`] index.  It must match the integer the
+///   index was built with — typically the position of the chromosome name in the
+///   BAM/CRAM header or the minimap2 target list.
+/// - `ref_start` is **1-based** (SAM convention).
 #[derive(Debug, Clone)]
 pub struct GenomicAlignment {
+    /// Read/query name shared by all alignments in the group.
     pub query_name: String,
-    /// 0-based reference sequence index (matches the index used to build `G2TTree`).
+    /// 0-based reference sequence index (must match the index used to build [`G2TTree`]).
     pub ref_id: i32,
-    /// 1-based alignment start position on the reference.
+    /// 1-based alignment start position on the reference (SAM `POS`).
     pub ref_start: i64,
-    /// True if the read maps to the reverse strand.
+    /// `true` if the read maps to the reverse strand.
     pub is_reverse: bool,
     /// CIGAR as `(length, SAM op code)` pairs.
-    /// SAM op codes: 0=M, 1=I, 2=D, 3=N(intron), 4=S, 5=H, 6=P, 7==, 8=X.
+    ///
+    /// SAM op codes: `0`=M, `1`=I, `2`=D, `3`=N (intron skip), `4`=S, `5`=H,
+    /// `6`=P, `7`==, `8`=X.
     pub cigar: Vec<(u32, u8)>,
-    /// Query sequence bytes (ASCII bases). Required for soft-clip rescue.
+    /// Query sequence bytes (ASCII bases, e.g. `b"ACGT..."`).
+    ///
+    /// Required only when soft-clip rescue is enabled (`use_fasta = true` in
+    /// [`ProjectionConfig`]).  May be `None` otherwise.
     pub sequence: Option<Vec<u8>>,
-    /// True if the read comes from a paired-end library.
+    /// `true` if the read comes from a paired-end library (SAM `SEGMENTED` flag).
     pub is_paired: bool,
-    /// True if this is read1 of a pair (FIRST_SEGMENT flag in SAM).
+    /// `true` if this is read 1 of a pair (SAM `FIRST_SEGMENT` flag).
     pub is_first_in_pair: bool,
-    /// Library strand inferred from the XS tag (short reads).
+    /// Library strand inferred from the SAM `XS` tag (`'+'` or `'-'`).
+    ///
+    /// Used for short-read strand inference.  Set to `None` if the tag is absent.
     pub xs_strand: Option<char>,
-    /// Library strand inferred from the ts tag (long reads).
+    /// Library strand inferred from the minimap2 `ts` tag (`'+'` or `'-'`).
+    ///
+    /// Used for long-read strand inference.  The value is the *template* strand
+    /// (same convention as minimap2); bramble flips it when the read is reverse-
+    /// complemented.  Set to `None` if the tag is absent.
     pub ts_strand: Option<char>,
-    /// HI tag value from the input (0 if absent).
+    /// Value of the SAM `HI` tag from the input BAM (0 if the tag is absent).
+    ///
+    /// Used to match mate pairs when the same query has multiple secondary
+    /// alignments.
     pub hit_index: i32,
-    /// Reference sequence index of the mate (None if unpaired or mate unmapped).
+    /// 0-based reference sequence index of the mate.
+    ///
+    /// `None` when the read is unpaired or the mate is unmapped.
     pub mate_ref_id: Option<i32>,
-    /// 1-based alignment start of the mate (None if unpaired or mate unmapped).
+    /// 1-based alignment start of the mate (SAM `MPOS`).
+    ///
+    /// `None` when the read is unpaired or the mate is unmapped.
     pub mate_ref_start: Option<i64>,
-    /// True if the mate is unmapped.
+    /// `true` if the mate is unmapped (SAM `MATE_UNMAPPED` flag).
     pub mate_is_unmapped: bool,
-    /// Query read length in bases (used for NH when sequence is absent).
+    /// Query read length in bases.
+    ///
+    /// Used to compute NH when [`sequence`](GenomicAlignment::sequence) is
+    /// absent.  Set to 0 if unknown (the sequence length will be used instead).
     pub read_len: usize,
 }
 
 /// The result of projecting one alignment into transcriptome space.
+///
+/// Each value returned by [`project_group`] corresponds to one transcript that
+/// the read successfully maps to.  Multiple `ProjectedAlignment`s may share the
+/// same [`input_index`](ProjectedAlignment::input_index) when one genomic
+/// alignment maps to several overlapping transcripts.
 #[derive(Debug, Clone)]
 pub struct ProjectedAlignment {
-    /// Index of the target transcript in the `G2TTree`.
+    /// Index of the matching transcript inside the [`G2TTree`].
+    ///
+    /// This is a dense 0-based integer assigned by [`build_g2t`](crate::g2t::build_g2t)
+    /// in the order transcripts were inserted.
     pub transcript_id: u32,
-    /// 1-based start position on the transcript.
+    /// 1-based start position on the transcript (forward-strand coordinates).
     pub transcript_start: u32,
-    /// True if the alignment is on the reverse strand of the transcript.
+    /// `true` if the read is on the reverse strand of the transcript.
     pub is_reverse: bool,
-    /// Alignment similarity score (higher is better).
+    /// Alignment similarity score in `[0, 1]` (higher is better).
+    ///
+    /// Computed as the fraction of query bases that align to annotated exonic
+    /// sequence without exceeding the clip/gap tolerances.
     pub similarity_score: f64,
-    /// Total hits for this read (NH tag value).
+    /// Total number of transcript hits for this read group (`NH` tag value).
     pub nh: u32,
-    /// 1-based index of this hit (HI tag value).
+    /// 1-based index of this particular hit (`HI` tag value).
     pub hi: u32,
-    /// True if this is the primary (best) alignment.
+    /// `true` if this is the primary (best-scoring) alignment.
     pub is_primary: bool,
-    /// True if the mate maps to the same transcript.
+    /// `true` if the mate read maps to the same transcript.
     pub same_transcript_as_mate: bool,
-    /// Observed template length (TLEN); 0 when mates are on different transcripts.
+    /// Observed template length (`TLEN`); `0` when mates map to different
+    /// transcripts or when the read is unpaired.
     pub insert_size: i32,
-    /// The index of the input `GenomicAlignment` this result was derived from.
+    /// Index of the input [`GenomicAlignment`] this result was derived from.
+    ///
+    /// Use this to correlate projected results back to the original BAM records
+    /// or minimap2 mappings.
     pub input_index: usize,
 }
 
-/// Configuration passed to `project_group()`.
+/// Evaluation parameters for [`project_group`].
+///
+/// Use [`ProjectionConfig::short_read`] or [`ProjectionConfig::long_read`] for
+/// pre-set configurations that match the C++ bramble defaults, or build a
+/// custom config for advanced use.
 #[derive(Debug, Clone)]
 pub struct ProjectionConfig {
-    /// Use long-read evaluation parameters (more permissive clip/gap tolerances).
+    /// Use long-read evaluation parameters (more permissive clip/gap tolerances
+    /// and a lower similarity threshold).
+    ///
+    /// Set `true` for PacBio / Oxford Nanopore data, `false` for Illumina.
     pub long_reads: bool,
-    /// Whether a FASTA sequence is available for clip-rescue alignment.
+    /// Whether a genome FASTA sequence is available for soft-clip rescue
+    /// alignment.
+    ///
+    /// When `true`, reads with soft-clipped bases are re-aligned against the
+    /// reference sequence to recover additional exon coverage.  Requires that
+    /// `sequence` is set on the [`GenomicAlignment`].
     pub use_fasta: bool,
+}
+
+impl ProjectionConfig {
+    /// Short-read (Illumina) defaults — matches C++ `ShortReadEvaluator`.
+    pub fn short_read() -> Self {
+        Self { long_reads: false, use_fasta: false }
+    }
+
+    /// Long-read (PacBio / ONT) defaults — matches C++ `LongReadEvaluator`.
+    pub fn long_read() -> Self {
+        Self { long_reads: true, use_fasta: false }
+    }
 }
 
 /// Project a group of alignments for the same query name into transcriptome coordinates.
 ///
-/// All alignments in the slice must share the same `query_name`. The returned
-/// `ProjectedAlignment` slice is sorted by `(input_index, transcript_id, hi)`.
+/// # Parameters
+///
+/// * `alignments` — all genomic alignments for a single query name.  They must
+///   all share the same [`query_name`](GenomicAlignment::query_name).  Mixing
+///   different names is not an error but will produce incorrect NH/HI values.
+/// * `index` — the genome-to-transcriptome index built from your GTF/GFF
+///   annotation via [`build_g2t`](crate::g2t::build_g2t).
+/// * `config` — evaluation parameters (read type, FASTA availability).
+///
+/// # Returns
+///
+/// A `Vec<ProjectedAlignment>` sorted by `(input_index, transcript_id, hi)`.
+/// Returns an empty `Vec` when no alignment passes the similarity filter.
 pub fn project_group(
     alignments: &[GenomicAlignment],
     index: &G2TTree,
@@ -224,7 +338,10 @@ pub fn project_group(
     out
 }
 
-/// Infer SAM strand character from a `GenomicAlignment`'s tag fields.
+/// Infer SAM strand character from a [`GenomicAlignment`]'s tag fields.
+///
+/// Returns `('.'`, false)` when no strand tag is present, signalling the
+/// evaluator to check both strands.
 fn infer_strand(a: &GenomicAlignment) -> (char, bool) {
     if let Some(s) = a.xs_strand {
         if s == '+' || s == '-' { return (s, true); }

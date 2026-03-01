@@ -23,8 +23,7 @@ use std::thread;
 const UNORDERED_FLUSH_GROUPS: usize = 8;
 const PROGRESS_UPDATE_INTERVAL: u64 = 1000;
 
-const FR_STRAND: bool = false;
-const RF_STRAND: bool = false;
+// FR_STRAND and RF_STRAND are now runtime values passed via Args (--fr / --rf).
 
 #[derive(Debug, Default)]
 pub struct Stats {
@@ -105,6 +104,10 @@ pub fn run(
         use_fasta: fasta.is_some(),
     };
 
+    let fr = args.fr;
+    let rf = args.rf;
+    let paired_end = args.paired_end;
+
     let mut stats = Stats::default();
     let mut next_read_id: ReadId = 0;
 
@@ -134,7 +137,7 @@ pub fn run(
                     let mut buffered: Vec<sam::alignment::RecordBuf> = Vec::new();
                     let mut buffered_groups: usize = 0;
                     while let Ok(item) = rx_work.recv() {
-                        let result = process_group_records(&item.group, g2t_ref, evaluator_ref);
+                        let result = process_group_records(&item.group, g2t_ref, evaluator_ref, fr, rf, paired_end);
                         if let Ok(records) = result {
                             buffered_groups += 1;
                             buffered.extend(records);
@@ -260,7 +263,7 @@ pub fn run(
                 let g2t_ref = g2t_ref;
                 scope.spawn(move || {
                     while let Ok(item) = rx_work.recv() {
-                        let result = process_group_records(&item.group, g2t_ref, evaluator_ref);
+                        let result = process_group_records(&item.group, g2t_ref, evaluator_ref, fr, rf, paired_end);
                         let _ = tx_res.send(ResultItem { idx: item.idx, result });
                     }
                 });
@@ -405,7 +408,7 @@ pub fn run(
             }
             Some(_) => {
                 stats.read_groups += 1;
-                let records = process_group_records(&group, g2t, &evaluator)?;
+                let records = process_group_records(&group, g2t, &evaluator, fr, rf, paired_end)?;
                 for record in records {
                     writer.write_alignment_record(out_header, &record)?;
                 }
@@ -422,7 +425,7 @@ pub fn run(
 
     if !group.is_empty() {
         stats.read_groups += 1;
-        let records = process_group_records(&group, g2t, &evaluator)?;
+        let records = process_group_records(&group, g2t, &evaluator, fr, rf, paired_end)?;
         for record in records {
             writer.write_alignment_record(out_header, &record)?;
         }
@@ -449,6 +452,9 @@ fn process_group_records(
     group: &[ReadRec],
     g2t: &G2TTree,
     evaluator: &ReadEvaluator,
+    fr: bool,
+    rf: bool,
+    paired_end: bool,
 ) -> Result<Vec<sam::alignment::RecordBuf>> {
     let mut output: Vec<sam::alignment::RecordBuf> = Vec::new();
 
@@ -476,7 +482,7 @@ fn process_group_records(
             Some(Err(_)) | None => None,
         };
 
-        let (strand, strand_from_tag) = splice_strand(&rec.record);
+        let (strand, strand_from_tag) = splice_strand(&rec.record, fr, rf, paired_end);
 
         let cigar_ops: Vec<(u32, CigarKind)> = rec.record.cigar().iter()
             .filter_map(|r| r.ok())
@@ -651,7 +657,7 @@ fn get_alignment_start(record: &bam::Record) -> Option<u32> {
         .map(|pos| pos.get() as u32)
 }
 
-fn splice_strand(record: &bam::Record) -> (char, bool) {
+fn splice_strand(record: &bam::Record, fr: bool, rf: bool, paired_end: bool) -> (char, bool) {
     let xs_tag = Tag::new(b'X', b'S');
     let ts_tag = Tag::new(b't', b's');
 
@@ -673,17 +679,20 @@ fn splice_strand(record: &bam::Record) -> (char, bool) {
     }
     // Match C++ behavior: if no splice-strand tags and no strand library flags,
     // return '.' (unspecified) so the evaluator checks both strands.
-    // Only infer a definite strand when FR_STRAND / RF_STRAND is set.
+    // Only infer a definite strand when FR / RF is set.
     let flags = record.flags();
     let rev = flags.is_reverse_complemented();
-    if FR_STRAND || RF_STRAND {
-        let strand = if flags.is_segmented() {
+    if fr || rf {
+        // Treat read as paired if it has the SEGMENTED flag OR if --paired-end
+        // was passed (C++: is_paired = brec->isPaired() || PAIRED_END).
+        let is_paired = flags.is_segmented() || paired_end;
+        let strand = if is_paired {
             if flags.is_first_segment() {
-                if (RF_STRAND && rev) || (FR_STRAND && !rev) { '+' } else { '-' }
+                if (rf && rev) || (fr && !rev) { '+' } else { '-' }
             } else {
-                if (RF_STRAND && rev) || (FR_STRAND && !rev) { '-' } else { '+' }
+                if (rf && rev) || (fr && !rev) { '-' } else { '+' }
             }
-        } else if (RF_STRAND && rev) || (FR_STRAND && !rev) {
+        } else if (rf && rev) || (fr && !rev) {
             '+'
         } else {
             '-'
