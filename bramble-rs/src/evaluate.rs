@@ -602,6 +602,18 @@ pub fn left_clip_rescue(
             segment.qexon.start = gexon.start;
         }
 
+        // Match C++ build_left_clip_segment: after reversing the ksw2 CIGAR,
+        // the last op of the raw output is now the first op.  Discard leading D,
+        // convert leading I to soft-clip.
+        let mut cigar = result.cigar.clone();
+        if let Some(&(len, ref op)) = cigar.ops.first() {
+            match op {
+                CigarOp::DelOverride => { cigar.ops.remove(0); }
+                CigarOp::InsOverride => { cigar.ops[0] = (len, CigarOp::ClipOverride); }
+                _ => {}
+            }
+        }
+
         let left_clip = EvalSegment {
             is_valid: true,
             has_qexon: true,
@@ -610,7 +622,7 @@ pub fn left_clip_rescue(
             qexon: alignment::Segment { start: qstart, end: qend },
             status: ExonStatus::LeftClipExon,
             is_small_exon: remaining_qseq.len() as u32 <= config.small_exon_size,
-            cigar: result.cigar.clone(),
+            cigar,
             score: result.score,
         };
         tid_data.segments.insert(0, left_clip);
@@ -745,6 +757,20 @@ pub fn right_clip_rescue(
             segment.qexon.end = gexon.end;
         }
 
+        // Match C++ build_right_clip_segment: discard trailing D,
+        // convert trailing I to soft-clip.
+        let mut cigar = result.cigar.clone();
+        if let Some(&(len, ref op)) = cigar.ops.last() {
+            match op {
+                CigarOp::DelOverride => { cigar.ops.pop(); }
+                CigarOp::InsOverride => {
+                    let last_idx = cigar.ops.len() - 1;
+                    cigar.ops[last_idx] = (len, CigarOp::ClipOverride);
+                }
+                _ => {}
+            }
+        }
+
         let right_clip = EvalSegment {
             is_valid: true,
             has_qexon: true,
@@ -753,7 +779,7 @@ pub fn right_clip_rescue(
             qexon: alignment::Segment { start: qstart, end: qend },
             status: ExonStatus::RightClipExon,
             is_small_exon: remaining_qseq.len() as u32 <= config.small_exon_size,
-            cigar: result.cigar.clone(),
+            cigar,
             score: result.score,
         };
         tid_data.segments.push(right_clip);

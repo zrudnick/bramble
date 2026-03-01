@@ -312,13 +312,11 @@ pub fn project_group(
 
     let mut out = Vec::with_capacity(entries.len());
     for entry in &entries {
-        let is_read1 = entry.mate.is_none() || entry.is_first;
-        let nh = if is_read1 { new_nh } else { entry.nh };
+        let nh = new_nh;
         let insert_size = entry.mate.as_ref().map_or(0, |mate| {
             compute_template_length(
                 align_pos(&entry.align), mate.pos,
-                entry.read_len, mate.read_len,
-                entry.is_first, entry.same_transcript,
+                entry.read_len, entry.same_transcript,
             )
         });
         out.push(ProjectedAlignment {

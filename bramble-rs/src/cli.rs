@@ -43,10 +43,6 @@ pub struct Args {
     #[arg(short = 'S', long = "genome", value_name = "FASTA")]
     pub genome_fasta: Option<PathBuf>,
 
-    /// Library is paired-end (affects strand inference with --fr/--rf)
-    #[arg(long)]
-    pub paired_end: bool,
-
     /// Assume stranded library, first-strand protocol (read2 is sense)
     #[arg(long, conflicts_with = "rf")]
     pub fr: bool,

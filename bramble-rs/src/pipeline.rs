@@ -73,7 +73,6 @@ const FLAG_SECONDARY: u16    = 0x100;
 pub(crate) struct MateInfo {
     pub(crate) tid: Tid,
     pub(crate) pos: u32,
-    pub(crate) read_len: usize,
     pub(crate) is_reverse: bool,
 }
 
@@ -117,7 +116,6 @@ pub fn run(
     let evaluator = ReadEvaluator { long_reads: args.long, use_fasta: fasta.is_some() };
     let fr = args.fr;
     let rf = args.rf;
-    let paired_end = args.paired_end;
     let worker_count = args.threads as usize;
     let cap = worker_count.saturating_mul(4).max(8);
     let flush_records = args.unordered_flush_records.max(1);
@@ -144,7 +142,7 @@ pub fn run(
                     while let Ok(item) = rx_work.recv() {
                         for (_, group) in &item.groups {
                             let result = process_group_records(
-                                group, g2t_ref, evaluator_ref, fr, rf, paired_end, &mut ctx,
+                                group, g2t_ref, evaluator_ref, fr, rf, &mut ctx,
                             );
                             if let Ok(records) = result {
                                 buffered_groups += 1;
@@ -197,7 +195,7 @@ pub fn run(
             while let Ok(item) = rx_work.recv() {
                 for (_, group) in &item.groups {
                     let records = process_group_records(
-                        group, g2t_ref, evaluator_ref, fr, rf, paired_end, &mut ctx,
+                        group, g2t_ref, evaluator_ref, fr, rf, &mut ctx,
                     )?;
                     for record in &records {
                         writer.write(record)?;
@@ -225,7 +223,7 @@ pub fn run(
                         let mut results: Vec<(usize, Result<Vec<hts_bam::Record>>)> = Vec::with_capacity(item.groups.len());
                         for (idx, group) in &item.groups {
                             let result = process_group_records(
-                                group, g2t_ref, evaluator_ref, fr, rf, paired_end, &mut ctx,
+                                group, g2t_ref, evaluator_ref, fr, rf, &mut ctx,
                             );
                             results.push((*idx, result));
                         }
@@ -358,7 +356,6 @@ fn process_group_records(
     evaluator: &ReadEvaluator,
     fr: bool,
     rf: bool,
-    paired_end: bool,
     ctx: &mut EvalContext,
 ) -> Result<Vec<hts_bam::Record>> {
     let mut output: Vec<hts_bam::Record> = Vec::with_capacity(group.len() * 2);
@@ -381,7 +378,7 @@ fn process_group_records(
 
         let mate_refid = if rec.record.mtid() >= 0 { Some(rec.record.mtid() as RefId) } else { None };
 
-        let (strand, strand_from_tag) = splice_strand(&rec.record, fr, rf, paired_end);
+        let (strand, strand_from_tag) = splice_strand(&rec.record, fr, rf);
 
         let cigar_ops: Vec<(u32, CigarKind)> = rec.record.cigar().iter()
             .map(hts_cigar_to_kind)
@@ -471,13 +468,8 @@ fn process_group_records(
 
     assign_hit_indices(&mut entries);
     for entry in entries {
-        let is_read1 = entry.mate.is_none() || entry.is_first;
-        let nh = if is_read1 { new_nh } else { entry.nh };
-        let mapq = if is_read1 {
-            get_mapq(nh, evaluator.long_reads)
-        } else {
-            0
-        };
+        let nh = new_nh;
+        let mapq = get_mapq(nh, evaluator.long_reads);
         let rec = &group[entry.record_idx];
         let out = build_projected_record(&rec.record, &rec.decoded_seq, &entry, nh, mapq, evaluator.long_reads)?;
         output.push(out);
@@ -542,6 +534,22 @@ pub(crate) fn assign_hit_indices(entries: &mut [OutputEntry]) {
             entries[entry_idx].align.align.primary_alignment = entry_idx == best_idx;
         }
     }
+
+    // C++ marks BOTH mates in the best pair as primary. Propagate primary
+    // status: if a paired entry is primary, find its mate (same tid, opposite
+    // is_first/is_last) and mark it primary too.
+    let primary_tids: Vec<(Tid, bool)> = entries
+        .iter()
+        .filter(|e| e.align.align.primary_alignment && e.mate.is_some())
+        .map(|e| (e.tid, e.is_first))
+        .collect();
+    for (tid, is_first) in primary_tids {
+        for entry in entries.iter_mut() {
+            if entry.mate.is_some() && entry.tid == tid && entry.is_first != is_first {
+                entry.align.align.primary_alignment = true;
+            }
+        }
+    }
 }
 
 fn get_alignment_start(record: &hts_bam::Record) -> Option<u32> {
@@ -549,7 +557,7 @@ fn get_alignment_start(record: &hts_bam::Record) -> Option<u32> {
     if pos < 0 { None } else { Some((pos + 1) as u32) }
 }
 
-fn splice_strand(record: &hts_bam::Record, fr: bool, rf: bool, paired_end: bool) -> (char, bool) {
+fn splice_strand(record: &hts_bam::Record, fr: bool, rf: bool) -> (char, bool) {
     if let Some(c) = get_char_tag(record, b"XS") {
         let strand = c as char;
         if strand == '+' || strand == '-' {
@@ -571,9 +579,7 @@ fn splice_strand(record: &hts_bam::Record, fr: bool, rf: bool, paired_end: bool)
     // Only infer a definite strand when FR / RF is set.
     let rev = record.is_reverse();
     if fr || rf {
-        // Treat read as paired if it has the SEGMENTED flag OR if --paired-end
-        // was passed (C++: is_paired = brec->isPaired() || PAIRED_END).
-        let is_paired = record.is_paired() || paired_end;
+        let is_paired = record.is_paired();
         let strand = if is_paired {
             if record.is_first_in_template() {
                 if (rf && rev) || (fr && !rev) { '+' } else { '-' }
@@ -612,7 +618,9 @@ fn get_hit_index(record: &hts_bam::Record) -> i32 {
 }
 
 pub(crate) fn find_mate_pairs(reads: &[ReadEval]) -> Vec<(usize, usize)> {
-    let mut pending: HashMap<(u32, i32), usize> = HashMap::new();
+    // C++ create_read_id uses name+pos (no HI tag). Since all reads in a group
+    // share the same name, the key is just the alignment start position.
+    let mut pending: HashMap<u32, usize> = HashMap::new();
     let mut pairs = Vec::new();
 
     for (idx, read) in reads.iter().enumerate() {
@@ -633,14 +641,13 @@ pub(crate) fn find_mate_pairs(reads: &[ReadEval]) -> Vec<(usize, usize)> {
             continue;
         }
 
-        let key = (read_start, read.hit_index);
         if mate_start <= read_start {
-            let mate_key = (mate_start, read.hit_index);
+            let mate_key = mate_start;
             if let Some(mate_idx) = pending.remove(&mate_key) {
                 pairs.push((idx, mate_idx));
             }
         } else {
-            pending.entry(key).or_insert(idx);
+            pending.entry(read_start).or_insert(idx);
         }
     }
 
@@ -701,13 +708,11 @@ pub(crate) fn build_paired_groups(read: &ReadEval, mate: &ReadEval) -> Vec<Vec<O
             let mate_info_for_read = MateInfo {
                 tid,
                 pos: align_pos(mate_match),
-                read_len: mate.read_len,
                 is_reverse: mate_match.align.is_reverse,
             };
             let mate_info_for_mate = MateInfo {
                 tid,
                 pos: align_pos(read_match),
-                read_len: read.read_len,
                 is_reverse: read_match.align.is_reverse,
             };
 
@@ -750,13 +755,11 @@ pub(crate) fn build_paired_groups(read: &ReadEval, mate: &ReadEval) -> Vec<Vec<O
         let mate_info_for_read = MateInfo {
             tid: m_tid,
             pos: align_pos(mate_match),
-            read_len: mate.read_len,
             is_reverse: mate_match.align.is_reverse,
         };
         let mate_info_for_mate = MateInfo {
             tid: r_tid,
             pos: align_pos(read_match),
-            read_len: read.read_len,
             is_reverse: read_match.align.is_reverse,
         };
 
@@ -819,32 +822,24 @@ pub(crate) fn align_pos(match_info: &ExonChainMatch) -> u32 {
 }
 
 pub(crate) fn compute_template_length(
-    pos: u32,
+    my_pos: u32,
     mate_pos: u32,
     read_len: usize,
-    mate_len: usize,
-    is_first: bool,
     same_transcript: bool,
 ) -> i32 {
     if !same_transcript {
         return 0;
     }
 
-    let pos = pos as i32;
+    let my_pos = my_pos as i32;
     let mate_pos = mate_pos as i32;
-    let read_len = read_len as i32;
-    let mate_len = mate_len as i32;
+    let l_qseq = read_len as i32;
 
-    if is_first {
-        if mate_pos > pos {
-            (mate_pos + mate_len) - pos
-        } else {
-            -((pos + read_len) - mate_pos)
-        }
-    } else if pos > mate_pos {
-        -((pos + mate_len) - mate_pos)
+    // C++ SAM spec: positive for leftmost read, negative for rightmost
+    if my_pos <= mate_pos {
+        (mate_pos + l_qseq) - my_pos
     } else {
-        (mate_pos + read_len) - pos
+        -((my_pos + l_qseq) - mate_pos)
     }
 }
 
@@ -860,14 +855,10 @@ fn build_projected_record(
 
     let original_reverse = record.is_reverse();
     let has_sequence = record.seq_len() > 0;
-    // C++ approach: XOR FLAG_REVERSE when transcript strand is '-'.
-    // For long reads, reverse_action = (strand == '-').
-    // For short reads, reverse_action = original was reverse-mapped.
-    let reverse_action = if long_reads {
-        entry.align.align.strand == '-'
-    } else {
-        original_reverse && has_sequence
-    };
+    // C++ approach: reverse_complement_bam is called when strand == '-',
+    // which XORs FLAG_REVERSE and reverses seq/qual/cigar (if sequence present).
+    // This applies identically for both short and long reads.
+    let reverse_action = entry.align.align.strand == '-';
     let output_reverse = original_reverse ^ reverse_action;
 
     // Build flags via u16 bit manipulation
@@ -900,8 +891,10 @@ fn build_projected_record(
         cigar_ops.0.reverse();
     }
 
-    // If reverse_action, we need to set seq+qual+cigar together
-    if reverse_action {
+    // If reverse_action, we need to set seq+qual+cigar together.
+    // If sequence is absent (l_qseq <= 0), C++ just XORs the flag without
+    // touching seq/qual — we only need to set the cigar.
+    if reverse_action && has_sequence {
         let mut seq = decoded_seq.to_vec();
         let raw_qual = record.qual();
         let qual_missing = raw_qual.first().copied() == Some(255);
@@ -923,7 +916,12 @@ fn build_projected_record(
     out.set_flags(flags);
 
     if let Some(mate) = entry.mate.as_ref() {
-        flags |= FLAG_PAIRED | FLAG_PROPER_PAIR;
+        flags |= FLAG_PAIRED;
+        if entry.same_transcript {
+            flags |= FLAG_PROPER_PAIR;
+        } else {
+            flags &= !FLAG_PROPER_PAIR;
+        }
         if entry.is_first { flags |= FLAG_READ1; }
         if entry.is_last { flags |= FLAG_READ2; }
         if mate.is_reverse {
@@ -939,8 +937,6 @@ fn build_projected_record(
             pos0,
             mate.pos,
             entry.read_len,
-            mate.read_len,
-            entry.is_first,
             entry.same_transcript,
         ) as i64);
     } else {
