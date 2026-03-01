@@ -1149,24 +1149,16 @@ fn update_cigar_hts(
 fn update_cigar_ops(real_ops: &[SamCigarOp], ideal: &crate::evaluate::Cigar) -> (SamCigar, i32) {
     let (front_hard, front_soft) = front_clip_lengths(real_ops);
 
-    let mut real_expanded = expand_real_cigar(real_ops);
+    let real_expanded = expand_real_cigar(real_ops);
     let ideal_runs = ideal_runs(ideal);
     let merged_ideal = merge_indels(&ideal_runs);
-    let mut ideal_expanded = expand_runs(&merged_ideal);
+    let mut ideal_expanded = expand_runs(&merged_ideal);  // mut for pad_ideal_for_leading_clips
 
     pad_ideal_for_leading_clips(&mut ideal_expanded, front_hard, front_soft);
-    align_expanded_cigars(&mut real_expanded, &mut ideal_expanded);
-
-    let max_len = real_expanded.len().max(ideal_expanded.len());
-    let mut merged: Vec<char> = Vec::with_capacity(max_len);
-    for i in 0..max_len {
-        let real_op = real_expanded.get(i).copied().unwrap_or('*');
-        let ideal_op = ideal_expanded.get(i).copied().unwrap_or('*');
-        merged.push(merge_ops(real_op, ideal_op));
-    }
+    let merged = align_and_merge(&real_expanded, &ideal_expanded);
 
     let mut nm = 0i32;
-    let compressed = compress_cigar(&merged, &mut nm);
+    let compressed = compress_cigar(merged, &mut nm);
     let final_runs = merge_indels(&compressed);
     let cigar = runs_to_sam_cigar(&final_runs);
 
@@ -1202,64 +1194,68 @@ fn front_clip_lengths(ops: &[SamCigarOp]) -> (u32, u32) {
     (hard, soft)
 }
 
-fn expand_real_cigar(ops: &[SamCigarOp]) -> Vec<char> {
-    let mut expanded = Vec::new();
+fn expand_real_cigar(ops: &[SamCigarOp]) -> Vec<u8> {
+    let total_len: usize = ops.iter()
+        .filter(|op| op.kind() != CigarKind::Skip)
+        .map(|op| op.len())
+        .sum();
+    let mut expanded = Vec::with_capacity(total_len);
     for op in ops {
         if op.kind() == CigarKind::Skip {
             continue;
         }
-        let ch = cigar_kind_to_char(op.kind());
+        let ch = cigar_kind_to_byte(op.kind());
         expanded.extend(std::iter::repeat_n(ch, op.len()));
     }
     expanded
 }
 
-fn cigar_kind_to_char(kind: CigarKind) -> char {
+fn cigar_kind_to_byte(kind: CigarKind) -> u8 {
     match kind {
-        CigarKind::Match => 'M',
-        CigarKind::Insertion => 'I',
-        CigarKind::Deletion => 'D',
-        CigarKind::Skip => 'N',
-        CigarKind::SoftClip => 'S',
-        CigarKind::HardClip => 'H',
-        CigarKind::Pad => 'P',
-        CigarKind::SequenceMatch => '=',
-        CigarKind::SequenceMismatch => 'X',
+        CigarKind::Match => b'M',
+        CigarKind::Insertion => b'I',
+        CigarKind::Deletion => b'D',
+        CigarKind::Skip => b'N',
+        CigarKind::SoftClip => b'S',
+        CigarKind::HardClip => b'H',
+        CigarKind::Pad => b'P',
+        CigarKind::SequenceMatch => b'=',
+        CigarKind::SequenceMismatch => b'X',
     }
 }
 
-fn ideal_runs(cigar: &crate::evaluate::Cigar) -> Vec<(u32, char)> {
-    let mut runs = Vec::new();
+fn ideal_runs(cigar: &crate::evaluate::Cigar) -> Vec<(u32, u8)> {
+    let mut runs = Vec::with_capacity(cigar.ops.len());
     for (len, op) in cigar.ops.iter() {
         if *len == 0 {
             continue;
         }
         let ch = match op {
-            CigarOp::Match => 'M',
-            CigarOp::Ins => 'I',
-            CigarOp::Del => 'D',
-            CigarOp::RefSkip => 'N',
-            CigarOp::SoftClip => 'S',
-            CigarOp::HardClip => 'H',
-            CigarOp::Pad => 'P',
-            CigarOp::Equal => '=',
-            CigarOp::Diff => 'X',
-            CigarOp::MatchOverride => ',',
-            CigarOp::DelOverride => '.',
-            CigarOp::InsOverride => '/',
-            CigarOp::ClipOverride => ';',
+            CigarOp::Match => b'M',
+            CigarOp::Ins => b'I',
+            CigarOp::Del => b'D',
+            CigarOp::RefSkip => b'N',
+            CigarOp::SoftClip => b'S',
+            CigarOp::HardClip => b'H',
+            CigarOp::Pad => b'P',
+            CigarOp::Equal => b'=',
+            CigarOp::Diff => b'X',
+            CigarOp::MatchOverride => b',',
+            CigarOp::DelOverride => b'.',
+            CigarOp::InsOverride => b'/',
+            CigarOp::ClipOverride => b';',
         };
         runs.push((*len, ch));
     }
     runs
 }
 
-fn merge_indels(runs: &[(u32, char)]) -> Vec<(u32, char)> {
-    let mut result: Vec<(u32, char)> = Vec::new();
+fn merge_indels(runs: &[(u32, u8)]) -> Vec<(u32, u8)> {
+    let mut result: Vec<(u32, u8)> = Vec::with_capacity(runs.len());
     let mut i_count: u32 = 0;
     let mut d_count: u32 = 0;
 
-    let push_run = |out: &mut Vec<(u32, char)>, len: u32, op: char| {
+    let push_run = |out: &mut Vec<(u32, u8)>, len: u32, op: u8| {
         if len == 0 {
             return;
         }
@@ -1272,30 +1268,30 @@ fn merge_indels(runs: &[(u32, char)]) -> Vec<(u32, char)> {
         }
     };
 
-    let flush = |out: &mut Vec<(u32, char)>, i_count: &mut u32, d_count: &mut u32| {
+    let flush = |out: &mut Vec<(u32, u8)>, i_count: &mut u32, d_count: &mut u32| {
         if *i_count == 0 && *d_count == 0 {
             return;
         }
         let overlap = (*i_count).min(*d_count);
         if overlap > 0 {
-            push_run(out, overlap, 'M');
+            push_run(out, overlap, b'M');
             *i_count -= overlap;
             *d_count -= overlap;
         }
         if *i_count > 0 {
-            push_run(out, *i_count, 'I');
+            push_run(out, *i_count, b'I');
         }
         if *d_count > 0 {
-            push_run(out, *d_count, 'D');
+            push_run(out, *d_count, b'D');
         }
         *i_count = 0;
         *d_count = 0;
     };
 
     for (len, op) in runs.iter().copied() {
-        if op == 'I' {
+        if op == b'I' {
             i_count += len;
-        } else if op == 'D' {
+        } else if op == b'D' {
             d_count += len;
         } else {
             flush(&mut result, &mut i_count, &mut d_count);
@@ -1307,15 +1303,16 @@ fn merge_indels(runs: &[(u32, char)]) -> Vec<(u32, char)> {
     result
 }
 
-fn expand_runs(runs: &[(u32, char)]) -> Vec<char> {
-    let mut expanded = Vec::new();
+fn expand_runs(runs: &[(u32, u8)]) -> Vec<u8> {
+    let total_len: usize = runs.iter().map(|(len, _)| *len as usize).sum();
+    let mut expanded = Vec::with_capacity(total_len);
     for (len, op) in runs {
         expanded.extend(std::iter::repeat_n(*op, *len as usize));
     }
     expanded
 }
 
-fn pad_ideal_for_leading_clips(ideal: &mut Vec<char>, front_hard: u32, front_soft: u32) {
+fn pad_ideal_for_leading_clips(ideal: &mut Vec<u8>, front_hard: u32, front_soft: u32) {
     let total_padding = front_hard.saturating_add(front_soft);
     if total_padding == 0 {
         return;
@@ -1323,27 +1320,29 @@ fn pad_ideal_for_leading_clips(ideal: &mut Vec<char>, front_hard: u32, front_sof
 
     let mut padded = Vec::with_capacity(total_padding as usize + ideal.len());
 
-    padded.extend(std::iter::repeat_n('_', front_hard as usize));
+    padded.extend(std::iter::repeat_n(b'_', front_hard as usize));
 
     for i in front_hard..front_soft {
         let idx = i as usize;
-        if idx < ideal.len() && matches!(ideal[idx], ',' | '.' | '/' | ';') {
+        if idx < ideal.len() && matches!(ideal[idx], b',' | b'.' | b'/' | b';') {
             continue;
         }
-        padded.push('_');
+        padded.push(b'_');
     }
 
     padded.extend_from_slice(ideal);
     *ideal = padded;
 }
 
-fn align_expanded_cigars(real: &mut Vec<char>, ideal: &mut Vec<char>) {
-    let mut aligned_real = Vec::new();
-    let mut aligned_ideal = Vec::new();
+/// Align the expanded real and ideal CIGARs and merge in a single pass,
+/// avoiding two intermediate `Vec<u8>` allocations.
+fn align_and_merge(real: &[u8], ideal: &[u8]) -> Vec<u8> {
+    let max_len = real.len() + ideal.len();
+    let mut merged = Vec::with_capacity(max_len);
 
     let mut real_pos = 0usize;
     let mut ideal_pos = 0usize;
-    let max_iterations = (real.len() + ideal.len()) * 2;
+    let max_iterations = max_len * 2;
     let mut iterations = 0usize;
 
     while real_pos < real.len() || ideal_pos < ideal.len() {
@@ -1352,167 +1351,165 @@ fn align_expanded_cigars(real: &mut Vec<char>, ideal: &mut Vec<char>) {
             break;
         }
 
+        let (r, i);
         if real_pos >= real.len() {
-            aligned_real.push('_');
-            aligned_ideal.push(ideal[ideal_pos]);
+            r = b'_';
+            i = ideal[ideal_pos];
             ideal_pos += 1;
-            continue;
-        }
-        if ideal_pos >= ideal.len() {
-            aligned_real.push(real[real_pos]);
-            aligned_ideal.push('_');
+        } else if ideal_pos >= ideal.len() {
+            r = real[real_pos];
+            i = b'_';
             real_pos += 1;
-            continue;
-        }
-
-        let r = real[real_pos];
-        let i = ideal[ideal_pos];
-
-        if i == '.' {
-            aligned_real.push('_');
-            aligned_ideal.push(i);
-            ideal_pos += 1;
-        } else if r == 'I' {
-            aligned_real.push(r);
-            aligned_ideal.push('_');
-            real_pos += 1;
-        } else if i == 'D' {
-            aligned_real.push('_');
-            aligned_ideal.push(i);
-            ideal_pos += 1;
         } else {
-            aligned_real.push(r);
-            aligned_ideal.push(i);
-            real_pos += 1;
-            ideal_pos += 1;
+            let rb = real[real_pos];
+            let ib = ideal[ideal_pos];
+
+            if ib == b'.' {
+                r = b'_';
+                i = ib;
+                ideal_pos += 1;
+            } else if rb == b'I' {
+                r = rb;
+                i = b'_';
+                real_pos += 1;
+            } else if ib == b'D' {
+                r = b'_';
+                i = ib;
+                ideal_pos += 1;
+            } else {
+                r = rb;
+                i = ib;
+                real_pos += 1;
+                ideal_pos += 1;
+            }
         }
+
+        merged.push(merge_ops(r, i));
     }
 
-    *real = aligned_real;
-    *ideal = aligned_ideal;
+    merged
 }
 
-fn merge_ops(real_op: char, ideal_op: char) -> char {
-    if real_op == 'I' && ideal_op == '_' {
-        return 'I';
+fn merge_ops(real_op: u8, ideal_op: u8) -> u8 {
+    if real_op == b'I' && ideal_op == b'_' {
+        return b'I';
     }
 
-    if (real_op == 'M' || real_op == 'S') && ideal_op == ';' {
-        return 'S';
+    if (real_op == b'M' || real_op == b'S') && ideal_op == b';' {
+        return b'S';
     }
-    if (real_op == 'M' || real_op == 'S') && ideal_op == ',' {
-        return 'M';
+    if (real_op == b'M' || real_op == b'S') && ideal_op == b',' {
+        return b'M';
     }
-    if (real_op == 'M' || real_op == 'S') && ideal_op == '/' {
-        return 'I';
+    if (real_op == b'M' || real_op == b'S') && ideal_op == b'/' {
+        return b'I';
     }
-    if (real_op == 'M' || real_op == 'S') && ideal_op == '.' {
-        return 'D';
-    }
-
-    if real_op == 'D' && ideal_op == ';' {
-        return '_';
-    }
-    if real_op == 'D' && ideal_op == ',' {
-        return 'D';
-    }
-    if real_op == 'D' && ideal_op == '/' {
-        return '_';
-    }
-    if real_op == 'D' && ideal_op == '.' {
-        return '_';
+    if (real_op == b'M' || real_op == b'S') && ideal_op == b'.' {
+        return b'D';
     }
 
-    if real_op == 'I' && ideal_op == ';' {
-        return 'S';
+    if real_op == b'D' && ideal_op == b';' {
+        return b'_';
     }
-    if real_op == 'I' && ideal_op == ',' {
-        return 'I';
+    if real_op == b'D' && ideal_op == b',' {
+        return b'D';
     }
-    if real_op == 'D' && ideal_op == '/' {
-        return '_';
+    if real_op == b'D' && ideal_op == b'/' {
+        return b'_';
     }
-    if real_op == 'I' && ideal_op == '.' {
-        return '_';
-    }
-
-    if ideal_op == ';' {
-        return 'S';
-    }
-    if ideal_op == ',' {
-        return 'M';
-    }
-    if ideal_op == '/' {
-        return 'I';
-    }
-    if ideal_op == '.' {
-        return 'D';
+    if real_op == b'D' && ideal_op == b'.' {
+        return b'_';
     }
 
-    if ideal_op == '*' {
+    if real_op == b'I' && ideal_op == b';' {
+        return b'S';
+    }
+    if real_op == b'I' && ideal_op == b',' {
+        return b'I';
+    }
+    if real_op == b'D' && ideal_op == b'/' {
+        return b'_';
+    }
+    if real_op == b'I' && ideal_op == b'.' {
+        return b'_';
+    }
+
+    if ideal_op == b';' {
+        return b'S';
+    }
+    if ideal_op == b',' {
+        return b'M';
+    }
+    if ideal_op == b'/' {
+        return b'I';
+    }
+    if ideal_op == b'.' {
+        return b'D';
+    }
+
+    if ideal_op == b'*' {
         return real_op;
     }
-    if real_op == '*' {
+    if real_op == b'*' {
         return ideal_op;
     }
 
-    if real_op == 'H' {
-        return 'H';
+    if real_op == b'H' {
+        return b'H';
     }
 
-    if real_op == 'D' && ideal_op == 'S' {
-        return '_';
+    if real_op == b'D' && ideal_op == b'S' {
+        return b'_';
     }
-    if real_op == 'I' && ideal_op == 'S' {
-        return 'S';
+    if real_op == b'I' && ideal_op == b'S' {
+        return b'S';
     }
-    if real_op == 'D' && ideal_op == 'I' {
-        return '_';
+    if real_op == b'D' && ideal_op == b'I' {
+        return b'_';
     }
 
-    if ideal_op == 'S' || ideal_op == 'D' || ideal_op == 'I' {
+    if ideal_op == b'S' || ideal_op == b'D' || ideal_op == b'I' {
         return ideal_op;
     }
 
-    if real_op == 'S' || real_op == 'D' || real_op == 'I' {
+    if real_op == b'S' || real_op == b'D' || real_op == b'I' {
         return real_op;
     }
 
-    if ideal_op == 'M' || ideal_op == '=' || ideal_op == 'X' {
-        return 'M';
+    if ideal_op == b'M' || ideal_op == b'=' || ideal_op == b'X' {
+        return b'M';
     }
-    if real_op == 'M' || real_op == '=' || real_op == 'X' {
-        return 'M';
+    if real_op == b'M' || real_op == b'=' || real_op == b'X' {
+        return b'M';
     }
 
-    if real_op == '_' {
+    if real_op == b'_' {
         return ideal_op;
     }
-    if ideal_op == '_' {
+    if ideal_op == b'_' {
         return real_op;
     }
 
-    if real_op != '*' {
+    if real_op != b'*' {
         real_op
     } else {
         ideal_op
     }
 }
 
-fn compress_cigar(expanded: &[char], nm: &mut i32) -> Vec<(u32, char)> {
-    let mut cleaned: Vec<char> = expanded.to_vec();
+fn compress_cigar(mut cleaned: Vec<u8>, nm: &mut i32) -> Vec<(u32, u8)> {
     if cleaned.len() >= 3 {
         for i in 1..(cleaned.len() - 1) {
-            if cleaned[i] == 'I' {
+            if cleaned[i] == b'I' {
                 let mut has_s_before = false;
                 let mut j = i;
                 while j > 0 {
                     let c = cleaned[j - 1];
-                    if c == 'S' {
+                    if c == b'S' {
                         has_s_before = true;
                         break;
                     }
-                    if c != 'I' {
+                    if c != b'I' {
                         break;
                     }
                     j -= 1;
@@ -1522,18 +1519,18 @@ fn compress_cigar(expanded: &[char], nm: &mut i32) -> Vec<(u32, char)> {
                 let mut j = i;
                 while j + 1 < cleaned.len() {
                     let c = cleaned[j + 1];
-                    if c == 'S' {
+                    if c == b'S' {
                         has_s_after = true;
                         break;
                     }
-                    if c != 'I' {
+                    if c != b'I' {
                         break;
                     }
                     j += 1;
                 }
 
                 if has_s_before && has_s_after {
-                    cleaned[i] = 'S';
+                    cleaned[i] = b'S';
                 }
             }
         }
@@ -1542,15 +1539,15 @@ fn compress_cigar(expanded: &[char], nm: &mut i32) -> Vec<(u32, char)> {
     let mut runs = Vec::new();
     let mut i = 0usize;
     while i < cleaned.len() {
-        if cleaned[i] == '_' {
+        if cleaned[i] == b'_' {
             i += 1;
             continue;
         }
 
-        let op_char = cleaned[i];
+        let op_byte = cleaned[i];
         let mut run_len = 0u32;
-        while i < cleaned.len() && (cleaned[i] == op_char || cleaned[i] == '_') {
-            if cleaned[i] == op_char {
+        while i < cleaned.len() && (cleaned[i] == op_byte || cleaned[i] == b'_') {
+            if cleaned[i] == op_byte {
                 run_len += 1;
             }
             i += 1;
@@ -1560,30 +1557,30 @@ fn compress_cigar(expanded: &[char], nm: &mut i32) -> Vec<(u32, char)> {
             continue;
         }
 
-        let out_char = match op_char {
-            'M' | '=' | 'X' => 'M',
-            'I' => {
+        let out_byte = match op_byte {
+            b'M' | b'=' | b'X' => b'M',
+            b'I' => {
                 *nm += run_len as i32;
-                'I'
+                b'I'
             }
-            'D' => {
+            b'D' => {
                 *nm += run_len as i32;
-                'D'
+                b'D'
             }
-            'S' => 'S',
-            'H' => 'H',
-            'N' => 'N',
-            'P' => 'P',
+            b'S' => b'S',
+            b'H' => b'H',
+            b'N' => b'N',
+            b'P' => b'P',
             _ => continue,
         };
 
-        runs.push((run_len, out_char));
+        runs.push((run_len, out_byte));
     }
 
     runs
 }
 
-fn runs_to_sam_cigar(runs: &[(u32, char)]) -> SamCigar {
+fn runs_to_sam_cigar(runs: &[(u32, u8)]) -> SamCigar {
     let ops: Vec<SamCigarOp> = runs
         .iter()
         .filter_map(|(len, op)| {
@@ -1591,15 +1588,15 @@ fn runs_to_sam_cigar(runs: &[(u32, char)]) -> SamCigar {
                 return None;
             }
             let kind = match op {
-                'M' => CigarKind::Match,
-                'I' => CigarKind::Insertion,
-                'D' => CigarKind::Deletion,
-                'N' => CigarKind::Skip,
-                'S' => CigarKind::SoftClip,
-                'H' => CigarKind::HardClip,
-                'P' => CigarKind::Pad,
-                '=' => CigarKind::SequenceMatch,
-                'X' => CigarKind::SequenceMismatch,
+                b'M' => CigarKind::Match,
+                b'I' => CigarKind::Insertion,
+                b'D' => CigarKind::Deletion,
+                b'N' => CigarKind::Skip,
+                b'S' => CigarKind::SoftClip,
+                b'H' => CigarKind::HardClip,
+                b'P' => CigarKind::Pad,
+                b'=' => CigarKind::SequenceMatch,
+                b'X' => CigarKind::SequenceMismatch,
                 _ => return None,
             };
             Some(SamCigarOp::new(kind, *len as usize))

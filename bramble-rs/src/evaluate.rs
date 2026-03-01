@@ -31,6 +31,7 @@ pub struct ReadEvaluationConfig {
     pub similarity_threshold: f32,
     #[allow(dead_code)]
     pub print: bool,
+    #[allow(dead_code)]
     pub name: Vec<u8>,
     pub soft_clips: bool,
     pub strict: bool,
@@ -269,6 +270,8 @@ pub(crate) struct EvalContext {
     pub(crate) candidate_tids: HashSet<Tid>,
     /// Scratch buffer for guide exon queries.
     pub(crate) guide_exons: HashMap<Tid, GuideExon>,
+    /// Reusable scratch buffer for tid keys during evaluate_exon_chains.
+    tids_buf: Vec<Tid>,
 }
 
 impl EvalContext {
@@ -278,6 +281,7 @@ impl EvalContext {
             data: HashMap::new(),
             candidate_tids: HashSet::new(),
             guide_exons: HashMap::new(),
+            tids_buf: Vec::new(),
         }
     }
 }
@@ -776,21 +780,23 @@ pub fn correct_for_gaps(
     refid: RefId,
     long_reads: bool,
 ) {
-    let mut out: Vec<EvalSegment> = Vec::with_capacity(tid_data.segments.len() + 4);
+    // Take ownership of segments to avoid cloning each one.
+    let segments = std::mem::take(&mut tid_data.segments);
+    let mut out: Vec<EvalSegment> = Vec::with_capacity(segments.len() + 4);
     let mut prev_gexon: Option<GuideExon> = None;
 
-    for segment in tid_data.segments.iter() {
+    for segment in segments {
         if tid_data.elim {
             return;
         }
         if !segment.has_gexon {
-            out.push(segment.clone());
+            out.push(segment);
             continue;
         }
 
-        let gexon = segment.gexon.clone().unwrap();
+        let gexon = segment.gexon.as_ref().unwrap();
 
-        if let Some(prev) = prev_gexon.clone() {
+        if let Some(ref prev) = prev_gexon {
             let gap = gexon.exon_id.saturating_sub(prev.exon_id);
 
             if !long_reads {
@@ -840,8 +846,8 @@ pub fn correct_for_gaps(
             }
         }
 
-        prev_gexon = Some(gexon.clone());
-        out.push(segment.clone());
+        prev_gexon = segment.gexon.clone();
+        out.push(segment);
     }
 
     tid_data.segments = out;
@@ -1038,6 +1044,7 @@ fn deterministic_index(name: &[u8], n: usize) -> usize {
 pub fn filter_by_similarity(
     matches: &mut HashMap<Tid, ExonChainMatch>,
     config: &ReadEvaluationConfig,
+    name: &[u8],
 ) {
     matches.retain(|_tid, m| {
         let similarity = if m.total_operations > 0.0 {
@@ -1097,7 +1104,7 @@ pub fn filter_by_similarity(
     }
 
     // Tie or no unique best
-    let idx = deterministic_index(&config.name, tids.len());
+    let idx = deterministic_index(name, tids.len());
     if let Some(tid) = tids.get(idx)
         && let Some(m) = matches.get_mut(tid)
     {
@@ -1109,7 +1116,7 @@ pub fn evaluate_exon_chains(
     read: &ReadAln,
     _id: ReadId,
     g2t: &G2TTree,
-    mut config: ReadEvaluationConfig,
+    config: ReadEvaluationConfig,
     long_reads: bool,
     shared_seq: Option<&[u8]>,
     ctx: &mut EvalContext,
@@ -1117,7 +1124,6 @@ pub fn evaluate_exon_chains(
     ctx.matches.clear();
     let exon_count = read.segs.len();
     let refid = read.refid;
-    config.name = read.name.clone();
 
     let (has_left_clip, has_right_clip, n_left_clip, n_right_clip) = if long_reads {
         get_clips(read, &config).unwrap_or((false, false, 0, 0))
@@ -1158,8 +1164,9 @@ pub fn evaluate_exon_chains(
             continue;
         }
 
-        let tids: Vec<Tid> = ctx.data.keys().copied().collect();
-        for tid in &tids {
+        ctx.tids_buf.clear();
+        ctx.tids_buf.extend(ctx.data.keys().copied());
+        for tid in &ctx.tids_buf {
             let td = ctx.data.get_mut(tid).unwrap();
             if td.elim {
                 continue;
@@ -1168,7 +1175,7 @@ pub fn evaluate_exon_chains(
         }
 
         if long_reads && config.use_fasta {
-            for tid in &tids {
+            for tid in &ctx.tids_buf {
                 let td = ctx.data.get_mut(tid).unwrap();
                 if td.elim {
                     continue;
@@ -1366,13 +1373,13 @@ pub fn evaluate_exon_chains(
             }
 
             if !td.elim {
-                ctx.matches.insert(*tid, td.match_info.clone());
+                ctx.matches.insert(*tid, std::mem::take(&mut td.match_info));
             }
         }
     }
 
     if !ctx.matches.is_empty() {
-        filter_by_similarity(&mut ctx.matches, &config);
+        filter_by_similarity(&mut ctx.matches, &config, &read.name);
     }
 }
 #[derive(Debug, Default)]
