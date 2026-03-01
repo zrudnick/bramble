@@ -319,7 +319,7 @@ pub fn get_clips(
     let mut n_left_clip = 0;
     let mut n_right_clip = 0;
 
-    let ops: Vec<_> = read.cigar_ops.to_vec();
+    let ops = &read.cigar_ops;
 
     if ops.is_empty() {
         return Ok((false, false, 0, 0));
