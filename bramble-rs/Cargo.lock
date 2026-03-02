@@ -672,8 +672,9 @@ dependencies = [
 
 [[package]]
 name = "ksw2rs"
-version = "0.1.0"
-source = "git+https://github.com/COMBINE-lab/ksw2rs#a5d1a98751cf79dfe01c8c35fa03c5a99ac6824e"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d258672402a26dac1a27a1bcd0c430d674716588fa242042fb6e7fe40a90dae"
 dependencies = [
  "cc",
 ]
