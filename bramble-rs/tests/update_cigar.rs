@@ -90,11 +90,11 @@ fn update_cigar_preserves_leading_hard_clip() {
     );
 }
 
-/// Adjacent I+D in the ideal cigar should be merged into M (they cancel out).
-/// Ideal: 5M 3I 3D 5M  →  merge_indels collapses the I+D into 3M → effective 13M.
-/// Real: 10M (shorter than the expanded ideal; extra M's come from ideal).
+/// Adjacent I+D in the ideal cigar are kept separate (matching C++ behavior).
+/// Ideal: 5M 3I 3D 5M  →  output preserves I and D as-is.
+/// Real: 10M (shorter than the expanded ideal; extra ops come from ideal).
 #[test]
-fn update_cigar_adjacent_indel_in_ideal_merges_to_match() {
+fn update_cigar_adjacent_indel_preserved() {
     let real = vec![SamCigarOp::new(CigarKind::Match, 10)];
     let ideal = build_ideal(&[
         (5, CigarOp::Match),
@@ -104,8 +104,13 @@ fn update_cigar_adjacent_indel_in_ideal_merges_to_match() {
     ]);
 
     let (cigar, nm) = update_cigar_for_test(real, ideal);
-    assert_eq!(nm, 0);
-    assert_eq!(cigar_kinds(&cigar), vec![(CigarKind::Match, 13)]);
+    assert_eq!(nm, 6);
+    assert_eq!(cigar_kinds(&cigar), vec![
+        (CigarKind::Match, 5),
+        (CigarKind::Insertion, 3),
+        (CigarKind::Deletion, 3),
+        (CigarKind::Match, 5),
+    ]);
 }
 
 /// A Skip (N / intron) operation in the real CIGAR is stripped during

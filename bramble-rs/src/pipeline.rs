@@ -1161,16 +1161,14 @@ fn update_cigar_ops(real_ops: &[SamCigarOp], ideal: &crate::evaluate::Cigar) -> 
 
     let real_expanded = expand_real_cigar(real_ops);
     let ideal_runs = ideal_runs(ideal);
-    let merged_ideal = merge_indels(&ideal_runs);
-    let mut ideal_expanded = expand_runs(&merged_ideal);  // mut for pad_ideal_for_leading_clips
+    let mut ideal_expanded = expand_runs(&ideal_runs);  // mut for pad_ideal_for_leading_clips
 
     pad_ideal_for_leading_clips(&mut ideal_expanded, front_hard, front_soft);
     let merged = align_and_merge(&real_expanded, &ideal_expanded);
 
     let mut nm = 0i32;
     let compressed = compress_cigar(merged, &mut nm);
-    let final_runs = merge_indels(&compressed);
-    let cigar = runs_to_sam_cigar(&final_runs);
+    let cigar = runs_to_sam_cigar(&compressed);
 
     (cigar, nm)
 }
@@ -1260,58 +1258,7 @@ fn ideal_runs(cigar: &crate::evaluate::Cigar) -> Vec<(u32, u8)> {
     runs
 }
 
-fn merge_indels(runs: &[(u32, u8)]) -> Vec<(u32, u8)> {
-    let mut result: Vec<(u32, u8)> = Vec::with_capacity(runs.len());
-    let mut i_count: u32 = 0;
-    let mut d_count: u32 = 0;
 
-    let push_run = |out: &mut Vec<(u32, u8)>, len: u32, op: u8| {
-        if len == 0 {
-            return;
-        }
-        if let Some(last) = out.last_mut()
-            && last.1 == op
-        {
-            last.0 = last.0.saturating_add(len);
-        } else {
-            out.push((len, op));
-        }
-    };
-
-    let flush = |out: &mut Vec<(u32, u8)>, i_count: &mut u32, d_count: &mut u32| {
-        if *i_count == 0 && *d_count == 0 {
-            return;
-        }
-        let overlap = (*i_count).min(*d_count);
-        if overlap > 0 {
-            push_run(out, overlap, b'M');
-            *i_count -= overlap;
-            *d_count -= overlap;
-        }
-        if *i_count > 0 {
-            push_run(out, *i_count, b'I');
-        }
-        if *d_count > 0 {
-            push_run(out, *d_count, b'D');
-        }
-        *i_count = 0;
-        *d_count = 0;
-    };
-
-    for (len, op) in runs.iter().copied() {
-        if op == b'I' {
-            i_count += len;
-        } else if op == b'D' {
-            d_count += len;
-        } else {
-            flush(&mut result, &mut i_count, &mut d_count);
-            push_run(&mut result, len, op);
-        }
-    }
-    flush(&mut result, &mut i_count, &mut d_count);
-
-    result
-}
 
 fn expand_runs(runs: &[(u32, u8)]) -> Vec<u8> {
     let total_len: usize = runs.iter().map(|(len, _)| *len as usize).sum();
@@ -1437,45 +1384,7 @@ fn merge_ops(real_op: u8, ideal_op: u8) -> u8 {
     }
 }
 
-fn compress_cigar(mut cleaned: Vec<u8>, nm: &mut i32) -> Vec<(u32, u8)> {
-    if cleaned.len() >= 3 {
-        for i in 1..(cleaned.len() - 1) {
-            if cleaned[i] == b'I' {
-                let mut has_s_before = false;
-                let mut j = i;
-                while j > 0 {
-                    let c = cleaned[j - 1];
-                    if c == b'S' {
-                        has_s_before = true;
-                        break;
-                    }
-                    if c != b'I' {
-                        break;
-                    }
-                    j -= 1;
-                }
-
-                let mut has_s_after = false;
-                let mut j = i;
-                while j + 1 < cleaned.len() {
-                    let c = cleaned[j + 1];
-                    if c == b'S' {
-                        has_s_after = true;
-                        break;
-                    }
-                    if c != b'I' {
-                        break;
-                    }
-                    j += 1;
-                }
-
-                if has_s_before && has_s_after {
-                    cleaned[i] = b'S';
-                }
-            }
-        }
-    }
-
+fn compress_cigar(cleaned: Vec<u8>, nm: &mut i32) -> Vec<(u32, u8)> {
     let mut runs = Vec::new();
     let mut i = 0usize;
     while i < cleaned.len() {
