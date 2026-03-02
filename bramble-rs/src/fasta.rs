@@ -1,8 +1,6 @@
 use anyhow::Result;
-use noodles::fasta;
+use needletail::parse_fastx_file;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::BufReader;
 use std::path::Path;
 
 #[derive(Debug, Default)]
@@ -12,14 +10,17 @@ pub struct FastaDb {
 
 impl FastaDb {
     pub fn load(path: &Path) -> Result<Self> {
-        let file = File::open(path)?;
-        let mut reader = fasta::io::Reader::new(BufReader::new(file));
+        let mut reader = parse_fastx_file(path)
+            .map_err(|e| anyhow::anyhow!("failed to open FASTA {}: {}", path.display(), e))?;
         let mut seqs: HashMap<String, Vec<u8>> = HashMap::new();
 
-        for result in reader.records() {
-            let record = result?;
-            let name = String::from_utf8_lossy(record.name()).to_string();
-            let seq = record.sequence().as_ref().to_vec();
+        while let Some(result) = reader.next() {
+            let record = result
+                .map_err(|e| anyhow::anyhow!("failed to parse FASTA record: {}", e))?;
+            let name = std::str::from_utf8(record.id())
+                .unwrap_or("")
+                .to_string();
+            let seq = record.seq().to_vec();
             seqs.insert(name, seq);
         }
 
