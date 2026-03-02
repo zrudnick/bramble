@@ -13,6 +13,7 @@ mod types;
 use anyhow::Result;
 use clap::Parser;
 use mimalloc::MiMalloc;
+use std::mem::ManuallyDrop;
 use tracing_subscriber::EnvFilter;
 
 #[global_allocator]
@@ -43,6 +44,16 @@ fn main() -> Result<()> {
     let mut bam = bam_input::open_bam(&args.in_bam)?;
     let g2t = g2t::build_g2t(&transcripts, &bam.refname_to_id, fasta.as_ref())?;
     let hts_header = header::build_hts_header(&transcripts);
+
+    // Optimization: wrap large data structures in ManuallyDrop so their
+    // destructors are skipped when main() returns.  The OS reclaims all
+    // process memory on exit, so running destructors for the g2t interval
+    // trees, FASTA database, and transcript list is pure overhead (~6% of
+    // wall time in profiling).
+    let g2t = ManuallyDrop::new(g2t);
+    let fasta = ManuallyDrop::new(fasta);
+    let _transcripts = ManuallyDrop::new(transcripts);
+
     let stats = pipeline::run(&args, &hts_header, &mut bam, &g2t, fasta.as_ref())?;
     tracing::info!(
         total_reads = stats.total_reads,
