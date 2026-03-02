@@ -428,14 +428,29 @@ fn process_group_records(
     let mut output_groups: Vec<Vec<OutputEntry>> = Vec::new();
 
     for (i, j) in pairs {
-        paired[i] = true;
-        paired[j] = true;
-
         let (r_idx, m_idx) = assign_pair_order(i, j, &read_evals);
         let read = &read_evals[r_idx];
         let mate = &read_evals[m_idx];
 
-        output_groups.extend(build_paired_groups(read, mate));
+        // Match C++ process_mate_pair logic. In C++, the lower-indexed record
+        // (first in BAM order, typically R1) is `this_read` and its mate is
+        // `mate_read`. If this_read is null (no matches), the function returns
+        // immediately and the mate's matches are lost. If mate_read is null,
+        // this_read is emitted as unpaired.
+        //
+        // assign_pair_order makes R1 = "read" and R2 = "mate", matching C++.
+        if read.matches.is_empty() {
+            // R1 has no matches → C++ returns immediately, both dropped
+        } else if mate.matches.is_empty() {
+            // R2 has no matches → C++ emits R1 as unpaired
+            output_groups.extend(build_unpaired_groups(read));
+        } else {
+            // Both have matches → try pairing; if it fails (case 5: no common
+            // transcripts, at least one multi-mapped), both are dropped
+            output_groups.extend(build_paired_groups(read, mate));
+        }
+        paired[i] = true;
+        paired[j] = true;
     }
 
     for (idx, read) in read_evals.iter().enumerate() {
@@ -647,7 +662,9 @@ pub(crate) fn find_mate_pairs(reads: &[ReadEval]) -> Vec<(usize, usize)> {
                 pairs.push((idx, mate_idx));
             }
         } else {
-            pending.entry(read_start).or_insert(idx);
+            // C++ uses hashread[key] = id which overwrites any existing entry
+            // at the same position. Match this by always inserting (not or_insert).
+            pending.insert(read_start, idx);
         }
     }
 
