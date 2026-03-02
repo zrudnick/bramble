@@ -634,6 +634,15 @@ namespace bramble {
     // validate record
     if (!b) return -1;
     if (b->core.l_qseq <= 0) {
+      // reverse cigar operations
+      uint32_t n_cigar = b->core.n_cigar;
+      uint32_t *cigar = bam_get_cigar(b);
+      for (uint32_t i = 0; i < n_cigar / 2; i++) {
+        uint32_t temp = cigar[i];
+        cigar[i] = cigar[n_cigar - 1 - i];
+        cigar[n_cigar - 1 - i] = temp;
+      }
+
       b->core.flag ^= BAM_FREVERSE;
       return 0;
     }

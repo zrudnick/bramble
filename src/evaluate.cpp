@@ -282,7 +282,7 @@ namespace bramble {
     for (i = 0; i < tl; ++i) ts[i] = c[(uint8_t)tseq[i]];
     for (i = 0; i < ql; ++i) qs[i] = c[(uint8_t)qseq[i]];
     
-    int flag = KSW_EZ_EXTZ_ONLY & KSW_EZ_APPROX_MAX & KSW_EZ_APPROX_DROP;
+    int flag = KSW_EZ_EXTZ_ONLY | KSW_EZ_APPROX_MAX | KSW_EZ_APPROX_DROP;
     ksw_extz2_sse(0, ql, qs, tl, ts, 5, mat, gapo, gape, -1, zdrop, 0, flag, &ez);
     
     result.score = ez.score;

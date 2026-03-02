@@ -336,25 +336,35 @@ namespace bramble {
       // Group reads with identical read names
       read_id_t start = id;
       const std::string& name = reads[id].brec->name();
-      id++; // prevent doing it twice
+
+      int seq_len = 0;
+      uint8_t* seq = nullptr;
+      bool found = false;
+
+      if (USE_FASTA) {
+        bam1_t* b = reads[id].brec->get_b();
+        seq_len = b->core.l_qseq;
+        if (seq_len > 0) {      
+          seq = bam_get_seq(b);
+          found = true;
+        }
+      }
+
+      id++;
 
       while (id < reads.size() && reads[id].brec->name() == name) {
+        if (USE_FASTA && !found) {
+          bam1_t* b = reads[id].brec->get_b();
+          seq_len = b->core.l_qseq;
+          if (seq_len > 0) { 
+            seq = bam_get_seq(b);
+            found = true;
+          }
+        }
         id++;
       }
+
       read_id_t end = id; // [start, end)
-
-      CReadAln &first = reads[start];
-
-      int seq_len;
-      uint8_t *seq;
-      if (LONG_READS) {
-        bam1_t* b = first.brec->get_b();
-        seq_len = b->core.l_qseq;
-        seq = bam_get_seq(b);
-      } else {
-        seq_len = 0;
-        seq = nullptr;
-      }
       
       // Process read groups
       bool dropped = true;
