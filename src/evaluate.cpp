@@ -308,9 +308,10 @@ namespace bramble {
 
   // Extracts the query sequence for left-clip rescue
   static std::string 
-  get_left_rescue_query(uint8_t *seq, uint32_t n_left_clip, 
+  get_left_rescue_query(uint8_t *seq, int seq_len, uint32_t n_left_clip,
                         uint32_t left_ins) {
     uint32_t total = n_left_clip + left_ins;
+    if ((int)total > seq_len) total = (uint32_t)seq_len;
     std::string q;
     q.reserve(total);
     for (uint32_t i = 0; i < total; i++)
@@ -424,7 +425,7 @@ namespace bramble {
     }
     auto &gexon = seg.gexon;
 
-    std::string qseq = get_left_rescue_query(seq, n_left_clip, gexon.left_ins);
+    std::string qseq = get_left_rescue_query(seq, seq_len, n_left_clip, gexon.left_ins);
 
     std::string gseq;
     std::vector<GuideExon> collected_exons;
@@ -462,6 +463,7 @@ namespace bramble {
   get_right_rescue_query(uint8_t *seq, int seq_len,
                         uint32_t n_right_clip, uint32_t right_ins) {
     uint32_t total = right_ins + n_right_clip;
+    if ((int)total > seq_len) total = (uint32_t)seq_len;
     int start = seq_len - (int)total;
     std::string q;
     q.reserve(total);

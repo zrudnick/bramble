@@ -4,6 +4,7 @@ use crate::fasta::FastaDb;
 use crate::types::{HashMap, HashMapExt, HashSet, HashSetExt, RefId, Tid};
 use anyhow::{anyhow, Result};
 use coitrees::{BasicCOITree, Interval, IntervalTree as CoitreeIntervalTree};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct IntervalData {
@@ -11,7 +12,7 @@ pub struct IntervalData {
     pub end: u32,
     pub idx: u8,
     pub pos_start: u32,
-    pub seq: String,
+    pub seq: Arc<[u8]>,
 
     pub has_prev: bool,
     pub has_next: bool,
@@ -30,7 +31,7 @@ pub struct GuideExon {
     pub pos: u32,
     pub pos_start: u32,
     pub exon_id: u8,
-    pub seq: String,
+    pub seq: Arc<[u8]>,
     pub left_ins: i32,
     pub right_ins: i32,
     pub left_gap: i32,
@@ -63,7 +64,7 @@ pub struct IITData {
 pub struct IntervalTree {
     intervals: Vec<Interval<IITData>>,
     tree: Option<BasicCOITree<IITData, u32>>,
-    seqs: HashMap<(Tid, u8), String>,
+    seqs: HashMap<(Tid, u8), Arc<[u8]>>,
 }
 
 impl IntervalTree {
@@ -89,7 +90,7 @@ impl IntervalTree {
             transcript_len: interval.transcript_len,
         };
         if !interval.seq.is_empty() {
-            self.seqs.insert((tid, interval.idx), interval.seq.clone());
+            self.seqs.insert((tid, interval.idx), Arc::clone(&interval.seq));
         }
         // COITree intervals are end-inclusive; convert [start, end) -> [start, end-1].
         let first = interval.start as i32;
@@ -134,8 +135,8 @@ impl IntervalTree {
                     seq: self
                         .seqs
                         .get(&(data.tid, data.exon_id))
-                        .cloned()
-                        .unwrap_or_default(),
+                        .map(Arc::clone)
+                        .unwrap_or_else(|| Arc::from([])),
                     left_ins: 0,
                     right_ins: 0,
                     left_gap: 0,
@@ -189,8 +190,8 @@ impl IntervalTree {
                 seq: self
                     .seqs
                     .get(&(data.tid, data.exon_id))
-                    .cloned()
-                    .unwrap_or_default(),
+                    .map(Arc::clone)
+                    .unwrap_or_else(|| Arc::from([])),
                 left_ins: 0,
                 right_ins: 0,
                 left_gap: 0,
@@ -432,12 +433,12 @@ pub fn build_g2t(
 
         for (idx, exon) in exon_iter {
             let len = exon.end.saturating_sub(exon.start);
-            let seq = if let Some(fa) = fasta {
+            let seq: Arc<[u8]> = if let Some(fa) = fasta {
                 fa.get_slice(&tx.seqname, exon.start, exon.end)
-                    .map(|v| String::from_utf8_lossy(&v).to_string())
-                    .unwrap_or_default()
+                    .map(|v| Arc::from(v))
+                    .unwrap_or_else(|| Arc::from([]))
             } else {
-                String::new()
+                Arc::from([])
             };
             intervals.push(IntervalData {
                 start: exon.start,

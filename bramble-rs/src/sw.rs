@@ -7,6 +7,23 @@ pub enum Anchor {
     End,
 }
 
+/// Reusable scratch buffers for Smith-Waterman alignment, avoiding per-call allocations.
+pub struct SwBufs {
+    qbuf: Vec<u8>,
+    tbuf: Vec<u8>,
+    rev: Vec<u8>,
+}
+
+impl SwBufs {
+    pub fn new() -> Self {
+        Self {
+            qbuf: Vec::new(),
+            tbuf: Vec::new(),
+            rev: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AlignmentResult {
     pub score: i32,
@@ -60,7 +77,7 @@ fn encode_seq(ascii: &[u8], buf: &mut Vec<u8>) {
     }
 }
 
-pub fn smith_waterman(aligner: &mut Aligner, seq1: &[u8], seq2: &[u8], anchor: Anchor) -> AlignmentResult {
+pub fn smith_waterman(aligner: &mut Aligner, bufs: &mut SwBufs, seq1: &[u8], seq2: &[u8], anchor: Anchor) -> AlignmentResult {
     let m = seq1.len();
     let n = seq2.len();
 
@@ -82,28 +99,25 @@ pub fn smith_waterman(aligner: &mut Aligner, seq1: &[u8], seq2: &[u8], anchor: A
     //
     // For Anchor::End (left-clip rescue): we reverse both sequences so ksw2
     // extension runs right-to-left, matching the C++ align_reversed() approach.
-    let mut qbuf = Vec::with_capacity(m);
-    let mut tbuf = Vec::with_capacity(n);
-
     match anchor {
         Anchor::End => {
-            // Reverse both sequences for left-extension
-            let mut rev_q: Vec<u8> = seq1.to_vec();
-            rev_q.reverse();
-            let mut rev_t: Vec<u8> = seq2.to_vec();
-            rev_t.reverse();
-            encode_seq(&rev_q, &mut qbuf);
-            encode_seq(&rev_t, &mut tbuf);
+            // Reverse both sequences for left-extension using scratch buffer
+            bufs.rev.clear();
+            bufs.rev.extend(seq1.iter().rev());
+            encode_seq(&bufs.rev, &mut bufs.qbuf);
+            bufs.rev.clear();
+            bufs.rev.extend(seq2.iter().rev());
+            encode_seq(&bufs.rev, &mut bufs.tbuf);
         }
         Anchor::Start => {
-            encode_seq(seq1, &mut qbuf);
-            encode_seq(seq2, &mut tbuf);
+            encode_seq(seq1, &mut bufs.qbuf);
+            encode_seq(seq2, &mut bufs.tbuf);
         }
     }
 
     let input = Extz2Input {
-        query: &qbuf,
-        target: &tbuf,
+        query: &bufs.qbuf,
+        target: &bufs.tbuf,
         m: 5,
         mat: &DNA5_MAT,
         q: 4,      // gap open penalty (matches C++ bramble)
@@ -126,15 +140,15 @@ pub fn smith_waterman(aligner: &mut Aligner, seq1: &[u8], seq2: &[u8], anchor: A
     let mut target_consumed = 0i32;
 
     let cigar_slice = &ez.cigar;
+    let n_cigar = cigar_slice.len();
 
     // For Anchor::End (reversed alignment), iterate CIGAR in reverse
     // to restore original-orientation order (matching C++ approach).
-    let cigar_iter: Box<dyn Iterator<Item = &u32>> = match anchor {
-        Anchor::End => Box::new(cigar_slice.iter().rev()),
-        Anchor::Start => Box::new(cigar_slice.iter()),
-    };
-
-    for &packed in cigar_iter {
+    for idx in 0..n_cigar {
+        let packed = match anchor {
+            Anchor::End => cigar_slice[n_cigar - 1 - idx],
+            Anchor::Start => cigar_slice[idx],
+        };
         let len = (packed >> 4) as i32;
         let op = packed & 0xf;
         match op {
