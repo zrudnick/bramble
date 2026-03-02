@@ -673,7 +673,7 @@ dependencies = [
 [[package]]
 name = "ksw2rs"
 version = "0.1.0"
-source = "git+https://github.com/COMBINE-lab/ksw2rs#9412b0924a8a952e82dc45eba99eeb9e3bb76c3f"
+source = "git+https://github.com/COMBINE-lab/ksw2rs#a5d1a98751cf79dfe01c8c35fa03c5a99ac6824e"
 dependencies = [
  "cc",
 ]
