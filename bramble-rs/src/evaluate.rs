@@ -2,12 +2,10 @@ use crate::alignment;
 use crate::g2t::{G2TTree, GuideExon};
 use crate::sw::{self, Anchor};
 use crate::types::{ReadId, RefId, Tid};
-use anyhow::{anyhow, Result};
-use noodles::bam;
+use anyhow::Result;
 use ahash::RandomState;
+use crate::types::{HashMap, HashMapExt, HashSet, HashSetExt};
 use noodles::sam::alignment::record::cigar::op::Kind as CigarKind;
-use std::hash::{BuildHasher, Hash, Hasher};
-use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)]
@@ -33,28 +31,55 @@ pub struct ReadEvaluationConfig {
     pub similarity_threshold: f32,
     #[allow(dead_code)]
     pub print: bool,
-    pub name: String,
+    #[allow(dead_code)]
+    pub name: Vec<u8>,
     pub soft_clips: bool,
     pub strict: bool,
     pub use_fasta: bool,
 }
 
-impl Default for ReadEvaluationConfig {
-    fn default() -> Self {
+impl ReadEvaluationConfig {
+    /// Parameters matching C++ ShortReadEvaluator.
+    pub fn short_read() -> Self {
         Self {
-            max_clip: 25,
-            max_ins: 5,
-            max_gap: 5,
+            max_clip: 5,
+            max_ins: 0,
+            max_gap: 0,
             ignore_small_exons: false,
             small_exon_size: 0,
             max_junc_gap: 0,
-            similarity_threshold: 0.80,
+            similarity_threshold: 0.90,
             print: false,
-            name: String::new(),
+            name: Vec::new(),
             soft_clips: true,
             strict: false,
             use_fasta: false,
         }
+    }
+
+    /// Parameters matching C++ LongReadEvaluator.
+    #[allow(dead_code)]
+    pub fn long_read() -> Self {
+        Self {
+            max_clip: 40,
+            max_ins: 40,
+            max_gap: 40,
+            ignore_small_exons: true,
+            small_exon_size: 35,
+            max_junc_gap: 40,
+            similarity_threshold: 0.60,
+            print: false,
+            name: Vec::new(),
+            soft_clips: true,
+            strict: false,
+            use_fasta: false,
+        }
+    }
+}
+
+impl Default for ReadEvaluationConfig {
+    fn default() -> Self {
+        Self::short_read()
     }
 }
 
@@ -226,7 +251,45 @@ pub struct ReadAln {
     #[allow(dead_code)]
     pub nh: u16,
     pub segs: Vec<alignment::Segment>,
-    pub record: bam::Record,
+    /// Raw CIGAR ops: (length, noodles CigarKind).
+    pub cigar_ops: Vec<(u32, CigarKind)>,
+    /// Query sequence bytes (optional; needed for clip rescue).
+    pub sequence: Option<Vec<u8>>,
+    /// Read name (used for deterministic tie-breaking in multi-hit selection).
+    pub name: Vec<u8>,
+}
+
+/// Reusable scratch space for one evaluation pass.
+/// Allocate once per worker thread; cleared between reads automatically.
+pub(crate) struct EvalContext {
+    /// Final output: transcript → chain match.  Filled by evaluate(); drained by caller.
+    pub(crate) matches: HashMap<Tid, ExonChainMatch>,
+    /// Per-strand working map: tid → accumulated TidData.
+    pub(crate) data: HashMap<Tid, TidData>,
+    /// Working set of matched tids for the current exon.
+    pub(crate) candidate_tids: HashSet<Tid>,
+    /// Scratch buffer for guide exon queries.
+    pub(crate) guide_exons: HashMap<Tid, GuideExon>,
+    /// Reusable scratch buffer for tid keys during evaluate_exon_chains.
+    tids_buf: Vec<Tid>,
+    /// Reusable ksw2 aligner (workspace + result buffers) for clip rescue SW.
+    pub(crate) aligner: ksw2rs::Aligner,
+    /// Reusable scratch buffers for SW encoding.
+    pub(crate) sw_bufs: sw::SwBufs,
+}
+
+impl EvalContext {
+    pub(crate) fn new() -> Self {
+        Self {
+            matches: HashMap::new(),
+            data: HashMap::new(),
+            candidate_tids: HashSet::new(),
+            guide_exons: HashMap::new(),
+            tids_buf: Vec::new(),
+            aligner: ksw2rs::Aligner::new(),
+            sw_bufs: sw::SwBufs::new(),
+        }
+    }
 }
 
 pub fn get_exon_status(exon_count: usize, j: usize) -> ExonStatus {
@@ -242,7 +305,10 @@ pub fn get_exon_status(exon_count: usize, j: usize) -> ExonStatus {
 }
 
 pub fn get_strands_to_check(read: &ReadAln, long_reads: bool) -> Vec<char> {
-    if long_reads && read.segs.len() == 1 {
+    // C++ always checks both strands for long reads, regardless of splice-strand
+    // tags. The strand tag is an informed guess that may be wrong for long reads,
+    // so both are always evaluated and filtered by similarity.
+    if long_reads {
         return vec!['+', '-'];
     }
     if read.strand == '+' {
@@ -263,47 +329,38 @@ pub fn get_clips(
     let mut n_left_clip = 0;
     let mut n_right_clip = 0;
 
-    let ops: Vec<_> = read
-        .record
-        .cigar()
-        .iter()
-        .collect::<std::io::Result<Vec<_>>>()
-        .map_err(|e| anyhow!(e))?;
+    let ops = &read.cigar_ops;
 
     if ops.is_empty() {
         return Ok((false, false, 0, 0));
     }
 
-    let left0 = ops.first().unwrap();
+    let (left0_len, left0_kind) = ops.first().unwrap();
     let left1 = ops.get(1);
-    if left0.kind() == CigarKind::HardClip {
-        if let Some(op) = left1
-            && op.kind() == CigarKind::SoftClip
+    if *left0_kind == CigarKind::HardClip {
+        if let Some((op_len, op_kind)) = left1
+            && *op_kind == CigarKind::SoftClip
         {
             has_left_clip = config.soft_clips;
-            n_left_clip = op.len() as u32;
+            n_left_clip = *op_len;
         }
-    } else if left0.kind() == CigarKind::SoftClip {
+    } else if *left0_kind == CigarKind::SoftClip {
         has_left_clip = config.soft_clips;
-        n_left_clip = left0.len() as u32;
+        n_left_clip = *left0_len;
     }
 
-    let right0 = ops.last().unwrap();
-    let right1 = if ops.len() >= 2 {
-        ops.get(ops.len() - 2)
-    } else {
-        None
-    };
-    if right0.kind() == CigarKind::HardClip {
-        if let Some(op) = right1
-            && op.kind() == CigarKind::SoftClip
+    let (right0_len, right0_kind) = ops.last().unwrap();
+    let right1 = if ops.len() >= 2 { ops.get(ops.len() - 2) } else { None };
+    if *right0_kind == CigarKind::HardClip {
+        if let Some((op_len, op_kind)) = right1
+            && *op_kind == CigarKind::SoftClip
         {
             has_right_clip = config.soft_clips;
-            n_right_clip = op.len() as u32;
+            n_right_clip = *op_len;
         }
-    } else if right0.kind() == CigarKind::SoftClip {
+    } else if *right0_kind == CigarKind::SoftClip {
         has_right_clip = config.soft_clips;
-        n_right_clip = right0.len() as u32;
+        n_right_clip = *right0_len;
     }
 
     Ok((has_left_clip, has_right_clip, n_left_clip, n_right_clip))
@@ -311,7 +368,7 @@ pub fn get_clips(
 
 #[allow(clippy::too_many_arguments)]
 pub fn get_intervals(
-    data: &mut HashMap<Tid, TidData>,
+    ctx: &mut EvalContext,
     read: &ReadAln,
     j: usize,
     exon_count: usize,
@@ -330,14 +387,14 @@ pub fn get_intervals(
     let qexon = read.segs[j];
     let status = get_exon_status(exon_count, j);
     let is_small_exon = (qexon.end - qexon.start) <= config.small_exon_size;
-    let data_empty = data.is_empty();
+    let data_empty = ctx.data.is_empty();
 
-    let guide_exons = g2t.get_guide_exons(refid, strand, qexon.start, qexon.end, config, status);
-    if !guide_exons.is_empty() {
-        let mut candidate_tids: HashSet<Tid> = HashSet::new();
+    g2t.get_guide_exons(refid, strand, qexon.start, qexon.end, config, status, &mut ctx.guide_exons);
+    if !ctx.guide_exons.is_empty() {
+        ctx.candidate_tids.clear();
 
-        for (tid, gexon) in guide_exons {
-            candidate_tids.insert(tid);
+        for (tid, gexon) in ctx.guide_exons.drain() {
+            ctx.candidate_tids.insert(tid);
 
             if data_empty && status != ExonStatus::InsExon {
                 let tid_data = TidData {
@@ -350,13 +407,13 @@ pub fn get_intervals(
                 if gexon.left_gap > 0 {
                     *has_gap = true;
                 }
-                data.insert(tid, tid_data);
-            } else if !data.contains_key(&tid) || data.get(&tid).map(|d| d.elim).unwrap_or(true) {
+                ctx.data.insert(tid, tid_data);
+            } else if !ctx.data.contains_key(&tid) || ctx.data.get(&tid).map(|d| d.elim).unwrap_or(true) {
                 continue;
             }
 
             if matches!(status, ExonStatus::LastExon | ExonStatus::OnlyExon)
-                && let Some(tid_data) = data.get_mut(&tid)
+                && let Some(tid_data) = ctx.data.get_mut(&tid)
             {
                 tid_data.has_right_ins = gexon.right_ins > 0;
                 tid_data.n_right_ins = gexon.right_ins;
@@ -365,7 +422,7 @@ pub fn get_intervals(
                 }
             }
 
-            if let Some(tid_data) = data.get_mut(&tid) {
+            if let Some(tid_data) = ctx.data.get_mut(&tid) {
                 let seg = EvalSegment {
                     is_valid: true,
                     has_qexon: true,
@@ -380,8 +437,8 @@ pub fn get_intervals(
             }
         }
 
-        for (tid, td) in data.iter_mut() {
-            if !candidate_tids.contains(tid) {
+        for (tid, td) in ctx.data.iter_mut() {
+            if !ctx.candidate_tids.contains(tid) {
                 td.elim = true;
             }
         }
@@ -392,11 +449,11 @@ pub fn get_intervals(
     // guide exons empty
     if status != ExonStatus::OnlyExon && config.ignore_small_exons && is_small_exon {
         if status == ExonStatus::MiddleExon {
-            if data.is_empty() {
+            if ctx.data.is_empty() {
                 *failure = true;
                 return;
             }
-            for td in data.values_mut() {
+            for td in ctx.data.values_mut() {
                 let seg = EvalSegment {
                     is_valid: true,
                     has_qexon: true,
@@ -418,27 +475,19 @@ pub fn get_intervals(
     *failure = true;
 }
 
-fn seq_slice_from_shared(shared: Option<&[u8]>, read: &ReadAln, start: usize, len: usize) -> String {
+fn seq_slice_from_shared(shared: Option<&[u8]>, read: &ReadAln, start: usize, len: usize) -> Vec<u8> {
     if let Some(seq) = shared
         && !seq.is_empty()
     {
         let end = (start + len).min(seq.len());
-        let mut out = String::with_capacity(end.saturating_sub(start));
-        for &b in &seq[start..end] {
-            out.push(b as char);
-        }
-        return out;
+        return seq[start..end].to_vec();
     }
 
-    let seq = read.record.sequence();
-    let end = (start + len).min(seq.len());
-    let mut out = String::with_capacity(end.saturating_sub(start));
-    for i in start..end {
-        if let Some(b) = seq.get(i) {
-            out.push(b as char);
-        }
+    if let Some(seq) = &read.sequence {
+        let end = (start + len).min(seq.len());
+        return seq[start..end].to_vec();
     }
-    out
+    Vec::new()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -454,6 +503,8 @@ pub fn left_clip_rescue(
     config: &ReadEvaluationConfig,
     read: &ReadAln,
     shared_seq: Option<&[u8]>,
+    aligner: &mut ksw2rs::Aligner,
+    sw_bufs: &mut sw::SwBufs,
 ) {
     if !config.use_fasta {
         return;
@@ -490,29 +541,18 @@ pub fn left_clip_rescue(
     }
 
     let current_gexon = gexon.clone();
-    let max_exons = 20;
-    let mut exons_processed = 0;
-    let use_same_exon = false;
+    // NOTE: structured as a labeled block rather than a loop so that early exits via
+    // `break 'left_clip` are explicit.  The loop was intentionally single-iteration;
+    // the label preserves the ability to extend to multi-exon rescue in the future.
+    'left_clip: {
+        if remaining_qseq.is_empty() {
+            break 'left_clip;
+        }
 
-    while !remaining_qseq.is_empty() && exons_processed < max_exons {
-        exons_processed += 1;
-
-        let (left_gexon, next_gseq) = if use_same_exon && exons_processed == 1 {
-            let size = segment
-                .qexon
-                .start
-                .saturating_sub(current_gexon.start) as usize;
-            (
-                current_gexon.clone(),
-                current_gexon.seq[..size.min(current_gexon.seq.len())].to_string(),
-            )
-        } else if strand == '+' {
+        let (left_gexon, next_gseq) = if strand == '+' {
             if !current_gexon.has_prev {
-                if exons_processed == 1 {
-                    tid_data.has_left_clip = false;
-                    return;
-                }
-                break;
+                tid_data.has_left_clip = false;
+                return;
             }
             let left = g2t.get_guide_exon_for_tid(
                 refid,
@@ -529,11 +569,8 @@ pub fn left_clip_rescue(
             (left, next)
         } else {
             if !current_gexon.has_next {
-                if exons_processed == 1 {
-                    tid_data.has_left_clip = false;
-                    return;
-                }
-                break;
+                tid_data.has_left_clip = false;
+                return;
             }
             let left = g2t.get_guide_exon_for_tid(
                 refid,
@@ -554,8 +591,8 @@ pub fn left_clip_rescue(
             tid_data.has_left_clip = false;
             return;
         }
-        let result = sw::smith_waterman(&remaining_qseq, &next_gseq, Anchor::End);
-        if exons_processed == 1 && (result.accuracy <= 0.70 || result.score < 10) {
+        let result = sw::smith_waterman(aligner, sw_bufs, &remaining_qseq, &next_gseq, Anchor::End);
+        if result.accuracy <= 0.70 || result.score < 10 {
             tid_data.has_left_clip = false;
             return;
         }
@@ -565,12 +602,19 @@ pub fn left_clip_rescue(
         let mut left_gexon = left_gexon;
         left_gexon.pos = (result.pos as u32) + left_gexon.pos_start;
 
-        if exons_processed == 1 {
-            if n_left_ins > 0 {
-                segment.qexon.start = gexon.start;
-            }
-            if use_same_exon {
-                segment.qexon.start = gexon.start;
+        if n_left_ins > 0 {
+            segment.qexon.start = gexon.start;
+        }
+
+        // Match C++ build_left_clip_segment: after reversing the ksw2 CIGAR,
+        // the last op of the raw output is now the first op.  Discard leading D,
+        // convert leading I to soft-clip.
+        let mut cigar = result.cigar.clone();
+        if let Some(&(len, ref op)) = cigar.ops.first() {
+            match op {
+                CigarOp::DelOverride => { cigar.ops.remove(0); }
+                CigarOp::InsOverride => { cigar.ops[0] = (len, CigarOp::ClipOverride); }
+                _ => {}
             }
         }
 
@@ -582,23 +626,17 @@ pub fn left_clip_rescue(
             qexon: alignment::Segment { start: qstart, end: qend },
             status: ExonStatus::LeftClipExon,
             is_small_exon: remaining_qseq.len() as u32 <= config.small_exon_size,
-            cigar: result.cigar.clone(),
+            cigar,
             score: result.score,
         };
         tid_data.segments.insert(0, left_clip);
         tid_data.has_left_clip = true;
 
         if result.start_i > 1 {
-            remaining_qseq = remaining_qseq[..result.start_i as usize].to_string();
+            remaining_qseq.truncate(result.start_i as usize);
         } else {
             remaining_qseq.clear();
         }
-
-        if remaining_qseq.is_empty() {
-            break;
-        }
-
-        break;
     }
 
     if !remaining_qseq.is_empty()
@@ -623,6 +661,8 @@ pub fn right_clip_rescue(
     config: &ReadEvaluationConfig,
     read: &ReadAln,
     shared_seq: Option<&[u8]>,
+    aligner: &mut ksw2rs::Aligner,
+    sw_bufs: &mut sw::SwBufs,
 ) {
     if !config.use_fasta {
         return;
@@ -657,7 +697,7 @@ pub fn right_clip_rescue(
     {
         seq.len()
     } else {
-        read.record.sequence().len()
+        read.sequence.as_ref().map_or(0, |s| s.len())
     };
     let start_pos = seq_len.saturating_sub(total_bases);
     let mut remaining_qseq = seq_slice_from_shared(shared_seq, read, start_pos, total_bases);
@@ -667,19 +707,16 @@ pub fn right_clip_rescue(
     }
 
     let current_gexon = gexon.clone();
-    let max_exons = 20;
-    let mut exons_processed = 0;
-
-    while !remaining_qseq.is_empty() && exons_processed < max_exons {
-        exons_processed += 1;
+    // NOTE: structured as a labeled block — see left_clip_rescue for rationale.
+    'right_clip: {
+        if remaining_qseq.is_empty() {
+            break 'right_clip;
+        }
 
         let right_gexon = if strand == '+' {
             if !current_gexon.has_next {
-                if exons_processed == 1 {
-                    tid_data.has_right_clip = false;
-                    return;
-                }
-                break;
+                tid_data.has_right_clip = false;
+                return;
             }
             g2t.get_guide_exon_for_tid(
                 refid,
@@ -690,11 +727,8 @@ pub fn right_clip_rescue(
             )
         } else {
             if !current_gexon.has_prev {
-                if exons_processed == 1 {
-                    tid_data.has_right_clip = false;
-                    return;
-                }
-                break;
+                tid_data.has_right_clip = false;
+                return;
             }
             g2t.get_guide_exon_for_tid(
                 refid,
@@ -714,8 +748,8 @@ pub fn right_clip_rescue(
             return;
         }
 
-        let result = sw::smith_waterman(&remaining_qseq, &right_gexon.seq, Anchor::Start);
-        if exons_processed == 1 && (result.accuracy <= 0.70 || result.score < 10) {
+        let result = sw::smith_waterman(aligner, sw_bufs, &remaining_qseq, &right_gexon.seq, Anchor::Start);
+        if result.accuracy <= 0.70 || result.score < 10 {
             tid_data.has_right_clip = false;
             return;
         }
@@ -724,8 +758,22 @@ pub fn right_clip_rescue(
         let qend = right_gexon.start + result.end_j as u32;
         right_gexon.pos = (result.pos as u32) + right_gexon.pos_start;
 
-        if exons_processed == 1 && n_right_ins > 0 {
+        if n_right_ins > 0 {
             segment.qexon.end = gexon.end;
+        }
+
+        // Match C++ build_right_clip_segment: discard trailing D,
+        // convert trailing I to soft-clip.
+        let mut cigar = result.cigar.clone();
+        if let Some(&(len, ref op)) = cigar.ops.last() {
+            match op {
+                CigarOp::DelOverride => { cigar.ops.pop(); }
+                CigarOp::InsOverride => {
+                    let last_idx = cigar.ops.len() - 1;
+                    cigar.ops[last_idx] = (len, CigarOp::ClipOverride);
+                }
+                _ => {}
+            }
         }
 
         let right_clip = EvalSegment {
@@ -736,7 +784,7 @@ pub fn right_clip_rescue(
             qexon: alignment::Segment { start: qstart, end: qend },
             status: ExonStatus::RightClipExon,
             is_small_exon: remaining_qseq.len() as u32 <= config.small_exon_size,
-            cigar: result.cigar.clone(),
+            cigar,
             score: result.score,
         };
         tid_data.segments.push(right_clip);
@@ -744,16 +792,10 @@ pub fn right_clip_rescue(
 
         let query_consumed = result.end_i + 1;
         if query_consumed < remaining_qseq.len() as i32 {
-            remaining_qseq = remaining_qseq[query_consumed as usize..].to_string();
+            remaining_qseq.drain(..query_consumed as usize);
         } else {
             remaining_qseq.clear();
         }
-
-        if remaining_qseq.is_empty() {
-            break;
-        }
-
-        break;
     }
 
     if !remaining_qseq.is_empty()
@@ -774,21 +816,23 @@ pub fn correct_for_gaps(
     refid: RefId,
     long_reads: bool,
 ) {
-    let mut out: Vec<EvalSegment> = Vec::with_capacity(tid_data.segments.len() + 4);
+    // Take ownership of segments to avoid cloning each one.
+    let segments = std::mem::take(&mut tid_data.segments);
+    let mut out: Vec<EvalSegment> = Vec::with_capacity(segments.len() + 4);
     let mut prev_gexon: Option<GuideExon> = None;
 
-    for segment in tid_data.segments.iter() {
+    for segment in segments {
         if tid_data.elim {
             return;
         }
         if !segment.has_gexon {
-            out.push(segment.clone());
+            out.push(segment);
             continue;
         }
 
-        let gexon = segment.gexon.clone().unwrap();
+        let gexon = segment.gexon.as_ref().unwrap();
 
-        if let Some(prev) = prev_gexon.clone() {
+        if let Some(ref prev) = prev_gexon {
             let gap = gexon.exon_id.saturating_sub(prev.exon_id);
 
             if !long_reads {
@@ -838,8 +882,8 @@ pub fn correct_for_gaps(
             }
         }
 
-        prev_gexon = Some(gexon.clone());
-        out.push(segment.clone());
+        prev_gexon = segment.gexon.clone();
+        out.push(segment);
     }
 
     tid_data.segments = out;
@@ -1025,19 +1069,18 @@ pub fn build_cigar_clip(segment: &EvalSegment, match_info: &mut ExonChainMatch) 
     match_info.align.clip_score += segment.score;
 }
 
-fn deterministic_index(name: &str, n: usize) -> usize {
+fn deterministic_index(name: &[u8], n: usize) -> usize {
     if n == 0 {
         return 0;
     }
     let state = RandomState::with_seeds(0, 0, 0, 0);
-    let mut hasher = state.build_hasher();
-    name.hash(&mut hasher);
-    (hasher.finish() % (n as u64)) as usize
+    (state.hash_one(name) % (n as u64)) as usize
 }
 
 pub fn filter_by_similarity(
     matches: &mut HashMap<Tid, ExonChainMatch>,
     config: &ReadEvaluationConfig,
+    name: &[u8],
 ) {
     matches.retain(|_tid, m| {
         let similarity = if m.total_operations > 0.0 {
@@ -1097,7 +1140,7 @@ pub fn filter_by_similarity(
     }
 
     // Tie or no unique best
-    let idx = deterministic_index(&config.name, tids.len());
+    let idx = deterministic_index(name, tids.len());
     if let Some(tid) = tids.get(idx)
         && let Some(m) = matches.get_mut(tid)
     {
@@ -1109,14 +1152,14 @@ pub fn evaluate_exon_chains(
     read: &ReadAln,
     _id: ReadId,
     g2t: &G2TTree,
-    mut config: ReadEvaluationConfig,
+    config: ReadEvaluationConfig,
     long_reads: bool,
     shared_seq: Option<&[u8]>,
-) -> HashMap<Tid, ExonChainMatch> {
+    ctx: &mut EvalContext,
+) {
+    ctx.matches.clear();
     let exon_count = read.segs.len();
     let refid = read.refid;
-    config.name = read.record.name().map(|n| n.to_string()).unwrap_or_default();
-    let mut matches_by_strand: HashMap<Tid, ExonChainMatch> = HashMap::new();
 
     let (has_left_clip, has_right_clip, n_left_clip, n_right_clip) = if long_reads {
         get_clips(read, &config).unwrap_or((false, false, 0, 0))
@@ -1126,7 +1169,7 @@ pub fn evaluate_exon_chains(
 
     let strands_to_check = get_strands_to_check(read, long_reads);
     for strand in strands_to_check {
-        let mut data: HashMap<Tid, TidData> = HashMap::new();
+        ctx.data.clear();
         let mut failure = false;
         let mut has_gap = false;
         let mut start_ignore = EvalSegment::default();
@@ -1134,7 +1177,7 @@ pub fn evaluate_exon_chains(
 
         for j in 0..exon_count {
             get_intervals(
-                &mut data,
+                ctx,
                 read,
                 j,
                 exon_count,
@@ -1157,9 +1200,10 @@ pub fn evaluate_exon_chains(
             continue;
         }
 
-        let tids: Vec<Tid> = data.keys().copied().collect();
-        for tid in &tids {
-            let td = data.get_mut(tid).unwrap();
+        ctx.tids_buf.clear();
+        ctx.tids_buf.extend(ctx.data.keys().copied());
+        for tid in &ctx.tids_buf {
+            let td = ctx.data.get_mut(tid).unwrap();
             if td.elim {
                 continue;
             }
@@ -1167,8 +1211,8 @@ pub fn evaluate_exon_chains(
         }
 
         if long_reads && config.use_fasta {
-            for tid in &tids {
-                let td = data.get_mut(tid).unwrap();
+            for tid in &ctx.tids_buf {
+                let td = ctx.data.get_mut(tid).unwrap();
                 if td.elim {
                     continue;
                 }
@@ -1186,6 +1230,8 @@ pub fn evaluate_exon_chains(
                             &config,
                             read,
                             shared_seq,
+                            &mut ctx.aligner,
+                            &mut ctx.sw_bufs,
                         );
                     } else {
                         td.has_left_clip = false;
@@ -1204,6 +1250,8 @@ pub fn evaluate_exon_chains(
                             &config,
                             read,
                             shared_seq,
+                            &mut ctx.aligner,
+                            &mut ctx.sw_bufs,
                         );
                     } else {
                         td.has_left_clip = false;
@@ -1224,6 +1272,8 @@ pub fn evaluate_exon_chains(
                             &config,
                             read,
                             shared_seq,
+                            &mut ctx.aligner,
+                            &mut ctx.sw_bufs,
                         );
                     } else {
                         td.has_right_clip = false;
@@ -1242,6 +1292,8 @@ pub fn evaluate_exon_chains(
                             &config,
                             read,
                             shared_seq,
+                            &mut ctx.aligner,
+                            &mut ctx.sw_bufs,
                         );
                     } else {
                         td.has_right_clip = false;
@@ -1250,7 +1302,7 @@ pub fn evaluate_exon_chains(
             }
         }
 
-        for (tid, td) in data.iter_mut() {
+        for (tid, td) in ctx.data.iter_mut() {
             if td.elim {
                 continue;
             }
@@ -1365,16 +1417,14 @@ pub fn evaluate_exon_chains(
             }
 
             if !td.elim {
-                matches_by_strand.insert(*tid, td.match_info.clone());
+                ctx.matches.insert(*tid, std::mem::take(&mut td.match_info));
             }
         }
     }
 
-    if !matches_by_strand.is_empty() {
-        filter_by_similarity(&mut matches_by_strand, &config);
+    if !ctx.matches.is_empty() {
+        filter_by_similarity(&mut ctx.matches, &config, &read.name);
     }
-
-    matches_by_strand
 }
 #[derive(Debug, Default)]
 pub struct ReadEvaluator {
@@ -1389,12 +1439,13 @@ impl ReadEvaluator {
         id: ReadId,
         g2t: &G2TTree,
         seq: Option<&[u8]>,
-    ) -> HashMap<Tid, ExonChainMatch> {
+        ctx: &mut EvalContext,
+    ) {
         let (max_clip, max_ins, max_gap, max_junc_gap, similarity_threshold, ignore_small_exons, small_exon_size) =
             if self.long_reads {
-                (40, 40, 40, 40, 0.60, true, 35)
+                (40, 40, 40, 40, 0.60_f32, true, 35)
             } else {
-                (25, 5, 5, 0, 0.80, false, 0)
+                (5, 0, 0, 0, 0.90_f32, false, 0)
             };
 
         let config = ReadEvaluationConfig {
@@ -1406,12 +1457,12 @@ impl ReadEvaluator {
             max_junc_gap,
             similarity_threshold,
             print: false,
-            name: String::new(),
+            name: Vec::new(),
             soft_clips: true,
             strict: false,
             use_fasta: self.use_fasta,
         };
 
-        evaluate_exon_chains(read, id, g2t, config, self.long_reads, seq)
+        evaluate_exon_chains(read, id, g2t, config, self.long_reads, seq, ctx);
     }
 }

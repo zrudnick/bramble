@@ -275,8 +275,8 @@ namespace bramble {
     trees.emplace_back(std::make_pair(fw_tree, rc_tree));
   }
 
-  IntervalTree *g2tTree::getTreeForStrand(uint8_t refid, char strand) {
-    if (refid >= trees.size()) return nullptr;
+  IntervalTree *g2tTree::getTreeForStrand(int refid, char strand) {
+    if (refid < 0 || (size_t)refid >= trees.size()) return nullptr;
     auto pair = trees[refid];
     if (strand == '+' || strand == 1)
       return pair.first;
@@ -315,7 +315,7 @@ namespace bramble {
   }
 
   // Index tree after guides have been added
-  void g2tTree::indexTrees(uint8_t refid) {
+  void g2tTree::indexTrees(int refid) {
     IntervalTree *fw_tree = getTreeForStrand(refid, '+');
     IntervalTree *rc_tree = getTreeForStrand(refid, '-');
     fw_tree->indexTree();
@@ -323,7 +323,7 @@ namespace bramble {
   }
 
   bool
-  g2tTree::getGuideExonForTid(uint8_t refid, char strand, tid_t tid, 
+  g2tTree::getGuideExonForTid(int refid, char strand, tid_t tid,
                               uint32_t start, uint32_t end, GuideExon &gexon) {
     IntervalTree *tree = getTreeForStrand(refid, strand);
     if (!tree) return false;
@@ -332,7 +332,7 @@ namespace bramble {
 
   // Find all guide TIDs that overlap with a read exon
   bool
-  g2tTree::getGuideExons(uint8_t refid, char strand, GSeg exon, 
+  g2tTree::getGuideExons(int refid, char strand, GSeg exon,
                         ReadEvaluationConfig config, ExonStatus status,
                         std::vector<GuideExon> &gexons) {
     IntervalTree *tree = getTreeForStrand(refid, strand);

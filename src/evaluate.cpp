@@ -102,12 +102,24 @@ namespace bramble {
 
   bool ReadEvaluator::correct_for_gaps(TidData &td, tid_t tid,
                                       Segment &seg2,
-                                      ReadEvaluationConfig &config, 
+                                      ReadEvaluationConfig &config,
                                       std::shared_ptr<g2tTree> g2t,
                                       char strand, refid_t refid) {
+    // Find the last segment that has a guide exon (skip InsExon segments whose
+    // gexon field is uninitialised). Comparing against an InsExon's exon_id is
+    // undefined behaviour and accidentally over-filters transcripts with many
+    // exons before the matched region.
     size_t n_segs = td.segments.size();
-    const auto &seg1 = td.segments[n_segs - 1];
+    const Segment *prev_guide = nullptr;
+    for (int k = (int)n_segs - 1; k >= 0; k--) {
+      if (td.segments[k].has_gexon) {
+        prev_guide = &td.segments[k];
+        break;
+      }
+    }
+    if (!prev_guide) return true; // no prior guide exon to compare against
 
+    const auto &seg1 = *prev_guide;
     uint8_t gap = seg2.gexon.exon_id - seg1.gexon.exon_id;
 
     // short reads: require strict continuity
@@ -296,9 +308,10 @@ namespace bramble {
 
   // Extracts the query sequence for left-clip rescue
   static std::string 
-  get_left_rescue_query(uint8_t *seq, uint32_t n_left_clip, 
+  get_left_rescue_query(uint8_t *seq, int seq_len, uint32_t n_left_clip,
                         uint32_t left_ins) {
     uint32_t total = n_left_clip + left_ins;
+    if ((int)total > seq_len) total = (uint32_t)seq_len;
     std::string q;
     q.reserve(total);
     for (uint32_t i = 0; i < total; i++)
@@ -412,7 +425,7 @@ namespace bramble {
     }
     auto &gexon = seg.gexon;
 
-    std::string qseq = get_left_rescue_query(seq, n_left_clip, gexon.left_ins);
+    std::string qseq = get_left_rescue_query(seq, seq_len, n_left_clip, gexon.left_ins);
 
     std::string gseq;
     std::vector<GuideExon> collected_exons;
@@ -450,6 +463,7 @@ namespace bramble {
   get_right_rescue_query(uint8_t *seq, int seq_len,
                         uint32_t n_right_clip, uint32_t right_ins) {
     uint32_t total = right_ins + n_right_clip;
+    if ((int)total > seq_len) total = (uint32_t)seq_len;
     int start = seq_len - (int)total;
     std::string q;
     q.reserve(total);

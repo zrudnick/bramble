@@ -42,4 +42,12 @@ pub struct Args {
     /// Genome sequence FASTA (optional)
     #[arg(short = 'S', long = "genome", value_name = "FASTA")]
     pub genome_fasta: Option<PathBuf>,
+
+    /// Assume stranded library, first-strand protocol (read2 is sense)
+    #[arg(long, conflicts_with = "rf")]
+    pub fr: bool,
+
+    /// Assume stranded library, second-strand protocol (read1 is sense)
+    #[arg(long, conflicts_with = "fr")]
+    pub rf: bool,
 }

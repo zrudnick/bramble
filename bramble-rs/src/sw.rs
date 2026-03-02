@@ -1,9 +1,27 @@
 use crate::evaluate::{Cigar, CigarOp};
+use ksw2rs::{Aligner, Extz2Input, KSW_EZ_EXTZ_ONLY, KSW_EZ_APPROX_MAX, KSW_EZ_APPROX_DROP};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Anchor {
     Start,
     End,
+}
+
+/// Reusable scratch buffers for Smith-Waterman alignment, avoiding per-call allocations.
+pub struct SwBufs {
+    qbuf: Vec<u8>,
+    tbuf: Vec<u8>,
+    rev: Vec<u8>,
+}
+
+impl SwBufs {
+    pub fn new() -> Self {
+        Self {
+            qbuf: Vec::new(),
+            tbuf: Vec::new(),
+            rev: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -28,7 +46,38 @@ pub struct AlignmentResult {
     pub accuracy: f64,
 }
 
-pub fn smith_waterman(seq1: &str, seq2: &str, anchor: Anchor) -> AlignmentResult {
+/// DNA5 scoring matrix (match=1, mismatch=-4) — matches C++ bramble ksw2 parameters.
+/// Row-major 5x5 for alphabet {A=0, C=1, G=2, T=3, N=4}.
+static DNA5_MAT: [i8; 25] = [
+     1, -4, -4, -4, 0,  // A
+    -4,  1, -4, -4, 0,  // C
+    -4, -4,  1, -4, 0,  // G
+    -4, -4, -4,  1, 0,  // T
+     0,  0,  0,  0, 0,  // N
+];
+
+/// Convert ASCII base to 0-4 encoding for ksw2.
+#[inline(always)]
+fn encode_base(b: u8) -> u8 {
+    match b {
+        b'A' | b'a' => 0,
+        b'C' | b'c' => 1,
+        b'G' | b'g' => 2,
+        b'T' | b't' => 3,
+        _ => 4, // N / unknown
+    }
+}
+
+/// Encode an ASCII sequence into 0-4 encoding in-place into a provided buffer.
+fn encode_seq(ascii: &[u8], buf: &mut Vec<u8>) {
+    buf.clear();
+    buf.reserve(ascii.len());
+    for &b in ascii {
+        buf.push(encode_base(b));
+    }
+}
+
+pub fn smith_waterman(aligner: &mut Aligner, bufs: &mut SwBufs, seq1: &[u8], seq2: &[u8], anchor: Anchor) -> AlignmentResult {
     let m = seq1.len();
     let n = seq2.len();
 
@@ -36,156 +85,141 @@ pub fn smith_waterman(seq1: &str, seq2: &str, anchor: Anchor) -> AlignmentResult
         return AlignmentResult {
             score: -1,
             cigar: Cigar::default(),
-            start_j: 0,
-            end_j: 0,
-            start_i: 0,
-            end_i: 0,
+            start_j: 0, end_j: 0,
+            start_i: 0, end_i: 0,
             pos: 0,
-            matches: 0,
-            mismatches: 0,
-            insertions: 0,
-            deletions: 0,
-            error_rate: 0.0,
-            accuracy: 0.0,
+            matches: 0, mismatches: 0, insertions: 0, deletions: 0,
+            error_rate: 0.0, accuracy: 0.0,
         };
     }
 
-    let match_score = 2;
-    let mismatch_score = -1;
-    let gap_score = -1;
-
-    let mut score = vec![vec![0i32; n + 1]; m + 1];
-    let mut traceback = vec![vec![b'X'; n + 1]; m + 1];
-
-    let mut max_score = 0i32;
-    let mut max_i = 0usize;
-    let mut max_j = 0usize;
-
-    let s1 = seq1.as_bytes();
-    let s2 = seq2.as_bytes();
-
-    for i in 1..=m {
-        for j in 1..=n {
-            let diag = score[i - 1][j - 1]
-                + if s1[i - 1] == s2[j - 1] {
-                    match_score
-                } else {
-                    mismatch_score
-                };
-            let up = score[i - 1][j] + gap_score;
-            let left = score[i][j - 1] + gap_score;
-
-            let cell = 0.max(diag.max(up.max(left)));
-            score[i][j] = cell;
-
-            if cell == 0 {
-                traceback[i][j] = b'X';
-            } else if cell == diag {
-                traceback[i][j] = b'D';
-            } else if cell == up {
-                traceback[i][j] = b'U';
-            } else {
-                traceback[i][j] = b'L';
-            }
-
-            if cell > max_score {
-                max_score = cell;
-                max_i = i;
-                max_j = j;
-            }
+    // For ksw2 extension alignment:
+    // - query = seq1 (the soft-clipped read bases)
+    // - target = seq2 (the reference exon sequence)
+    //
+    // For Anchor::End (left-clip rescue): we reverse both sequences so ksw2
+    // extension runs right-to-left, matching the C++ align_reversed() approach.
+    match anchor {
+        Anchor::End => {
+            // Reverse both sequences for left-extension using scratch buffer
+            bufs.rev.clear();
+            bufs.rev.extend(seq1.iter().rev());
+            encode_seq(&bufs.rev, &mut bufs.qbuf);
+            bufs.rev.clear();
+            bufs.rev.extend(seq2.iter().rev());
+            encode_seq(&bufs.rev, &mut bufs.tbuf);
+        }
+        Anchor::Start => {
+            encode_seq(seq1, &mut bufs.qbuf);
+            encode_seq(seq2, &mut bufs.tbuf);
         }
     }
 
-    let mut i = max_i;
-    let mut j = max_j;
-    let end_i = max_i as i32 - 1;
-    let end_j = max_j as i32 - 1;
-
-    let mut matches = 0;
-    let mut mismatches = 0;
-    let mut insertions = 0;
-    let mut deletions = 0;
-    let mut cigar = Cigar::default();
-
-    while i > 0 && j > 0 && score[i][j] > 0 {
-        match traceback[i][j] {
-            b'D' => {
-                cigar.add_operation(1, CigarOp::MatchOverride);
-                if s1[i - 1] == s2[j - 1] {
-                    matches += 1;
-                } else {
-                    mismatches += 1;
-                }
-                i -= 1;
-                j -= 1;
-            }
-            b'L' => {
-                cigar.add_operation(1, CigarOp::DelOverride);
-                deletions += 1;
-                j -= 1;
-            }
-            b'U' => {
-                cigar.add_operation(1, CigarOp::InsOverride);
-                insertions += 1;
-                i -= 1;
-            }
-            _ => break,
-        }
-    }
-
-    let start_i = i as i32;
-    let start_j = j as i32;
-    cigar.reverse();
-
-    let pos = match anchor {
-        Anchor::Start => n as i32 - end_j - 1,
-        Anchor::End => start_j,
+    let input = Extz2Input {
+        query: &bufs.qbuf,
+        target: &bufs.tbuf,
+        m: 5,
+        mat: &DNA5_MAT,
+        q: 4,      // gap open penalty (matches C++ bramble)
+        e: 1,      // gap extend penalty (matches C++ bramble)
+        w: -1,     // unlimited band width
+        zdrop: 40, // z-drop threshold (matches C++ bramble)
+        end_bonus: 0,
+        flag: KSW_EZ_EXTZ_ONLY | KSW_EZ_APPROX_MAX | KSW_EZ_APPROX_DROP,
     };
 
-    let mut score_out = max_score;
-    match anchor {
-        Anchor::Start => {
-            let query_tail = start_i;
-            let ref_tail = start_j;
-            if query_tail > 0 && ref_tail > 0 {
-                score_out = -1;
-            } else if query_tail > ref_tail {
-                let ins = (query_tail - ref_tail) as u32;
-                score_out += gap_score * ins as i32;
-                cigar.prepend_operation(ins, CigarOp::InsOverride);
-                insertions += ins as i32;
-            } else if ref_tail > query_tail {
-                let del = (ref_tail - query_tail) as u32;
-                score_out += gap_score * del as i32;
-                cigar.prepend_operation(del, CigarOp::DelOverride);
-                deletions += del as i32;
+    let ez = aligner.align(&input);
+
+    // Convert ksw2 packed CIGAR to our Cigar format and compute stats.
+    let mut cigar = Cigar::default();
+    let mut matches = 0i32;
+    let mut mismatches = 0i32;
+    let mut insertions = 0i32;
+    let mut deletions = 0i32;
+    let mut query_consumed = 0i32;
+    let mut target_consumed = 0i32;
+
+    let cigar_slice = &ez.cigar;
+    let n_cigar = cigar_slice.len();
+
+    // For Anchor::End (reversed alignment), iterate CIGAR in reverse
+    // to restore original-orientation order (matching C++ approach).
+    for idx in 0..n_cigar {
+        let packed = match anchor {
+            Anchor::End => cigar_slice[n_cigar - 1 - idx],
+            Anchor::Start => cigar_slice[idx],
+        };
+        let len = (packed >> 4) as i32;
+        let op = packed & 0xf;
+        match op {
+            0 => {
+                // M (match/mismatch)
+                cigar.add_operation(len as u32, CigarOp::MatchOverride);
+                // Count actual matches/mismatches by comparing sequences
+                let qi = query_consumed as usize;
+                let ti = target_consumed as usize;
+                for k in 0..len as usize {
+                    let qpos = match anchor {
+                        Anchor::End => m - 1 - (qi + k),
+                        Anchor::Start => qi + k,
+                    };
+                    let tpos = match anchor {
+                        Anchor::End => n - 1 - (ti + k),
+                        Anchor::Start => ti + k,
+                    };
+                    if qpos < m && tpos < n && seq1[qpos] == seq2[tpos] {
+                        matches += 1;
+                    } else {
+                        mismatches += 1;
+                    }
+                }
+                query_consumed += len;
+                target_consumed += len;
             }
-        }
-        Anchor::End => {
-            let query_tail = m as i32 - 1 - end_i;
-            let ref_tail = n as i32 - 1 - end_j;
-            if query_tail > 0 && ref_tail > 0 {
-                score_out = -1;
-            } else if query_tail > ref_tail {
-                let ins = (query_tail - ref_tail) as u32;
-                score_out += gap_score * ins as i32;
-                cigar.add_operation(ins, CigarOp::InsOverride);
-                insertions += ins as i32;
-            } else if ref_tail > query_tail {
-                let del = (ref_tail - query_tail) as u32;
-                score_out += gap_score * del as i32;
-                cigar.add_operation(del, CigarOp::DelOverride);
-                deletions += del as i32;
+            1 => {
+                // I (insertion in query)
+                cigar.add_operation(len as u32, CigarOp::InsOverride);
+                insertions += len;
+                query_consumed += len;
             }
+            2 => {
+                // D (deletion from query)
+                cigar.add_operation(len as u32, CigarOp::DelOverride);
+                deletions += len;
+                target_consumed += len;
+            }
+            _ => {}
         }
     }
 
+    // Compute coordinates in original (non-reversed) space.
+    let (start_i, end_i, start_j, end_j, pos);
+    match anchor {
+        Anchor::Start => {
+            // Extension from left: alignment starts at (0, 0) conceptually
+            start_i = 0;
+            end_i = query_consumed - 1;
+            start_j = 0;
+            end_j = target_consumed - 1;
+            pos = start_j;
+        }
+        Anchor::End => {
+            // Reversed extension: map back to original coordinates
+            end_i = m as i32 - 1;
+            start_i = end_i - query_consumed + 1;
+            end_j = n as i32 - 1;
+            start_j = end_j - target_consumed + 1;
+            pos = n as i32 - end_j - 1;
+        }
+    }
+
+    let score = ez.max as i32;
     let total_errors = mismatches + insertions + deletions;
     let error_rate = if m == 0 { 0.0 } else { total_errors as f64 / m as f64 };
     let accuracy = if m == 0 { 0.0 } else { matches as f64 / m as f64 };
 
     AlignmentResult {
-        score: score_out,
+        score,
         cigar,
         start_j,
         end_j,
