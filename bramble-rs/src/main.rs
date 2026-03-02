@@ -21,7 +21,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 fn main() -> Result<()> {
     let args = cli::Args::parse();
-    
+
     // Initialize tracing subscriber
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| {
@@ -34,13 +34,22 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .init();
-    
-    let transcripts = annotation::load_transcripts(&args.guide_gff)?;
-    let fasta = if let Some(path) = &args.genome_fasta {
-        Some(fasta::FastaDb::load(path)?)
-    } else {
-        None
-    };
+
+    // Load annotation and FASTA in parallel — they are independent I/O-bound
+    // tasks (~2.9s and ~3.4s respectively) so overlapping them saves ~2.9s.
+    let (transcripts, fasta) = std::thread::scope(|s| {
+        let gtf_handle = s.spawn(|| annotation::load_transcripts(&args.guide_gff));
+        let fasta_handle = s.spawn(|| {
+            args.genome_fasta
+                .as_ref()
+                .map(|path| fasta::FastaDb::load(path))
+                .transpose()
+        });
+        let transcripts = gtf_handle.join().expect("annotation thread panicked")?;
+        let fasta = fasta_handle.join().expect("fasta thread panicked")?;
+        Ok::<_, anyhow::Error>((transcripts, fasta))
+    })?;
+
     let mut bam = bam_input::open_bam(&args.in_bam)?;
     let g2t = g2t::build_g2t(&transcripts, &bam.refname_to_id, fasta.as_ref())?;
     let hts_header = header::build_hts_header(&transcripts);
