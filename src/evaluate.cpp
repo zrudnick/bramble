@@ -783,10 +783,10 @@ namespace bramble {
           : 0.0;
 
         if (similarity > config.similarity_threshold) {
-          double x = ((similarity - config.similarity_threshold) 
+          double x = ((similarity - config.similarity_threshold)
             / (1.0 - config.similarity_threshold));
           match.align.similarity_score = (x * x * static_cast<double>(match.junc_hits + 1)); // static_cast<double>(match.junc_hits + 1)
-          
+
           if (config.print) {
             std::string tid_string = g2t->getTidName(match.tid);
             printf("x**3 = %f\n", x * x * x);
@@ -959,20 +959,22 @@ namespace bramble {
             }
           }
 
-          prev_s = seg.gexon.start;
-          prev_e = seg.gexon.end;
+          if (seg.has_gexon) {
+            prev_s = seg.gexon.start;
+            prev_e = seg.gexon.end;
+          }
 
-          // Create exon chain matches 
-          if (!match_created) {
+          // Create exon chain matches
+          if (!match_created && seg.has_gexon) {
             create_match(td, seg.gexon, tid, strand);
             match_created = true;
             first_match_idx++;
             last_match_idx++;
-            if (config.print) printf("match created, fwpos = %d, rcpos = %d\n", 
+            if (config.print) printf("match created, fwpos = %d, rcpos = %d\n",
               td.match.align.fwpos, td.match.align.rcpos);
           }
 
-          else if (match_created && seg.status != INS_EXON) {
+          else if (match_created && seg.has_gexon && seg.status != INS_EXON) {
             // update rcpos
             last_match_idx++;
             if (strand == '-') {

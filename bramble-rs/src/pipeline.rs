@@ -25,7 +25,7 @@ const BATCH_SIZE: usize = 64;
 /// Tags to strip from output records (they are invalid in projected coordinates
 /// or will be replaced with bramble-computed values).
 const SKIP_TAGS: &[[u8; 2]] = &[
-    *b"NH", *b"HI", *b"AS", *b"NM", *b"CG",
+    *b"NH", *b"HI", *b"AS", *b"CG",
     *b"XS", *b"SA",
 ];
 
@@ -903,7 +903,7 @@ fn build_projected_record(
     };
 
     // Compute CIGAR
-    let (mut cigar_ops, nm) = update_cigar_hts(record, entry.align.align.cigar.as_ref().unwrap())?;
+    let (mut cigar_ops, _nm) = update_cigar_hts(record, entry.align.align.cigar.as_ref().unwrap())?;
     if reverse_action {
         cigar_ops.0.reverse();
     }
@@ -982,7 +982,6 @@ fn build_projected_record(
         (gn_as + (entry.align.align.clip_score as f64)) * entry.align.align.similarity_score
     };
     out.push_aux_unchecked(b"AS", Aux::I32(score as i32))?;
-    out.push_aux_unchecked(b"NM", Aux::I32(nm))?;
 
     Ok(out)
 }

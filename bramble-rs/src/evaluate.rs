@@ -235,10 +235,6 @@ pub struct TidData {
     pub elim: bool,
     pub segments: Vec<EvalSegment>,
     pub match_info: ExonChainMatch,
-    pub has_left_ins: bool,
-    pub has_right_ins: bool,
-    pub n_left_ins: i32,
-    pub n_right_ins: i32,
     pub has_left_clip: bool,
     pub has_right_clip: bool,
 }
@@ -400,8 +396,6 @@ pub fn get_intervals(
                 let tid_data = TidData {
                     has_left_clip,
                     has_right_clip,
-                    has_left_ins: gexon.left_ins > 0,
-                    n_left_ins: gexon.left_ins,
                     ..Default::default()
                 };
                 if gexon.left_gap > 0 {
@@ -413,13 +407,9 @@ pub fn get_intervals(
             }
 
             if matches!(status, ExonStatus::LastExon | ExonStatus::OnlyExon)
-                && let Some(tid_data) = ctx.data.get_mut(&tid)
+                && gexon.right_gap > 0
             {
-                tid_data.has_right_ins = gexon.right_ins > 0;
-                tid_data.n_right_ins = gexon.right_ins;
-                if gexon.right_gap > 0 {
-                    *has_gap = true;
-                }
+                *has_gap = true;
             }
 
             if let Some(tid_data) = ctx.data.get_mut(&tid) {
@@ -493,13 +483,11 @@ fn seq_slice_from_shared(shared: Option<&[u8]>, read: &ReadAln, start: usize, le
 #[allow(clippy::too_many_arguments)]
 pub fn left_clip_rescue(
     tid_data: &mut TidData,
-    start_ignore: &EvalSegment,
     strand: char,
     g2t: &G2TTree,
     refid: RefId,
     tid: Tid,
     n_left_clip: u32,
-    n_left_ins: i32,
     config: &ReadEvaluationConfig,
     read: &ReadAln,
     shared_seq: Option<&[u8]>,
@@ -507,10 +495,6 @@ pub fn left_clip_rescue(
     sw_bufs: &mut sw::SwBufs,
 ) {
     if !config.use_fasta {
-        return;
-    }
-    if start_ignore.is_valid {
-        tid_data.has_left_clip = false;
         return;
     }
     if tid_data.segments.is_empty() {
@@ -528,7 +512,7 @@ pub fn left_clip_rescue(
         return;
     }
 
-    let total_bases = (n_left_clip as i32 + n_left_ins).max(0) as usize;
+    let total_bases = (n_left_clip as i32 + gexon.left_ins).max(0) as usize;
     if total_bases == 0 {
         tid_data.has_left_clip = false;
         return;
@@ -606,10 +590,6 @@ pub fn left_clip_rescue(
             let qend = left_gexon.start + result.end_j as u32;
             left_gexon.pos = (result.pos as u32) + left_gexon.pos_start;
 
-            if n_left_ins > 0 {
-                segment.qexon.start = gexon.start;
-            }
-
             // Match C++ build_left_clip_segment: after reversing the ksw2 CIGAR,
             // the last op of the raw output is now the first op.  Discard leading D,
             // convert leading I to soft-clip.
@@ -634,6 +614,15 @@ pub fn left_clip_rescue(
                 score: result.score,
             };
             tid_data.segments.insert(0, left_clip);
+            // Match C++: zero out left_ins on the original first segment (now at index 1)
+            // so build_cigar_match sees left_ins=0 and increments junc_hits.
+            if let Some(seg) = tid_data.segments.get_mut(1) {
+                if let Some(ref mut ge) = seg.gexon {
+                    if ge.left_ins > 0 {
+                        ge.left_ins = 0;
+                    }
+                }
+            }
             tid_data.has_left_clip = true;
 
             if result.start_i > 1 {
@@ -653,13 +642,11 @@ pub fn left_clip_rescue(
 #[allow(clippy::too_many_arguments)]
 pub fn right_clip_rescue(
     tid_data: &mut TidData,
-    end_ignore: &EvalSegment,
     strand: char,
     g2t: &G2TTree,
     refid: RefId,
     tid: Tid,
     n_right_clip: u32,
-    n_right_ins: i32,
     config: &ReadEvaluationConfig,
     read: &ReadAln,
     shared_seq: Option<&[u8]>,
@@ -667,10 +654,6 @@ pub fn right_clip_rescue(
     sw_bufs: &mut sw::SwBufs,
 ) {
     if !config.use_fasta {
-        return;
-    }
-    if end_ignore.is_valid {
-        tid_data.has_right_clip = false;
         return;
     }
     if tid_data.segments.is_empty() {
@@ -689,7 +672,7 @@ pub fn right_clip_rescue(
         return;
     }
 
-    let total_bases = (n_right_clip as i32 + n_right_ins).max(0) as usize;
+    let total_bases = (n_right_clip as i32 + gexon.right_ins).max(0) as usize;
     if total_bases == 0 {
         tid_data.has_right_clip = false;
         return;
@@ -767,10 +750,6 @@ pub fn right_clip_rescue(
             let qend = right_gexon.start + result.end_j as u32;
             right_gexon.pos = (result.pos as u32) + right_gexon.pos_start;
 
-            if n_right_ins > 0 {
-                segment.qexon.end = gexon.end;
-            }
-
             // Match C++ build_right_clip_segment: discard trailing D,
             // convert trailing I to soft-clip.
             let mut cigar = result.cigar.clone();
@@ -797,6 +776,14 @@ pub fn right_clip_rescue(
                 score: result.score,
             };
             tid_data.segments.push(right_clip);
+            // Match C++: zero out right_ins on the original last segment
+            // so build_cigar_match sees right_ins=0 and increments junc_hits.
+            let orig_last = tid_data.segments.len() - 2;
+            if let Some(ref mut ge) = tid_data.segments[orig_last].gexon {
+                if ge.right_ins > 0 {
+                    ge.right_ins = 0;
+                }
+            }
             tid_data.has_right_clip = true;
 
             let query_consumed = result.end_i + 1;
@@ -932,15 +919,22 @@ pub fn build_cigar_match(
     let gstart = gexon.start;
     let gend = gexon.end;
 
+    // Use left_ins/left_gap/right_ins/right_gap fields from gexon, matching C++.
+    // C++ uses these fields (not positional comparison) to decide whether to
+    // add ins/del/softclip at boundaries, and to increment junc_hits.
+    let left_ins = gexon.left_ins.max(0) as u32;
+    let left_gap = gexon.left_gap.max(0) as u32;
+    let right_ins = gexon.right_ins.max(0) as u32;
+    let right_gap = gexon.right_gap.max(0) as u32;
+
     let cigar = match_info.align.cigar.as_mut().unwrap();
 
     // Handle start boundary
-    if qstart < gstart {
-        let overhang = gstart - qstart;
+    if left_ins > 0 {
         if matches!(segment.status, ExonStatus::FirstExon | ExonStatus::OnlyExon) {
             if !has_left_clip {
-                cigar.add_operation(overhang, CigarOp::SoftClip);
-                match_info.total_operations += overhang as f64;
+                cigar.add_operation(left_ins, CigarOp::SoftClip);
+                match_info.total_operations += left_ins as f64;
                 match_info.prev_op = CigarOp::SoftClip;
             }
         } else if matches!(
@@ -948,28 +942,27 @@ pub fn build_cigar_match(
             ExonStatus::MiddleExon | ExonStatus::LastExon
         ) || has_left_clip
         {
-            cigar.add_operation(overhang, CigarOp::Ins);
-            match_info.total_operations += overhang as f64;
+            cigar.add_operation(left_ins, CigarOp::Ins);
+            match_info.total_operations += left_ins as f64;
             if match_info.prev_op == CigarOp::Del {
-                match_info.total_coverage += overhang as f64;
+                match_info.total_coverage += left_ins as f64;
             } else if match_info.prev_op == CigarOp::Ins {
                 match_info.total_operations += match_info.total_operations * 0.2;
             }
             match_info.prev_op = CigarOp::Ins;
         }
-    } else if gstart < qstart {
+    } else if left_gap > 0 {
         if !first_match
             && (matches!(
                 segment.status,
                 ExonStatus::MiddleExon | ExonStatus::LastExon
             ) || has_left_clip)
         {
-            let overhang = qstart - gstart;
-            cigar.add_operation(overhang, CigarOp::Del);
-            match_info.total_operations += overhang as f64;
-            match_info.ref_consumed += overhang as i32;
+            cigar.add_operation(left_gap, CigarOp::Del);
+            match_info.total_operations += left_gap as f64;
+            match_info.ref_consumed += left_gap as i32;
             if match_info.prev_op == CigarOp::Ins {
-                match_info.total_coverage += overhang as f64;
+                match_info.total_coverage += left_gap as f64;
             } else if match_info.prev_op == CigarOp::Del {
                 match_info.total_operations += match_info.total_operations * 0.2;
             }
@@ -991,12 +984,11 @@ pub fn build_cigar_match(
     }
 
     // Handle end boundary
-    if gend < qend {
-        let overhang = qend - gend;
+    if right_ins > 0 {
         if matches!(segment.status, ExonStatus::LastExon | ExonStatus::OnlyExon) {
             if !has_right_clip {
-                cigar.add_operation(overhang, CigarOp::SoftClip);
-                match_info.total_operations += overhang as f64;
+                cigar.add_operation(right_ins, CigarOp::SoftClip);
+                match_info.total_operations += right_ins as f64;
                 match_info.prev_op = CigarOp::SoftClip;
             }
         } else if matches!(
@@ -1004,26 +996,25 @@ pub fn build_cigar_match(
             ExonStatus::FirstExon | ExonStatus::MiddleExon
         ) || has_right_clip
         {
-            cigar.add_operation(overhang, CigarOp::Ins);
-            match_info.total_operations += overhang as f64;
+            cigar.add_operation(right_ins, CigarOp::Ins);
+            match_info.total_operations += right_ins as f64;
             if match_info.prev_op == CigarOp::Del {
-                match_info.total_coverage += overhang as f64;
+                match_info.total_coverage += right_ins as f64;
             }
             match_info.prev_op = CigarOp::Ins;
         }
-    } else if qend < gend {
+    } else if right_gap > 0 {
         if !last_match
             && (matches!(
                 segment.status,
                 ExonStatus::FirstExon | ExonStatus::MiddleExon
             ) || has_right_clip)
         {
-            let overhang = gend - qend;
-            cigar.add_operation(overhang, CigarOp::Del);
-            match_info.total_operations += overhang as f64;
-            match_info.ref_consumed += overhang as i32;
+            cigar.add_operation(right_gap, CigarOp::Del);
+            match_info.total_operations += right_gap as f64;
+            match_info.ref_consumed += right_gap as i32;
             if match_info.prev_op == CigarOp::Ins {
-                match_info.total_coverage += overhang as f64;
+                match_info.total_coverage += right_gap as f64;
             }
             match_info.prev_op = CigarOp::Del;
         }
@@ -1223,37 +1214,15 @@ pub fn evaluate_exon_chains(
                 if td.elim {
                     continue;
                 }
-                if td.has_left_ins {
+                if td.has_left_clip {
                     if n_left_clip >= 5 {
                         left_clip_rescue(
                             td,
-                            &start_ignore,
                             strand,
                             g2t,
                             refid,
                             *tid,
                             n_left_clip,
-                            td.n_left_ins,
-                            &config,
-                            read,
-                            shared_seq,
-                            &mut ctx.aligner,
-                            &mut ctx.sw_bufs,
-                        );
-                    } else {
-                        td.has_left_clip = false;
-                    }
-                } else if td.has_left_clip {
-                    if n_left_clip >= 5 {
-                        left_clip_rescue(
-                            td,
-                            &start_ignore,
-                            strand,
-                            g2t,
-                            refid,
-                            *tid,
-                            n_left_clip,
-                            0,
                             &config,
                             read,
                             shared_seq,
@@ -1265,37 +1234,15 @@ pub fn evaluate_exon_chains(
                     }
                 }
 
-                if td.has_right_ins {
+                if td.has_right_clip {
                     if n_right_clip >= 5 {
                         right_clip_rescue(
                             td,
-                            &end_ignore,
                             strand,
                             g2t,
                             refid,
                             *tid,
                             n_right_clip,
-                            td.n_right_ins,
-                            &config,
-                            read,
-                            shared_seq,
-                            &mut ctx.aligner,
-                            &mut ctx.sw_bufs,
-                        );
-                    } else {
-                        td.has_right_clip = false;
-                    }
-                } else if td.has_right_clip {
-                    if n_right_clip >= 5 {
-                        right_clip_rescue(
-                            td,
-                            &end_ignore,
-                            strand,
-                            g2t,
-                            refid,
-                            *tid,
-                            n_right_clip,
-                            0,
                             &config,
                             read,
                             shared_seq,
