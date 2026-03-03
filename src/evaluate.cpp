@@ -844,13 +844,7 @@ namespace bramble {
 
     bool failure = false;
 
-    // if (config.name == "CHS.36908.12_ONT_simulated_read_266101") {
-    //   config.print = true;
-    // } else {
-    //   config.print = false;
-    // }
-    // config.print = true;
-    if (config.print) printf("read name = %s\n", config.name.c_str());
+    config.print = false;
 
     thread_local unordered_map<tid_t, TidData> data;
     data.clear();

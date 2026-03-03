@@ -27,6 +27,9 @@ impl SwBufs {
 #[derive(Debug, Clone)]
 pub struct AlignmentResult {
     pub score: i32,
+    /// Whether the alignment was z-dropped before reaching query end.
+    /// Matches C++ `result.score == KSW_NEG_INF` check.
+    pub zdropped: bool,
     pub cigar: Cigar,
     pub start_j: i32,
     pub end_j: i32,
@@ -84,6 +87,7 @@ pub fn smith_waterman(aligner: &mut Aligner, bufs: &mut SwBufs, seq1: &[u8], seq
     if m == 0 || n == 0 {
         return AlignmentResult {
             score: -1,
+            zdropped: false,
             cigar: Cigar::default(),
             start_j: 0, end_j: 0,
             start_i: 0, end_i: 0,
@@ -220,6 +224,7 @@ pub fn smith_waterman(aligner: &mut Aligner, bufs: &mut SwBufs, seq1: &[u8], seq
 
     AlignmentResult {
         score,
+        zdropped: ez.zdropped,
         cigar,
         start_j,
         end_j,

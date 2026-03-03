@@ -1279,15 +1279,21 @@ fn pad_ideal_for_leading_clips(ideal: &mut Vec<u8>, front_hard: u32, front_soft:
 
     padded.extend(std::iter::repeat_n(b'_', front_hard as usize));
 
-    for i in front_hard..front_soft {
-        let idx = i as usize;
-        if idx < ideal.len() && matches!(ideal[idx], b',' | b'.' | b'/' | b';') {
-            continue;
+    // For each soft-clip position, consume a leading override op from ideal
+    // (rescue match/del/ins/clip) if one is present, otherwise emit `_` padding.
+    // This ensures rescue ops appear BEFORE padding in the merged output,
+    // matching C++ merge_cigars which processes override ops first.
+    let mut ideal_pos = 0usize;
+    for _ in front_hard..front_soft {
+        if ideal_pos < ideal.len() && matches!(ideal[ideal_pos], b',' | b'.' | b'/' | b';') {
+            padded.push(ideal[ideal_pos]);
+            ideal_pos += 1;
+        } else {
+            padded.push(b'_');
         }
-        padded.push(b'_');
     }
 
-    padded.extend_from_slice(ideal);
+    padded.extend_from_slice(&ideal[ideal_pos..]);
     *ideal = padded;
 }
 

@@ -548,7 +548,6 @@ pub fn left_clip_rescue(
             let mut gseq: Vec<u8> = Vec::new();
             let mut curr = current_gexon.clone();
             let mut first_gexon: Option<GuideExon> = None;
-            let mut first_gexon_seq_len = 0usize;
             let mut n_collected = 0u32;
 
             while remaining_qseq.len() > gseq.len() {
@@ -579,7 +578,6 @@ pub fn left_clip_rescue(
                 gseq = new_gseq;
                 n_collected += 1;
                 if first_gexon.is_none() {
-                    first_gexon_seq_len = next.seq.len();
                     first_gexon = Some(next.clone());
                 }
                 curr = next;
@@ -591,24 +589,14 @@ pub fn left_clip_rescue(
             }
 
             // Trim guide: keep the rightmost query_len + 40 bytes (matching C++ align_reversed windowing).
-            // Only trim when multiple exons collected; single-exon preserves baseline behavior.
-            if n_collected > 1 {
-                let window = remaining_qseq.len() + 40;
-                if gseq.len() > window {
-                    let start = gseq.len() - window;
-                    gseq.drain(..start);
-                }
-            }
-
-            // TODO: Multi-exon alignment against concatenated guide is not yet compatible
-            // with the downstream gexon coordinate system. Use single-exon for now.
-            if n_collected > 1 {
-                let start = gseq.len().saturating_sub(first_gexon_seq_len);
-                if start > 0 { gseq.drain(..start); }
+            let window = remaining_qseq.len() + 40;
+            if gseq.len() > window {
+                let start = gseq.len() - window;
+                gseq.drain(..start);
             }
 
             let result = sw::smith_waterman(aligner, sw_bufs, &remaining_qseq, &gseq, Anchor::End);
-            if result.accuracy <= 0.70 || result.score < 10 {
+            if result.score < 10 || result.zdropped {
                 tid_data.has_left_clip = false;
                 return;
             }
@@ -656,13 +644,10 @@ pub fn left_clip_rescue(
         }
     }
 
-    if !remaining_qseq.is_empty()
-        && let Some(first) = tid_data.segments.first_mut()
-    {
-        first
-            .cigar
-            .prepend_operation(remaining_qseq.len() as u32, CigarOp::ClipOverride);
-    }
+    // Do NOT add ClipOverride for unrescued bases. The unrescued query bases
+    // from the leading soft clip will naturally pass through the merge as S
+    // ops when they hit the non-override M ops of the ideal (via pad_ideal_for_leading_clips).
+    // Adding ClipOverride here would cause wrong ordering (before the rescue match).
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -731,7 +716,6 @@ pub fn right_clip_rescue(
             let mut gseq: Vec<u8> = Vec::new();
             let mut curr = current_gexon.clone();
             let mut first_gexon: Option<GuideExon> = None;
-            let mut first_gexon_seq_len = 0usize;
             let mut n_collected = 0u32;
 
             while remaining_qseq.len() > gseq.len() {
@@ -758,7 +742,6 @@ pub fn right_clip_rescue(
                 gseq.extend_from_slice(&next.seq);
                 n_collected += 1;
                 if first_gexon.is_none() {
-                    first_gexon_seq_len = next.seq.len();
                     first_gexon = Some(next.clone());
                 }
                 curr = next;
@@ -769,22 +752,12 @@ pub fn right_clip_rescue(
                 return;
             }
 
-            // Trim guide to query_len + 40 when multiple exons collected (matching C++).
-            if n_collected > 1 {
-                let window = remaining_qseq.len() + 40;
-                if gseq.len() > window { gseq.truncate(window); }
-            }
-
-            // TODO: Multi-exon alignment against concatenated guide produces different
-            // CIGARs that are incompatible with the downstream gexon coordinate system.
-            // For now, always use only the first exon for alignment (matching baseline).
-            // The multi-exon loop still serves to collect neighbor info for future use.
-            if n_collected > 1 {
-                gseq.truncate(first_gexon_seq_len);
-            }
+            // Trim guide to query_len + 40 (matching C++).
+            let window = remaining_qseq.len() + 40;
+            if gseq.len() > window { gseq.truncate(window); }
 
             let result = sw::smith_waterman(aligner, sw_bufs, &remaining_qseq, &gseq, Anchor::Start);
-            if result.accuracy <= 0.70 || result.score < 10 {
+            if result.score < 10 || result.zdropped {
                 tid_data.has_right_clip = false;
                 return;
             }
@@ -835,13 +808,10 @@ pub fn right_clip_rescue(
         }
     }
 
-    if !remaining_qseq.is_empty()
-        && let Some(last) = tid_data.segments.last_mut()
-    {
-        last
-            .cigar
-            .add_operation(remaining_qseq.len() as u32, CigarOp::ClipOverride);
-    }
+    // Do NOT add ClipOverride for unrescued bases. The unrescued query bases
+    // from the trailing soft clip will naturally pass through the merge as S
+    // ops. Adding ClipOverride here causes phantom S ops when real is exhausted
+    // but the ideal still has ClipOverride entries.
 }
 
 pub fn correct_for_gaps(

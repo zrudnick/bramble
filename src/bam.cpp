@@ -502,7 +502,7 @@ namespace bramble {
     uint32_t* new_cigar = nullptr;
     uint32_t new_n_cigar = 0;
 
-    new_cigar = get_new_cigar(cigar, n_cigar, ideal_cigar, 
+    new_cigar = get_new_cigar(cigar, n_cigar, ideal_cigar,
       &new_n_cigar, mem, nm);
 
     // Calculate new data layout sizes
