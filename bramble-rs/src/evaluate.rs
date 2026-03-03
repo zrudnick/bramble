@@ -333,15 +333,19 @@ pub fn get_clips(
 
     let (left0_len, left0_kind) = ops.first().unwrap();
     let left1 = ops.get(1);
+    // C++ sets has_left_clip = USE_FASTA (only true when FASTA mode is on).
+    // Without FASTA, soft clips are detected (n_left_clip is set) but
+    // has_left_clip stays false, which changes how build_cigar_match handles
+    // boundary insertions (SoftClip vs Ins).
     if *left0_kind == CigarKind::HardClip {
         if let Some((op_len, op_kind)) = left1
             && *op_kind == CigarKind::SoftClip
         {
-            has_left_clip = config.soft_clips;
+            has_left_clip = config.use_fasta;
             n_left_clip = *op_len;
         }
     } else if *left0_kind == CigarKind::SoftClip {
-        has_left_clip = config.soft_clips;
+        has_left_clip = config.use_fasta;
         n_left_clip = *left0_len;
     }
 
@@ -351,11 +355,11 @@ pub fn get_clips(
         if let Some((op_len, op_kind)) = right1
             && *op_kind == CigarKind::SoftClip
         {
-            has_right_clip = config.soft_clips;
+            has_right_clip = config.use_fasta;
             n_right_clip = *op_len;
         }
     } else if *right0_kind == CigarKind::SoftClip {
-        has_right_clip = config.soft_clips;
+        has_right_clip = config.use_fasta;
         n_right_clip = *right0_len;
     }
 
