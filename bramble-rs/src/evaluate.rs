@@ -604,9 +604,9 @@ pub fn left_clip_rescue(
 
             let left_clip = EvalSegment {
                 is_valid: true,
-                has_qexon: true,
-                has_gexon: true,
-                gexon: Some(left_gexon.clone()),
+                has_qexon: false,
+                has_gexon: false,
+                gexon: None,
                 qexon: alignment::Segment { start: qstart, end: qend },
                 status: ExonStatus::LeftClipExon,
                 is_small_exon: remaining_qseq.len() as u32 <= config.small_exon_size,
@@ -766,9 +766,9 @@ pub fn right_clip_rescue(
 
             let right_clip = EvalSegment {
                 is_valid: true,
-                has_qexon: true,
-                has_gexon: true,
-                gexon: Some(right_gexon.clone()),
+                has_qexon: false,
+                has_gexon: false,
+                gexon: None,
                 qexon: alignment::Segment { start: qstart, end: qend },
                 status: ExonStatus::RightClipExon,
                 is_small_exon: remaining_qseq.len() as u32 <= config.small_exon_size,
@@ -1272,8 +1272,8 @@ pub fn evaluate_exon_chains(
             for segment in td.segments.iter() {
                 if !match_created && segment.status == ExonStatus::InsExon {
                     n_ins_exon += segment.qexon.end - segment.qexon.start;
-                    first_match_idx += 1;
-                    last_match_idx += 1;
+                    // C++ skips InsExon entirely (has_gexon=false) — do NOT
+                    // increment first_match_idx/last_match_idx here.
                     continue;
                 }
 
@@ -1286,7 +1286,10 @@ pub fn evaluate_exon_chains(
                     prev_e = gexon.end;
                 }
 
-                if !match_created && segment.status != ExonStatus::InsExon {
+                // Match C++: use has_gexon (not status check) for both conditions.
+                // Clip segments have has_gexon=false (matching C++), so they're
+                // skipped here just like in C++.
+                if !match_created && segment.has_gexon {
                     let gexon = segment.gexon.as_ref().unwrap();
                     let read_strand_for_match = if long_reads
                         && read.segs.len() == 1
@@ -1301,7 +1304,10 @@ pub fn evaluate_exon_chains(
                     match_created = true;
                     first_match_idx += 1;
                     last_match_idx += 1;
-                } else if match_created && segment.status != ExonStatus::InsExon {
+                } else if match_created
+                    && segment.has_gexon
+                    && segment.status != ExonStatus::InsExon
+                {
                     last_match_idx += 1;
                     if strand == '-'
                         && let Some(gexon) = segment.gexon.as_ref()

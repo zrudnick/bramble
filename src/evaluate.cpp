@@ -624,6 +624,7 @@ namespace bramble {
       printf("right_ins = %d, right_gap = %d\n", right_ins, right_gap);
     }
 
+
     Cigar &cigar = match.align.cigar;
 
     // Handle start boundary
