@@ -435,7 +435,7 @@ pub fn build_g2t(
             let len = exon.end.saturating_sub(exon.start);
             let seq: Arc<[u8]> = if let Some(fa) = fasta {
                 fa.get_slice(&tx.seqname, exon.start, exon.end)
-                    .map(|v| Arc::from(v))
+                    .map(Arc::from)
                     .unwrap_or_else(|| Arc::from([]))
             } else {
                 Arc::from([])

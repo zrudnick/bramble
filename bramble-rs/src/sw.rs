@@ -46,6 +46,7 @@ pub struct AlignmentResult {
     pub deletions: i32,
     #[allow(dead_code)]
     pub error_rate: f64,
+    #[allow(dead_code)]
     pub accuracy: f64,
 }
 

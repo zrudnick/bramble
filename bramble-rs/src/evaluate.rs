@@ -125,6 +125,7 @@ impl Cigar {
         self.ops.push((len, op));
     }
 
+    #[allow(dead_code)]
     pub fn prepend_operation(&mut self, len: u32, op: CigarOp) {
         if len == 0 {
             return;
@@ -620,12 +621,11 @@ pub fn left_clip_rescue(
             tid_data.segments.insert(0, left_clip);
             // Match C++: zero out left_ins on the original first segment (now at index 1)
             // so build_cigar_match sees left_ins=0 and increments junc_hits.
-            if let Some(seg) = tid_data.segments.get_mut(1) {
-                if let Some(ref mut ge) = seg.gexon {
-                    if ge.left_ins > 0 {
-                        ge.left_ins = 0;
-                    }
-                }
+            if let Some(seg) = tid_data.segments.get_mut(1)
+                && let Some(ref mut ge) = seg.gexon
+                && ge.left_ins > 0
+            {
+                ge.left_ins = 0;
             }
             tid_data.has_left_clip = true;
 
@@ -783,10 +783,10 @@ pub fn right_clip_rescue(
             // Match C++: zero out right_ins on the original last segment
             // so build_cigar_match sees right_ins=0 and increments junc_hits.
             let orig_last = tid_data.segments.len() - 2;
-            if let Some(ref mut ge) = tid_data.segments[orig_last].gexon {
-                if ge.right_ins > 0 {
-                    ge.right_ins = 0;
-                }
+            if let Some(ref mut ge) = tid_data.segments[orig_last].gexon
+                && ge.right_ins > 0
+            {
+                ge.right_ins = 0;
             }
             tid_data.has_right_clip = true;
 
