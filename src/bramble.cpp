@@ -314,8 +314,8 @@ void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,
   total_processed = 0;
   
   seen_last_out = 0;
-  print_mod = LONG_READS ? 100000 : 10000000;
-  // 100,000 for long reads
+  print_mod = LONG_READS ? 1000000 : 10000000;
+  // 1,000,000 for long reads
   // 10,000,000 for short reads
 
   bool more_alignments = true;

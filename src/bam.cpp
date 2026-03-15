@@ -38,6 +38,11 @@ namespace bramble {
       return BAM_CDEL;
     }
 
+    if (real_op == BAM_CDEL && (ideal_op == BAM_CSOFT_CLIP
+      || ideal_op == BAM_CLIP_OVERRIDE)) {
+      return '_';
+    }
+
     if (real_op == BAM_CDEL && ideal_op == BAM_CMATCH_OVERRIDE) {
       return BAM_CDEL;
     }
@@ -122,6 +127,7 @@ namespace bramble {
     
     auto add_op = [&](uint8_t op, uint32_t len) {
       if (len == 0) return;
+      if (op == '_') return; // deletion is soft clipped
       if (result_idx > 0 && bam_cigar_op(result[result_idx - 1]) == op) {
         result[result_idx - 1] += (len << 4);
       } else {
@@ -283,6 +289,27 @@ namespace bramble {
       }
     }
     
+    for (uint32_t i = 1; i + 1 < result_idx; i++) {
+      if (bam_cigar_op(result[i]) != BAM_CINS) continue;
+      uint8_t prev = bam_cigar_op(result[i-1]);
+      uint8_t next = bam_cigar_op(result[i+1]);
+      if ((prev == BAM_CSOFT_CLIP || prev == BAM_CHARD_CLIP) &&
+        (next == BAM_CSOFT_CLIP || next == BAM_CHARD_CLIP)) {
+        result[i] = bam_cigar_gen(bam_cigar_oplen(result[i]), prev);
+      }
+    }
+
+    uint32_t new_idx = 0;
+    for (uint32_t i = 0; i < result_idx; i++) {
+      uint8_t op = bam_cigar_op(result[i]);
+      uint32_t len = bam_cigar_oplen(result[i]);
+      if (new_idx > 0 && bam_cigar_op(result[new_idx-1]) == op)
+        result[new_idx-1] += (len << 4);
+      else
+        result[new_idx++] = bam_cigar_gen(len, op);
+    }
+    result_idx = new_idx;
+
     *new_n_cigar = result_idx;
     return result;
   }
@@ -323,34 +350,25 @@ namespace bramble {
         ideal_expanded += "MIDNSHP=XB,./;"[ideal_op];
         merged_expanded += "MIDNSHP=XB,./;"[ideal_op];
         ideal_pos++;
-        if (ideal_pos >= (ideal_cigar.cigar[ii] >> BAM_CIGAR_SHIFT)) {
-          ii++;
-          ideal_pos = 0;
-        }
       } else if (ii >= ideal_cigar.n_cigar) {
         real_expanded += "MIDNSHP=XB,./;"[real_op];
         ideal_expanded += '_';
         merged_expanded += "MIDNSHP=XB,./;"[real_op];
         real_pos++;
-        if (real_pos >= (real_cigar[ri] >> BAM_CIGAR_SHIFT)) {
-          ri++;
-          real_pos = 0;
-        }
       } else if (real_op == BAM_CREF_SKIP) {
         real_pos++;
-        if (real_pos >= (real_cigar[ri] >> BAM_CIGAR_SHIFT)) {
-          ri++;
-          real_pos = 0;
-        }
       } else if (real_op == BAM_CHARD_CLIP) {
         real_expanded += 'H';
         ideal_expanded += '_';
         merged_expanded += 'H';
         real_pos++;
-        if (real_pos >= (real_cigar[ri] >> BAM_CIGAR_SHIFT)) {
-          ri++;
-          real_pos = 0;
-        }
+      } else if (real_op == BAM_CDEL && (ideal_op == BAM_CSOFT_CLIP
+        || ideal_op == BAM_CLIP_OVERRIDE)) {
+        real_expanded += 'D';
+        ideal_expanded += "MIDNSHP=XB,./;"[ideal_op];
+        merged_expanded += '_';
+        ideal_pos++;
+        real_pos++;
       } else if (real_op == BAM_CSOFT_CLIP) {
         if (ideal_op == BAM_CMATCH_OVERRIDE) {
           real_expanded += 'S';
@@ -381,46 +399,31 @@ namespace bramble {
           merged_expanded += 'S';
           real_pos++;
         }
-        if (real_pos >= (real_cigar[ri] >> BAM_CIGAR_SHIFT)) {
-          ri++;
-          real_pos = 0;
-        }
-        if (ideal_pos >= (ideal_cigar.cigar[ii] >> BAM_CIGAR_SHIFT)) {
-          ii++;
-          ideal_pos = 0;
-        }
       } else if (real_op == BAM_CINS) {
         real_expanded += 'I';
         ideal_expanded += '_';
         merged_expanded += 'I';
         real_pos++;
-        if (real_pos >= (real_cigar[ri] >> BAM_CIGAR_SHIFT)) {
-          ri++;
-          real_pos = 0;
-        }
       } else if (ideal_op == BAM_CDEL || ideal_op == BAM_CDEL_OVERRIDE) {
         real_expanded += '_';
         ideal_expanded += "MIDNSHP=XB,./;"[ideal_op];
         merged_expanded += 'D';
         ideal_pos++;
-        if (ideal_pos >= (ideal_cigar.cigar[ii] >> BAM_CIGAR_SHIFT)) {
-          ii++;
-          ideal_pos = 0;
-        }
       } else {
         real_expanded += "MIDNSHP=XB,./;"[real_op];
         ideal_expanded += "MIDNSHP=XB,./;"[ideal_op];
         merged_expanded += "MIDNSHP=XB,./;"[merge_ops(real_op, ideal_op)];
         real_pos++;
         ideal_pos++;
-        if (real_pos >= (real_cigar[ri] >> BAM_CIGAR_SHIFT)) {
-          ri++;
-          real_pos = 0;
-        }
-        if (ideal_pos >= (ideal_cigar.cigar[ii] >> BAM_CIGAR_SHIFT)) {
-          ii++;
-          ideal_pos = 0;
-        }
+      }
+
+      if (real_pos >= (real_cigar[ri] >> BAM_CIGAR_SHIFT)) {
+        ri++;
+        real_pos = 0;
+      }
+      if (ideal_pos >= (ideal_cigar.cigar[ii] >> BAM_CIGAR_SHIFT)) {
+        ii++;
+        ideal_pos = 0;
       }
     }
 
@@ -463,7 +466,7 @@ namespace bramble {
       real_front_soft_clip, mem);
 
     // debug cigar strings
-    //print_debug(real_cigar, n_real_cigar, ideal_cigar, new_n_cigar, result);
+    // print_debug(real_cigar, n_real_cigar, ideal_cigar, new_n_cigar, result);
     
     return result;
   }

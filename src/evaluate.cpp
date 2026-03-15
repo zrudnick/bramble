@@ -296,7 +296,7 @@ namespace bramble {
     
     int flag = KSW_EZ_EXTZ_ONLY | KSW_EZ_APPROX_MAX | KSW_EZ_APPROX_DROP;
     ksw_extz2_sse(0, ql, qs, tl, ts, 5, mat, gapo, gape, -1, zdrop, 0, flag, &ez);
-    
+    // 17, 262M 14I 103M 4I 1179M 29S
     result.score = ez.score;
     result.max = ez.max;  // use max due to EXTZ_ONLY
     result.cigar_array = ez.cigar;
@@ -384,14 +384,42 @@ namespace bramble {
     );
   }
 
-  static Segment build_left_clip_segment(const kswResult &result, int q_len, int small_exon) {
+  static Segment build_left_clip_segment(const kswResult &result, 
+                                        int q_len, int small_exon,
+                                        GuideExon &gexon) {
+    
+    // Compute how many query bases the reversed CIGAR actually consumed
+    int query_consumed = 0;
+    int ref_consumed = 0;
+    for (int i = 0; i < result.n_cigar; ++i) {
+      int op  = bam_cigar_op(result.cigar_array[i]);
+      int len = bam_cigar_oplen(result.cigar_array[i]);
+      if (op == BAM_CMATCH || op == BAM_CINS || op == BAM_CSOFT_CLIP)
+        query_consumed += len;
+      if (op == BAM_CMATCH || op == BAM_CDEL)
+        ref_consumed += len;
+    }
+
+    // Bases not reached by the extension = left soft clip in original orientation
+    int left_clip = q_len - query_consumed;
+                                          
     Segment seg = {};
     seg.has_qexon     = false;
-    seg.has_gexon     = false;
+    seg.has_gexon     = true;
     seg.status        = LEFTC_EXON;
     seg.is_small_exon = (q_len <= small_exon);
     seg.cigar         = Cigar();
     seg.score         = result.max;  // use max, not score, for extension alignment
+
+    GuideExon dummy  = {};
+    dummy.start      = gexon.start - ref_consumed;
+    dummy.end        = gexon.start;
+    dummy.pos        = gexon.pos_start - ref_consumed;
+    seg.gexon        = dummy;
+
+    // Prepend soft clip for unaligned left-end bases (in original orientation)
+    if (left_clip > 0)
+      seg.cigar.add_operation(left_clip, BAM_CLIP_OVERRIDE);
 
     // CIGAR was built for the reversed sequences, so iterate in reverse
     for (int i = result.n_cigar - 1; i >= 0; --i) {
@@ -452,7 +480,7 @@ namespace bramble {
       gexon.left_ins = 0;
 
     Segment left_clip = build_left_clip_segment(result, qseq.length(), 
-      config.small_exon_size);
+      config.small_exon_size, gexon);
     free(result.cigar_array);
 
     td.segments.emplace(td.segments.begin(), left_clip);
@@ -485,8 +513,10 @@ namespace bramble {
 
       bool has_neighbor = (strand == '+') ? curr.has_next : curr.has_prev;
       if (!has_neighbor) {
-        if (print) printf("no neighbor on right side :(\n");
-        if (i == 1) return false;
+        if (i == 1) {
+          if (print) printf("no neighbor on right side :(\n");
+          if (i == 1) return false;
+        }
         break;
       }
 
@@ -506,14 +536,37 @@ namespace bramble {
   }
 
   static Segment build_right_clip_segment(const kswResult &result, 
-                                          int query_len, int small_exon) {
+                                          int q_len, int small_exon,
+                                          GuideExon &gexon) {
+    
+    // Compute how many query bases the reversed CIGAR actually consumed
+    int query_consumed = 0;
+    int ref_consumed = 0;
+    for (int i = 0; i < result.n_cigar; ++i) {
+      int op  = bam_cigar_op(result.cigar_array[i]);
+      int len = bam_cigar_oplen(result.cigar_array[i]);
+      if (op == BAM_CMATCH || op == BAM_CINS || op == BAM_CSOFT_CLIP)
+        query_consumed += len;
+      if (op == BAM_CMATCH || op == BAM_CDEL)
+        ref_consumed += len;
+    }
+
+    // Bases not reached by the extension = left soft clip in original orientation
+    int right_clip = q_len - query_consumed;
+                                            
     Segment seg      = {};
     seg.has_qexon    = false;
-    seg.has_gexon    = false;
+    seg.has_gexon    = true;
     seg.status       = RIGHTC_EXON;
-    seg.is_small_exon = (query_len <= small_exon);
+    seg.is_small_exon = (q_len <= small_exon);
     seg.cigar        = Cigar();
     seg.score        = result.max;  // use max, not score, for extension alignment
+
+    GuideExon dummy  = {};
+    dummy.start      = gexon.end;
+    dummy.end        = gexon.end + ref_consumed;
+    dummy.pos        = gexon.pos_start - ref_consumed;
+    seg.gexon        = dummy;
 
     for (int i = 0; i < result.n_cigar; ++i) {
       int  len     = bam_cigar_oplen(result.cigar_array[i]);
@@ -526,6 +579,10 @@ namespace bramble {
       else if (op_char == 'I')                              seg.cigar.add_operation(len, BAM_CINS_OVERRIDE);
       else                                                  seg.cigar.add_operation(len, BAM_CMATCH_OVERRIDE);
     }
+
+    // Add soft clip for unaligned right-end bases
+    if (right_clip > 0)
+      seg.cigar.add_operation(right_clip, BAM_CLIP_OVERRIDE);
 
     return seg;
   }
@@ -580,7 +637,8 @@ namespace bramble {
 
     if (gexon.right_ins > 0) gexon.right_ins = 0;
 
-    Segment right_clip = build_right_clip_segment(result, qseq.length(), config.small_exon_size);
+    Segment right_clip = build_right_clip_segment(result, qseq.length(), 
+      config.small_exon_size, gexon);
     free(result.cigar_array);
 
     td.segments.emplace_back(right_clip);
@@ -846,6 +904,9 @@ namespace bramble {
     bool failure = false;
 
     config.print = false;
+    // if (config.name == "CHS.36908.6_PBSIM_simulated_read_297") {
+    //   config.print = true;
+    // }
 
     thread_local unordered_map<tid_t, TidData> data;
     data.clear();
@@ -865,7 +926,7 @@ namespace bramble {
         get_intervals(data, read, j, exon_count, config, g2t,
           refid, strand, has_left_clip, has_right_clip, failure);
 
-        //if (!config.print) failure = true;
+        // if (!config.print) failure = true;
         if (failure) break;
 
       } // end of exon loop
@@ -897,7 +958,7 @@ namespace bramble {
             } else {
               td.has_right_clip = false;
             }
-          }       
+          }  
         }
       }
 
@@ -947,22 +1008,40 @@ namespace bramble {
         uint32_t first_match_idx = -1;
         uint32_t last_match_idx = -1;
 
+        uint32_t prev_gs = UINT32_MAX, prev_ge = UINT32_MAX;
+        uint32_t prev_qs = UINT32_MAX, prev_qe = UINT32_MAX;
+        bool qset = false, gset = false;
+
         for (uint32_t k = 0; k < n_segments; k++) {
           Segment &seg = td.segments[k];
 
-          // if two read exons somehow mapped to same guide exon
-          // just quit
+          // Any non-injective mapping between query and guide exons is invalid:
+          // same guide + different query => 2 query exons mapped to 1 guide exon
+          // same query + different guide => 1 query exon mapped to 2 guide exons
           if (seg.has_gexon) {
-            if (seg.gexon.start == prev_s 
-              && seg.gexon.end == prev_e) {
-              td.elim = true;
-              break;
+            if (gset) {
+              bool same_gexon = (seg.gexon.start == prev_gs) && (seg.gexon.end == prev_ge);
+              if (same_gexon) {
+                td.elim = true;
+                break;
+              }
             }
+            prev_gs = seg.gexon.start;
+            prev_ge = seg.gexon.end;
+            gset = true;
           }
 
-          if (seg.has_gexon) {
-            prev_s = seg.gexon.start;
-            prev_e = seg.gexon.end;
+          if (seg.has_qexon) {
+            if (qset) {
+              bool same_qexon = (seg.qexon.start == prev_qs) && (seg.qexon.end == prev_qe);
+              if (same_qexon) {
+                td.elim = true;
+                break;
+              }
+            }
+            prev_qs = seg.qexon.start;
+            prev_qe = seg.qexon.end;
+            qset = true;
           }
 
           // Create exon chain matches
@@ -976,7 +1055,6 @@ namespace bramble {
           }
 
           else if (match_created && seg.has_gexon && seg.status != INS_EXON) {
-            // update rcpos
             last_match_idx++;
             if (strand == '-') {
               td.match.align.rcpos = seg.gexon.pos;
