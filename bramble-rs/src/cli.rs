@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -20,8 +21,8 @@ pub struct Args {
     pub out_bam: PathBuf,
 
     /// Number of threads (CPUs) to use
-    #[arg(short = 'p', long = "threads", default_value_t = 1)]
-    pub threads: u8,
+    #[arg(short = 'p', long = "threads", default_value_t = NonZeroU32::new(1).unwrap())]
+    pub threads: NonZeroU32,
 
     /// Alignments are from long reads
     #[arg(long)]
