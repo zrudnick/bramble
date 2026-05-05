@@ -45,7 +45,9 @@ Options:\n\
  --help       : print this usage message and exit\n\
  --version    : print just the version at stdout and exit\n\
  --quiet      : turn off verbose mode (log bundle processing details)\n\
- --long       : alignments are from long reads?\n\
+ --lr         : alignments are from long reads\n\
+ --lr:hq      : alignments are from high-quality long reads\n\
+ --strict     : force strict boundary adherence\n\
  --fr         : assume stranded library (first-strand, read2 sense)\n\
  --rf         : assume stranded library (second-strand, read1 sense)\n\
  --paired-end : library is paired-end\n\
@@ -57,12 +59,20 @@ Options:\n\
 
 bool QUIET = false;     // Turn off verbose mode, --quiet
 bool BRAMBLE_DEBUG = false;
-bool LONG_READS = false;  // BAM file contains long reads, --long
+bool LONG_READS = false;  // BAM file contains long reads
+bool LR = false;          // lr preset
+bool LR_HQ = false;       // lr:hq preset
 bool FR_STRAND = false;   // Read 2 is on sense strand, --fr
 bool RF_STRAND = false;   // Read 1 is on sense strand, --fr
 bool USE_FASTA = false;   // Use FASTA for reducing soft clips
 bool SOFT_CLIPS = true;   // Add soft clips
 bool STRICT = false;      // Use for strict boundary adherence
+
+uint32_t MAX_CLIP = -1;
+uint32_t MAX_INS = -1;
+uint32_t MAX_JUNC_GAP = -1;
+float SIM_THR = 0.0;
+uint32_t SMALL_EXON_SIZE = -1;
 
 FILE *f_out = NULL;       // Default: stdout
 uint8_t n_threads = 1;    // Threads, -p
@@ -423,7 +433,14 @@ int main(int argc, char *argv[]) {
   std::string in_fasta;
   app.add_option("in.bam", in_bam, "input bam file")->required();
   app.add_flag("--quiet", QUIET, "turn off verbose (log processing details)");
-  app.add_flag("--long", LONG_READS, "alignments are from long reads?");
+  app.add_flag("--lr", LR, "alignments are from long reads");
+  app.add_flag("--lr:hq", LR_HQ, "alignments are from high-quality long reads");
+  app.add_flag("--strict", STRICT, "force strict boundary adherence");
+  app.add_flag("--max-clip", MAX_CLIP, "maximum soft clip (overrides preset)");
+  app.add_flag("--max-ins", MAX_INS, "maximum insertion (overrides preset)");
+  app.add_flag("--max-junc-gap", MAX_JUNC_GAP, "maximum junction gap (overrides preset)");
+  app.add_flag("--similarity-threshold", SIM_THR, "similarity_threshold (overrides preset)");
+  app.add_flag("--small_exon_size", SMALL_EXON_SIZE, "small exon size (overrides preset)");
   app.add_flag("--fr", FR_STRAND, "assume stranded library (first-strand, read2 sense)");
   app.add_flag("--rf", RF_STRAND, "assume stranded library (second-strand, read1 sense)");
   app.add_option("-G", gff,
@@ -445,6 +462,12 @@ int main(int argc, char *argv[]) {
   };
   app.add_flag_function("-V,--version", version_callback, "print version.");
 
+  std::string pg_args;
+  for (int i = 0; i < argc; i++) {
+    if (i > 0) pg_args += " ";
+    pg_args += argv[i];
+  }
+
   CLI11_PARSE(app, argc, argv);
 
   bam_file_in = in_bam.c_str();
@@ -456,15 +479,29 @@ int main(int argc, char *argv[]) {
     USE_FASTA = true;
   }
 
+  if (LR || LR_HQ) LONG_READS = true;
+
   // Add check for valid header
 
   // Create SAM header file
-  const GStr header_path = "tx_header.sam";
+  const GStr header_path = "header.tmp.sam";
   FILE *header_file = fopen(header_path.chars(), "w");
   if (header_file == NULL)
     LOG_ERROR(logger, "error creating header file: {}", 
       header_path.chars());
-  fprintf(header_file, "@HD\tVN:1.0\tSO:coordinate\n");
+  //fprintf(header_file, "@HD\tVN:1.0\tSO:coordinate\n");
+
+  // Open reader temporarily to get the header
+  GSamReader tmp_reader(bam_file_in);
+  sam_hdr_t* hdr = sam_hdr_dup(tmp_reader.header());
+  sam_hdr_add_pg(hdr, "Bramble", "VN", VERSION, "CL", pg_args.c_str(), NULL);
+  FILE* header_file = fopen(header_path.chars(), "w");
+  fputs(sam_hdr_str(hdr), header_file);
+  fclose(header_file);
+  sam_hdr_destroy(hdr);
+
+  // BamIO unchanged
+  BamIO* io = new BamIO(bam_file_in, bam_file_out, header_path);
 
   if (!QUIET || BRAMBLE_DEBUG) {
     printf("\n[bramble] starting version: %s\n", VERSION);
@@ -545,9 +582,10 @@ int main(int argc, char *argv[]) {
   if (!QUIET || BRAMBLE_DEBUG) {
     LOG_INFO(logger, "reference annotation loaded! {} unique transcripts were found", 
       gffreader->gflst.Count());
-    if (LONG_READS) LOG_INFO(logger, "using long-read mode");
+    if (LR) LOG_INFO(logger, "using long-read mode (--lr)");
+    if (LR_HQ) LOG_INFO(logger, "using long-read mode (--lr:hq)");
     else {
-      LOG_INFO(logger, "using short-read mode (have long reads? try running with --long)");
+      LOG_INFO(logger, "using short-read mode (have long reads? try running with --lr or --lr:hq)");
     }
     LOG_INFO(logger, "building g2t tree");
   }
@@ -641,6 +679,9 @@ int main(int argc, char *argv[]) {
   io->stop(); // close BAM reader & writer
   delete io;
   delete gfasta;
+
+  // Delete SAM header file from folder
+  std::remove(header_path.chars());
 
   if (!QUIET || BRAMBLE_DEBUG) {
     printf("\n[bramble] final report:\n");

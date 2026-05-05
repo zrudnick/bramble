@@ -17,9 +17,17 @@
 
 extern bool BRAMBLE_DEBUG;
 extern bool LONG_READS;
+extern bool LR;
+extern bool LR_HQ;
 extern bool USE_FASTA;
 extern bool SOFT_CLIPS;
 extern bool STRICT;
+
+extern uint32_t MAX_CLIP;
+extern uint32_t MAX_INS;
+extern uint32_t MAX_JUNC_GAP;
+extern float SIM_THR;
+extern uint32_t SMALL_EXON_SIZE;
 
 namespace bramble {
 
@@ -122,7 +130,9 @@ namespace bramble {
     const auto &seg1 = *prev_guide;
     uint8_t gap = seg2.gexon.exon_id - seg1.gexon.exon_id;
 
-    // short reads: require strict continuity
+    // short reads and hq long reads: require strict continuity
+    // todo: make check for config.ignore_small_exons && is_small_exon
+    // for continuity with small exon insertions?
     if (!LONG_READS) {
       if (gap != 1) {
         td.elim = true;
@@ -145,7 +155,7 @@ namespace bramble {
           seg2.gexon.prev_end : seg2.gexon.next_end;
 
         if ((gap_start == 0 && gap_end == 0) || 
-          (gap_end - gap_start > config.max_gap)) {
+          (gap_end - gap_start > config.small_exon_size)) {
           td.elim = true;
           return false;
         }
@@ -833,7 +843,7 @@ namespace bramble {
   void 
   ReadEvaluator::filter_by_similarity(std::vector<ExonChainMatch> &matches, 
                                       std::shared_ptr<g2tTree> g2t, ReadEvaluationConfig config) {
-    if (LONG_READS) {
+    if (config.filter_by_similarity) {
       for (auto it = matches.begin(); it != matches.end(); ) {
         auto &match = (*it);
 
@@ -1137,22 +1147,40 @@ namespace bramble {
                               uint8_t *seq,
                               int seq_len) {
 
-    uint32_t max_clip = 5;
-    uint32_t max_ins = 0;
-    uint32_t max_gap = 0;
-    uint32_t max_junc_gap = 0;
-    float similarity_threshold = 0.90;
+    uint32_t max_clip, max_ins, max_junc_gap, small_exon_size;
+    float similarity_threshold;
+    if (!STRICT) {
+      max_clip = 5;
+      max_ins = 0;
+      max_junc_gap = 0;
+      similarity_threshold = 1.0;
+      small_exon_size = 0;
+    } else {
+      max_clip = 0;
+      max_ins = 0;
+      max_junc_gap = 0;
+      similarity_threshold = 1.0;
+      small_exon_size = 0;
+    }
+
+    if (MAX_CLIP != -1) max_clip = MAX_CLIP;
+    if (MAX_INS != -1) max_ins = MAX_INS;
+    if (MAX_JUNC_GAP != -1) max_junc_gap = MAX_JUNC_GAP;
+    if (SIM_THR != 0.0) max_clip = MAX_CLIP;
+    if (SMALL_EXON_SIZE != -1) small_exon_size = SMALL_EXON_SIZE;
+
+    bool ignore_small_exons = (small_exon_size > 0);
+    bool filter_by_similarity = (similarity_threshold < 1.0);
 
     ReadEvaluationConfig config = {
       max_clip,                       // max clip size
       max_ins,                        // max insertion to intervals
-        // for when there exist no guides to explain a portion of an exon
-      max_gap,                        // max gap in reference to intervals
-      false,                          // ignore small exons?
-      0,                              // small exon size
       max_junc_gap,                   // max junction gap
-      similarity_threshold,
-      false,                           // print debug statements
+      ignore_small_exons,            
+      small_exon_size,                
+      similarity_threshold,                         
+      filter_by_similarity,          
+      false,                          // print debug statements?
       ""
     }; 
 
@@ -1165,22 +1193,45 @@ namespace bramble {
                               std::shared_ptr<g2tTree> g2t,
                               uint8_t *seq,
                               int seq_len) {
+    uint32_t max_clip, max_ins, max_junc_gap, small_exon_size;
+    float similarity_threshold;                          
+    if (LR) {
+      max_clip = 40;
+      max_ins = 40;
+      max_junc_gap = 40;
+      small_exon_size = 35;
+      similarity_threshold = 0.60;
+    } else if (LR_HQ) {
+      max_clip = 5;
+      max_ins = 10;
+      max_junc_gap = 10;
+      small_exon_size = 35;
+      similarity_threshold = 0.90;
+    } else if (STRICT) {
+      max_clip = 0;
+      max_ins = 0;
+      max_junc_gap = 0;
+      small_exon_size = 35;
+      similarity_threshold = 1.0;
+    }                         
+    
+    if (MAX_CLIP != -1) max_clip = MAX_CLIP;
+    if (MAX_INS != -1) max_ins = MAX_INS;
+    if (MAX_JUNC_GAP != -1) max_junc_gap = MAX_JUNC_GAP;
+    if (SIM_THR != 0.0) max_clip = MAX_CLIP;
+    if (SMALL_EXON_SIZE != -1) small_exon_size = SMALL_EXON_SIZE;
 
-    uint32_t max_clip = 40;
-    uint32_t max_ins = 40;
-    uint32_t max_gap = 40;
-    uint32_t max_junc_gap = 40;
-    float similarity_threshold = 0.60;
+    bool ignore_small_exons = (small_exon_size > 0);
+    bool filter_by_similarity = (similarity_threshold < 1.0);
     
     ReadEvaluationConfig config = {
       max_clip,                       // max clip size
       max_ins,                        // max insertion to intervals
-        // for when there exist no guides to explain a portion of an exon
-      max_gap,                        // max gap in reference to intervals
-      true,                           // ignore small exons?
-      35,                             // small exon size
       max_junc_gap,                   // max junction gap
+      ignore_small_exons,             
+      small_exon_size,             
       similarity_threshold,
+      filter_by_similarity,         
       false,                          // print debug statements
       ""
     };   

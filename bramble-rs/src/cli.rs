@@ -25,7 +25,35 @@ pub struct Args {
 
     /// Alignments are from long reads
     #[arg(long)]
-    pub long: bool,
+    pub lr: bool,
+
+    /// Alignments are from high-quality long reads
+    #[arg(long = "lr:hq")]
+    pub lr_hq: bool,
+
+    /// Force strict boundary adherence
+    #[arg(long)]
+    pub strict: bool,
+
+    /// Maximum soft clipping allowed (overrides preset)
+    #[arg(long, value_name = "INT")]
+    pub max_clip: Option<u8>,
+
+    /// Maximum insertion allowed (overrides preset)
+    #[arg(long, value_name = "INT")]
+    pub max_ins: Option<u8>
+
+    /// Maximum junction gap allowed (overrides preset)
+    #[arg(long, value_name = "INT")]
+    pub max_junc_gap: Option<u8>
+
+    /// Similarity threshold (overrides preset)
+    #[arg(long, value_name = "FLOAT")]
+    pub similarity_threshold: Option<f32>
+
+    /// Small exon size (overrides preset)
+    #[arg(long, value_name = "INT")]
+    pub small_exon_size: Option<u8>
 
     /// Suppress progress bar and set logging level to WARN
     #[arg(short = 'q', long)]

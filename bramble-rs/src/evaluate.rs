@@ -24,11 +24,10 @@ pub enum ExonStatus {
 pub struct ReadEvaluationConfig {
     pub max_clip: u32,
     pub max_ins: u32,
-    pub max_gap: u32,
-    pub ignore_small_exons: bool,
-    pub small_exon_size: u32,
     pub max_junc_gap: u32,
     pub similarity_threshold: f32,
+    pub ignore_small_exons: bool,
+    pub small_exon_size: u32,
     #[allow(dead_code)]
     pub print: bool,
     #[allow(dead_code)]
@@ -44,11 +43,10 @@ impl ReadEvaluationConfig {
         Self {
             max_clip: 5,
             max_ins: 0,
-            max_gap: 0,
-            ignore_small_exons: false,
-            small_exon_size: 0,
             max_junc_gap: 0,
             similarity_threshold: 0.90,
+            ignore_small_exons: false,
+            small_exon_size: 0,
             print: false,
             name: Vec::new(),
             soft_clips: true,
@@ -63,11 +61,10 @@ impl ReadEvaluationConfig {
         Self {
             max_clip: 40,
             max_ins: 40,
-            max_gap: 40,
-            ignore_small_exons: true,
-            small_exon_size: 35,
             max_junc_gap: 40,
             similarity_threshold: 0.60,
+            ignore_small_exons: true,
+            small_exon_size: 35,
             print: false,
             name: Vec::new(),
             soft_clips: true,
@@ -590,34 +587,68 @@ pub fn left_clip_rescue(
                 return;
             }
 
-            let mut left_gexon = first_gexon.unwrap();
-            let qstart = left_gexon.start + result.start_j as u32;
-            let qend = left_gexon.start + result.end_j as u32;
-            left_gexon.pos = (result.pos as u32) + left_gexon.pos_start;
-
-            // Match C++ build_left_clip_segment: after reversing the ksw2 CIGAR,
-            // the last op of the raw output is now the first op.  Discard leading D,
-            // convert leading I to soft-clip.
-            let mut cigar = result.cigar.clone();
-            if let Some(&(len, ref op)) = cigar.ops.first() {
+            let mut query_consumed: i32 = 0;
+            let mut ref_consumed: i32 = 0;
+            for (len, op) in &result.cigar.ops {
+                let len = *len as i32;
                 match op {
-                    CigarOp::DelOverride => { cigar.ops.remove(0); }
-                    CigarOp::InsOverride => { cigar.ops[0] = (len, CigarOp::ClipOverride); }
+                    CigarOp::MatchOverride | CigarOp::InsOverride | CigarOp::ClipOverride => {
+                        query_consumed += len;
+                    }
+                    _ => {}
+                }
+                match op {
+                    CigarOp::MatchOverride | CigarOp::DelOverride => {
+                        ref_consumed += len;
+                    }
                     _ => {}
                 }
             }
 
+            let q_len = remaining_qseq.len() as i32;
+            let left_clip_bases = (q_len - query_consumed).max(0) as u32;
+
+            let mut dummy_gexon = gexon.clone();
+            dummy_gexon.start = gexon.start.saturating_sub(ref_consumed as u32);
+            dummy_gexon.end = gexon.start;
+            dummy_gexon.pos = gexon.pos_start.saturating_sub(ref_consumed as u32);
+
+            // Build the CIGAR: prepend soft-clip for unaligned bases, then
+            // iterate the reversed ksw2 CIGAR (C++ iterates n_cigar-1 down to 0).
+            let mut cigar = Cigar::new();
+
+            // in C++
+            // if left_clip_bases > 0 {
+            //     cigar.ops.push((left_clip_bases, CigarOp::ClipOverride))
+            // }
+
+            if let Some(&(len, ref op)) = result.cigar.ops.first() {
+                match op {
+                    CigarOp::DelOverride => { /* discard leading D*/ }
+                    CigarOp::InsOverride => {
+                        cigar.ops.push((len, CigarOp::ClipOverride));
+                    }
+                    _ => {
+                        cigar.ops.push((len, op.clone()))
+                    }
+                }
+                for (len, op) in result.cigar.ops.iter().skip(1) {
+                    cigar.ops.push((*len, op.clone()))
+                }
+            } // else: empty CIGAR, nothing to append
+
             let left_clip = EvalSegment {
                 is_valid: true,
                 has_qexon: false,
-                has_gexon: false,
-                gexon: None,
-                qexon: alignment::Segment { start: qstart, end: qend },
+                has_gexon: true,
+                gexon: Some(dummy_gexon),
+                qexon: alignment::Segment::default(), // not used
                 status: ExonStatus::LeftClipExon,
                 is_small_exon: remaining_qseq.len() as u32 <= config.small_exon_size,
                 cigar,
                 score: result.score,
             };
+
             tid_data.segments.insert(0, left_clip);
             // Match C++: zero out left_ins on the original first segment (now at index 1)
             // so build_cigar_match sees left_ins=0 and increments junc_hits.
@@ -749,31 +780,62 @@ pub fn right_clip_rescue(
                 return;
             }
 
-            let mut right_gexon = first_gexon.unwrap();
-            let qstart = right_gexon.start + result.start_j as u32;
-            let qend = right_gexon.start + result.end_j as u32;
-            right_gexon.pos = (result.pos as u32) + right_gexon.pos_start;
-
-            // Match C++ build_right_clip_segment: discard trailing D,
-            // convert trailing I to soft-clip.
-            let mut cigar = result.cigar.clone();
-            if let Some(&(len, ref op)) = cigar.ops.last() {
+            let mut query_consumed: i32 = 0;
+            let mut ref_consumed: i32 = 0;
+            for (len, op) in &result.cigar.ops {
+                let len = *len as i32;
                 match op {
-                    CigarOp::DelOverride => { cigar.ops.pop(); }
-                    CigarOp::InsOverride => {
-                        let last_idx = cigar.ops.len() - 1;
-                        cigar.ops[last_idx] = (len, CigarOp::ClipOverride);
+                    CigarOp::MatchOverride | CigarOp::InsOverride | CigarOp::ClipOverride => {
+                        query_consumed += len;
+                    }
+                    _ => {}
+                }
+                match op {
+                    CigarOp::MatchOverride | CigarOp::DelOverride => {
+                        ref_consumed += len;
                     }
                     _ => {}
                 }
             }
 
+            let q_len = remaining_qseq.len() as i32;
+            let right_clip_bases = (q_len - query_consumed).max(0) as u32;
+
+            let mut dummy_gexon = gexon.clone();
+            dummy_gexon.start = gexon.end;
+            dummy_gexon.end = gexon.end + ref_consumed as u32;
+            dummy_gexon.pos = gexon.pos_start.saturating_sub(ref_consumed as u32);
+
+            let mut cigar = Cigar::new();
+
+            let n = result.cigar.ops.len();
+            for (i, (len, op)) in result.cigar.ops.iter().enumerate() {
+                if i == n - 1 {
+                    match op {
+                        CigarOp::DelOverride => { /* trailing D - discard */}
+                        CigarOp::InsOverride => {
+                            cigar.ops.push((*len, CigarOp::ClipOverride));
+                        }
+                        _ => {
+                            cigar.ops.push((*len, op.clone()));
+                        }
+                    }
+                } else {
+                    cigar.ops.push((*len, op.clone()));
+                }
+            }
+
+            // in C++
+            // if right_clip_bases > 0 {
+            //     cigar.ops.push((right_clip_bases, CigarOp::ClipOverride))
+            // }
+
             let right_clip = EvalSegment {
                 is_valid: true,
                 has_qexon: false,
-                has_gexon: false,
-                gexon: None,
-                qexon: alignment::Segment { start: qstart, end: qend },
+                has_gexon: true,
+                gexon: Some(dummy_gexon),
+                qexon: alignment::Segment::default(),
                 status: ExonStatus::RightClipExon,
                 is_small_exon: remaining_qseq.len() as u32 <= config.small_exon_size,
                 cigar,
@@ -803,6 +865,8 @@ pub fn right_clip_rescue(
     // from the trailing soft clip will naturally pass through the merge as S
     // ops. Adding ClipOverride here causes phantom S ops when real is exhausted
     // but the ideal still has ClipOverride entries.
+
+    // this shouldn't be true; the query only takes from existing soft clips
 }
 
 pub fn correct_for_gaps(
@@ -833,6 +897,8 @@ pub fn correct_for_gaps(
         if let Some(ref prev) = prev_gexon {
             let gap = gexon.exon_id.saturating_sub(prev.exon_id);
 
+            // here, to match C++, should only turn on for --lr (not --lr_hq)
+            // specifically, when small_exon_size > 0
             if !long_reads {
                 if gap != 1 {
                     tid_data.elim = true;
@@ -851,7 +917,7 @@ pub fn correct_for_gaps(
                     };
 
                     if (gap_start == 0 && gap_end == 0)
-                        || gap_end.saturating_sub(gap_start) > config.max_gap
+                        || gap_end.saturating_sub(gap_start) > config.small_exon_size
                     {
                         tid_data.elim = true;
                         return;
@@ -1392,11 +1458,44 @@ pub fn evaluate_exon_chains(
 }
 #[derive(Debug, Default)]
 pub struct ReadEvaluator {
-    pub long_reads: bool,
+    pub lr: bool,
+    pub lr_hq: bool,
+    pub strict: bool,
     pub use_fasta: bool,
+    pub max_clip: Option<u8>,
+    pub max_ins: Option<u8>,
+    pub max_junc_gap: Option<u8>,
+    pub similarity_threshold: Option<f32>,
+    pub small_exon_size: Option<u8>,
 }
 
 impl ReadEvaluator {
+    fn build_config(&self) -> ReadEvaluationConfig {
+        let (default_max_clip, default_max_ins, default_max_junc_gap, default_similarity_threshold, default_small_exon_size) = 
+            match (self.lr, self.lr_hq, self.strict) {
+                (_, _, true) => (0,   0,  0, 0.99_f32,  0),
+                (_, true, _) => (5,  10, 10, 0.90_f32,  0),
+                (true, _, _) => (40, 40, 40, 0.60_f32, 35),
+                _            => (5,   0,  0,  1.0_f32,  0),
+            };
+
+        let small_exon_size = self.small_exon_size.unwrap_or(default_small_exon_size);
+
+        ReadEvaluationConfig {
+            max_clip:               self.max_clip.unwrap_or(default_max_clip),
+            max_ins:                self.max_ins.unwrap_or(default_max_ins),
+            max_junc_gap:           self.max_junc_gap.unwrap_or(default_max_junc_gap),
+            similarity_threshold:   self.similarity_threshold.unwrap_or(default_similarity_threshold)
+            ignore_small_exons:     small_exon_size > 0,
+            small_exon_size,
+            print:                  false,
+            name:                   Vec::new(),
+            soft_clips:             true,
+            strict:                 self.strict,
+            use_fasta:              self.use_fasta,                    
+        }
+    }
+
     pub fn evaluate(
         &self,
         read: &ReadAln,
@@ -1405,28 +1504,7 @@ impl ReadEvaluator {
         seq: Option<&[u8]>,
         ctx: &mut EvalContext,
     ) {
-        let (max_clip, max_ins, max_gap, max_junc_gap, similarity_threshold, ignore_small_exons, small_exon_size) =
-            if self.long_reads {
-                (40, 40, 40, 40, 0.60_f32, true, 35)
-            } else {
-                (5, 0, 0, 0, 0.90_f32, false, 0)
-            };
-
-        let config = ReadEvaluationConfig {
-            max_clip,
-            max_ins,
-            max_gap,
-            ignore_small_exons,
-            small_exon_size,
-            max_junc_gap,
-            similarity_threshold,
-            print: false,
-            name: Vec::new(),
-            soft_clips: true,
-            strict: false,
-            use_fasta: self.use_fasta,
-        };
-
-        evaluate_exon_chains(read, id, g2t, config, self.long_reads, seq, ctx);
+        let config = self.build_config();
+        evaluate_exon_chains(read, id, g2t, config, self.lr || self.lr_hq, seq, ctx);
     }
 }

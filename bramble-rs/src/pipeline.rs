@@ -113,7 +113,18 @@ pub fn run(
         None
     };
 
-    let evaluator = ReadEvaluator { long_reads: args.long, use_fasta: fasta.is_some() };
+    let evaluator = ReadEvaluator {
+        lr:                   args.lr,
+        lr_hq:                args.lr_hq,
+        strict:               args.strict,
+        use_fasta:            fasta.is_some(),
+        max_clip:             args.max_clip,
+        max_ins:              args.max_ins,
+        max_junc_gap:         args.max_junc_gap,
+        similarity_threshold: args.similarity,
+        small_exon_size:      args.small_exon_size,
+    };
+    
     let fr = args.fr;
     let rf = args.rf;
     let worker_count = args.threads as usize;
@@ -1346,7 +1357,11 @@ fn align_and_merge(real: &[u8], ideal: &[u8]) -> Vec<u8> {
             }
         }
 
-        merged.push(merge_ops(r, i));
+        merge = merge_ops(r, i);
+        // if a _ is returned, nothing should be added
+        if merge != b'_' {
+            merged.push(merge);   
+        } 
     }
 
     merged
@@ -1372,6 +1387,10 @@ fn merge_ops(real_op: u8, ideal_op: u8) -> u8 {
 
     if real_op == b'H' {
         return b'H';
+    }
+
+    if real_op == b'P' {
+        return ideal_op;
     }
 
     // Standard CIGAR ops

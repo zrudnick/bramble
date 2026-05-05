@@ -15,11 +15,13 @@ use clap::Parser;
 use mimalloc::MiMalloc;
 use std::mem::ManuallyDrop;
 use tracing_subscriber::EnvFilter;
+use rust_htslib::bam::Header;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
 fn main() -> Result<()> {
+    let pg_args: String = std::env::args().collect::<Vec<_>>().join(" ");
     let args = cli::Args::parse();
 
     // Initialize tracing subscriber
@@ -52,7 +54,9 @@ fn main() -> Result<()> {
 
     let mut bam = bam_input::open_bam(&args.in_bam)?;
     let g2t = g2t::build_g2t(&transcripts, &bam.refname_to_id, fasta.as_ref())?;
-    let hts_header = header::build_hts_header(&transcripts);
+    // let hts_header = header::build_hts_header(&transcripts);
+    let header_in = Header::from_template(bam.reader.header());
+    let hts_header = header::build_hts_header(&transcripts, &header_in, &pg_args);
 
     // Optimization: wrap large data structures in ManuallyDrop so their
     // destructors are skipped when main() returns.  The OS reclaims all
