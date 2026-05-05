@@ -116,7 +116,7 @@ pub fn run(
     let evaluator = ReadEvaluator { long_reads: args.long, use_fasta: fasta.is_some() };
     let fr = args.fr;
     let rf = args.rf;
-    let worker_count = args.threads as usize;
+    let worker_count = args.threads.get() as usize;
     let cap = worker_count.saturating_mul(4).max(8);
     let flush_records = args.unordered_flush_records.max(1);
     let evaluator_ref = &evaluator;
