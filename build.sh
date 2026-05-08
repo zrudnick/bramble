@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 
-meson setup build --buildtype=debug #--buildtype=release
+meson setup build --buildtype=release #--buildtype=debug
 ninja -C build -v

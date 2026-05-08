@@ -23,11 +23,11 @@ extern bool USE_FASTA;
 extern bool SOFT_CLIPS;
 extern bool STRICT;
 
-extern uint32_t MAX_CLIP;
-extern uint32_t MAX_INS;
-extern uint32_t MAX_JUNC_GAP;
-extern float SIM_THR;
-extern uint32_t SMALL_EXON_SIZE;
+extern std::optional<uint32_t> MAX_CLIP;
+extern std::optional<uint32_t> MAX_INS;
+extern std::optional<uint32_t> MAX_JUNC_GAP;
+extern std::optional<float> SIM_THR;
+extern std::optional<uint32_t> SMALL_EXON_SIZE;
 
 namespace bramble {
 
@@ -1150,24 +1150,18 @@ namespace bramble {
     uint32_t max_clip, max_ins, max_junc_gap, small_exon_size;
     float similarity_threshold;
     if (!STRICT) {
-      max_clip = 5;
-      max_ins = 0;
-      max_junc_gap = 0;
-      similarity_threshold = 1.0;
-      small_exon_size = 0;
+      max_clip = MAX_CLIP.value_or(5);
+      max_ins = MAX_INS.value_or(0);
+      max_junc_gap = MAX_JUNC_GAP.value_or(0);
+      similarity_threshold = SIM_THR.value_or(1.0);
+      small_exon_size = SMALL_EXON_SIZE.value_or(0);
     } else {
-      max_clip = 0;
-      max_ins = 0;
-      max_junc_gap = 0;
-      similarity_threshold = 1.0;
-      small_exon_size = 0;
+      max_clip = MAX_CLIP.value_or(0);
+      max_ins = MAX_INS.value_or(0);
+      max_junc_gap = MAX_JUNC_GAP.value_or(0);
+      similarity_threshold = SIM_THR.value_or(1.0);
+      small_exon_size = SMALL_EXON_SIZE.value_or(0);
     }
-
-    if (MAX_CLIP != -1) max_clip = MAX_CLIP;
-    if (MAX_INS != -1) max_ins = MAX_INS;
-    if (MAX_JUNC_GAP != -1) max_junc_gap = MAX_JUNC_GAP;
-    if (SIM_THR != 0.0) max_clip = MAX_CLIP;
-    if (SMALL_EXON_SIZE != -1) small_exon_size = SMALL_EXON_SIZE;
 
     bool ignore_small_exons = (small_exon_size > 0);
     bool filter_by_similarity = (similarity_threshold < 1.0);
@@ -1196,30 +1190,24 @@ namespace bramble {
     uint32_t max_clip, max_ins, max_junc_gap, small_exon_size;
     float similarity_threshold;                          
     if (LR) {
-      max_clip = 40;
-      max_ins = 40;
-      max_junc_gap = 40;
-      small_exon_size = 35;
-      similarity_threshold = 0.60;
+      max_clip = MAX_CLIP.value_or(40);
+      max_ins = MAX_INS.value_or(40);
+      max_junc_gap = MAX_JUNC_GAP.value_or(40);
+      similarity_threshold = SIM_THR.value_or(0.60);
+      small_exon_size = SMALL_EXON_SIZE.value_or(35);
     } else if (LR_HQ) {
-      max_clip = 5;
-      max_ins = 10;
-      max_junc_gap = 10;
-      small_exon_size = 35;
-      similarity_threshold = 0.90;
+      max_clip = MAX_CLIP.value_or(5);
+      max_ins = MAX_INS.value_or(10);
+      max_junc_gap = MAX_JUNC_GAP.value_or(10);
+      similarity_threshold = SIM_THR.value_or(0.90);
+      small_exon_size = SMALL_EXON_SIZE.value_or(35);
     } else if (STRICT) {
-      max_clip = 0;
-      max_ins = 0;
-      max_junc_gap = 0;
-      small_exon_size = 35;
-      similarity_threshold = 1.0;
+      max_clip = MAX_CLIP.value_or(0);
+      max_ins = MAX_INS.value_or(0);
+      max_junc_gap = MAX_JUNC_GAP.value_or(0);
+      similarity_threshold = SIM_THR.value_or(1.0);
+      small_exon_size = SMALL_EXON_SIZE.value_or(35);
     }                         
-    
-    if (MAX_CLIP != -1) max_clip = MAX_CLIP;
-    if (MAX_INS != -1) max_ins = MAX_INS;
-    if (MAX_JUNC_GAP != -1) max_junc_gap = MAX_JUNC_GAP;
-    if (SIM_THR != 0.0) max_clip = MAX_CLIP;
-    if (SMALL_EXON_SIZE != -1) small_exon_size = SMALL_EXON_SIZE;
 
     bool ignore_small_exons = (small_exon_size > 0);
     bool filter_by_similarity = (similarity_threshold < 1.0);

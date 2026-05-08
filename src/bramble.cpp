@@ -46,7 +46,7 @@ Options:\n\
  --version    : print just the version at stdout and exit\n\
  --quiet      : turn off verbose mode (log bundle processing details)\n\
  --lr         : alignments are from long reads\n\
- --lr:hq      : alignments are from high-quality long reads\n\
+ --lr-hq      : alignments are from high-quality long reads\n\
  --strict     : force strict boundary adherence\n\
  --fr         : assume stranded library (first-strand, read2 sense)\n\
  --rf         : assume stranded library (second-strand, read1 sense)\n\
@@ -61,18 +61,18 @@ bool QUIET = false;     // Turn off verbose mode, --quiet
 bool BRAMBLE_DEBUG = false;
 bool LONG_READS = false;  // BAM file contains long reads
 bool LR = false;          // lr preset
-bool LR_HQ = false;       // lr:hq preset
+bool LR_HQ = false;       // lr-hq preset
 bool FR_STRAND = false;   // Read 2 is on sense strand, --fr
 bool RF_STRAND = false;   // Read 1 is on sense strand, --fr
 bool USE_FASTA = false;   // Use FASTA for reducing soft clips
 bool SOFT_CLIPS = true;   // Add soft clips
 bool STRICT = false;      // Use for strict boundary adherence
 
-uint32_t MAX_CLIP = -1;
-uint32_t MAX_INS = -1;
-uint32_t MAX_JUNC_GAP = -1;
-float SIM_THR = 0.0;
-uint32_t SMALL_EXON_SIZE = -1;
+std::optional<uint32_t> MAX_CLIP;
+std::optional<uint32_t> MAX_INS;
+std::optional<uint32_t> MAX_JUNC_GAP;
+std::optional<float> SIM_THR;
+std::optional<uint32_t> SMALL_EXON_SIZE;
 
 FILE *f_out = NULL;       // Default: stdout
 uint8_t n_threads = 1;    // Threads, -p
@@ -434,15 +434,15 @@ int main(int argc, char *argv[]) {
   app.add_option("in.bam", in_bam, "input bam file")->required();
   app.add_flag("--quiet", QUIET, "turn off verbose (log processing details)");
   app.add_flag("--lr", LR, "alignments are from long reads");
-  app.add_flag("--lr:hq", LR_HQ, "alignments are from high-quality long reads");
+  app.add_flag("--lr-hq", LR_HQ, "alignments are from high-quality long reads");
   app.add_flag("--strict", STRICT, "force strict boundary adherence");
-  app.add_flag("--max-clip", MAX_CLIP, "maximum soft clip (overrides preset)");
-  app.add_flag("--max-ins", MAX_INS, "maximum insertion (overrides preset)");
-  app.add_flag("--max-junc-gap", MAX_JUNC_GAP, "maximum junction gap (overrides preset)");
-  app.add_flag("--similarity-threshold", SIM_THR, "similarity_threshold (overrides preset)");
-  app.add_flag("--small_exon_size", SMALL_EXON_SIZE, "small exon size (overrides preset)");
   app.add_flag("--fr", FR_STRAND, "assume stranded library (first-strand, read2 sense)");
   app.add_flag("--rf", RF_STRAND, "assume stranded library (second-strand, read1 sense)");
+  app.add_option("--max-clip", MAX_CLIP, "maximum soft clip (overrides preset)");
+  app.add_option("--max-ins", MAX_INS, "maximum insertion (overrides preset)");
+  app.add_option("--max-junc-gap", MAX_JUNC_GAP, "maximum junction gap (overrides preset)");
+  app.add_option("--similarity-threshold", SIM_THR, "similarity_threshold (overrides preset)");
+  app.add_option("--small_exon_size", SMALL_EXON_SIZE, "small exon size (overrides preset)");
   app.add_option("-G", gff,
                  "reference annotation to use for guiding the assembly process "
                  "(GTF/GFF)")
@@ -481,33 +481,18 @@ int main(int argc, char *argv[]) {
 
   if (LR || LR_HQ) LONG_READS = true;
 
-  // Add check for valid header
-
-  // Create SAM header file
-  const GStr header_path = "header.tmp.sam";
-  FILE *header_file = fopen(header_path.chars(), "w");
-  if (header_file == NULL)
-    LOG_ERROR(logger, "error creating header file: {}", 
-      header_path.chars());
-  //fprintf(header_file, "@HD\tVN:1.0\tSO:coordinate\n");
-
-  // Open reader temporarily to get the header
-  GSamReader tmp_reader(bam_file_in);
-  sam_hdr_t* hdr = sam_hdr_dup(tmp_reader.header());
-  sam_hdr_add_pg(hdr, "Bramble", "VN", VERSION, "CL", pg_args.c_str(), NULL);
-  FILE* header_file = fopen(header_path.chars(), "w");
-  fputs(sam_hdr_str(hdr), header_file);
-  fclose(header_file);
-  sam_hdr_destroy(hdr);
-
-  // BamIO unchanged
-  BamIO* io = new BamIO(bam_file_in, bam_file_out, header_path);
-
   if (!QUIET || BRAMBLE_DEBUG) {
     printf("\n[bramble] starting version: %s\n", VERSION);
     // LOG_INFO(logger, "starting bramble version {}", VERSION);
     LOG_INFO(logger, "loading reference annotation...");
   }
+
+  // Create SAM header file
+  const GStr header_path = "tmp_header.sam";
+  FILE *header_file = fopen(header_path.chars(), "w");
+  if (header_file == NULL)
+    LOG_ERROR(logger, "error creating header file: {}", 
+      header_path.chars());
     
   // Open GFF/GTF file
   FILE *f = fopen(guide_gff.chars(), "r");
@@ -576,6 +561,26 @@ int main(int argc, char *argv[]) {
     grefdata.add(gffreader, guide); // transcripts already sorted by location
   }
 
+  // Open reader temporarily to get the header
+  GSamReader tmp_reader(bam_file_in);
+  sam_hdr_t* hdr = sam_hdr_dup(tmp_reader.header());
+  sam_hdr_add_pg(hdr, "bramble", "VN", VERSION, "CL", pg_args.c_str(), (char*)NULL);
+  const char* hdr_str = sam_hdr_str(hdr);
+  const char* line_start = hdr_str;
+  while (*line_start) {
+    const char* line_end = strchr(line_start, '\n');
+    if (!line_end) line_end = line_start + strlen(line_start);
+    
+    // Only write @HD and @PG lines, skip @SQ and @RG
+    if (strncmp(line_start, "@SQ", 3) != 0) {
+      fwrite(line_start, 1, line_end - line_start + 1, header_file);
+    }
+    
+    if (*line_end == '\0') break;
+    line_start = line_end + 1;
+  }
+  sam_hdr_destroy(hdr);
+
   fprintf(header_file, "@CO\tGenerated from GTF: %s\n", guide_gff.chars());
   fclose(header_file);
 
@@ -583,9 +588,9 @@ int main(int argc, char *argv[]) {
     LOG_INFO(logger, "reference annotation loaded! {} unique transcripts were found", 
       gffreader->gflst.Count());
     if (LR) LOG_INFO(logger, "using long-read mode (--lr)");
-    if (LR_HQ) LOG_INFO(logger, "using long-read mode (--lr:hq)");
+    else if (LR_HQ) LOG_INFO(logger, "using long-read mode (--lr-hq)");
     else {
-      LOG_INFO(logger, "using short-read mode (have long reads? try running with --lr or --lr:hq)");
+      LOG_INFO(logger, "using short-read mode (have long reads? try running with --lr or --lr-hq)");
     }
     LOG_INFO(logger, "building g2t tree");
   }
