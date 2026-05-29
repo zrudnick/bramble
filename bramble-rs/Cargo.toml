@@ -5,7 +5,10 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0"
-rust-htslib = "1.0"
+# Drop the default `lzma` (and `curl`) features: BAM I/O only needs bgzf/bzip2,
+# and `lzma-sys` collides on the native `lzma` link with consumers that pull
+# `liblzma` (e.g. oarfish via needletail). Keeping lzma breaks the path-dep build.
+rust-htslib = { version = "1.0", default-features = false, features = ["bzip2"] }
 ahash = "0.8"
 clap = { version = "4.5", features = ["derive"] }
 coitrees = "0.4"
