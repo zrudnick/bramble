@@ -16,6 +16,7 @@ use mimalloc::MiMalloc;
 use std::mem::ManuallyDrop;
 use tracing_subscriber::EnvFilter;
 use rust_htslib::bam::Header;
+use rust_htslib::bam::Read;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;

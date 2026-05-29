@@ -143,6 +143,16 @@ pub struct ProjectedAlignment {
     pub transcript_id: u32,
     /// 1-based start position on the transcript (forward-strand coordinates).
     pub transcript_start: u32,
+    /// 1-based inclusive end position on the transcript (forward-strand
+    /// coordinates). Equal to `transcript_start + aligned_len - 1`.
+    pub transcript_end: u32,
+    /// Number of transcript bases the alignment spans (ref-consuming CIGAR
+    /// ops: M/=/X/D and intronic/junction gaps relative to the annotation).
+    /// This is the half-open span length `[transcript_start-1, transcript_end)`.
+    pub aligned_len: u32,
+    /// Number of query (read) bases in the aligned portion (M/I/=/X), i.e.
+    /// excluding soft/hard clips. Useful for an aligned-fraction filter.
+    pub query_aligned_len: u32,
     /// `true` if the read is on the reverse strand of the transcript.
     pub is_reverse: bool,
     /// Alignment similarity score in `[0, 1]` (higher is better).
@@ -221,7 +231,17 @@ pub fn project_group(
     index: &G2TTree,
     config: &ProjectionConfig,
 ) -> Vec<ProjectedAlignment> {
-    let evaluator = ReadEvaluator { long_reads: config.long_reads, use_fasta: config.use_fasta };
+    let evaluator = ReadEvaluator {
+        lr: config.long_reads,
+        lr_hq: false,
+        strict: false,
+        use_fasta: config.use_fasta,
+        max_clip: None,
+        max_ins: None,
+        max_junc_gap: None,
+        similarity_threshold: None,
+        small_exon_size: None,
+    };
     let mut ctx = EvalContext::new();
 
     let shared_seq: Option<Vec<u8>> = alignments.iter().find_map(|a| a.sequence.clone());
@@ -319,9 +339,28 @@ pub fn project_group(
                 entry.read_len, entry.same_transcript,
             )
         });
+        // Transcript-space extent. `ref_consumed` is the number of transcript
+        // bases the alignment spans (see evaluate.rs); `fwpos` is the 1-based
+        // forward-strand start. `query_consumed()` gives the aligned read length.
+        let aligned_len = entry.align.ref_consumed.max(0) as u32;
+        let transcript_end = entry
+            .align
+            .align
+            .fwpos
+            .saturating_add(aligned_len)
+            .saturating_sub(1);
+        let query_aligned_len = entry
+            .align
+            .align
+            .cigar
+            .as_ref()
+            .map_or(0, |c| c.query_consumed());
         out.push(ProjectedAlignment {
             transcript_id: entry.tid,
             transcript_start: entry.align.align.fwpos,
+            transcript_end,
+            aligned_len,
+            query_aligned_len,
             is_reverse: entry.align.align.is_reverse,
             similarity_score: entry.align.align.similarity_score,
             nh,

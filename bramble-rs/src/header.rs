@@ -1,6 +1,8 @@
 // header.rs is used only by the binary.
 #![allow(dead_code)]
 use crate::annotation::Transcript;
+use rust_htslib::bam::Header;
+use rust_htslib::bam::header::HeaderRecord;
 
 // pub fn build_hts_header(transcripts: &[Transcript]) -> rust_htslib::bam::Header {
 //     use rust_htslib::bam::header::HeaderRecord;

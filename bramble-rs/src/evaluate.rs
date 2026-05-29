@@ -141,6 +141,25 @@ impl Cigar {
         self.ops.reverse();
     }
 
+    /// Number of query (read) bases consumed by this CIGAR, i.e. the sum of
+    /// lengths of query-consuming operations (M/I/=/X and their rescue
+    /// overrides). Soft/hard clips and padding are excluded, so this is the
+    /// length of the aligned portion of the read.
+    pub fn query_consumed(&self) -> u32 {
+        self.ops
+            .iter()
+            .map(|(len, op)| match op {
+                CigarOp::Match
+                | CigarOp::Equal
+                | CigarOp::Diff
+                | CigarOp::MatchOverride
+                | CigarOp::Ins
+                | CigarOp::InsOverride => *len,
+                _ => 0,
+            })
+            .sum()
+    }
+
     #[allow(dead_code)]
     #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self) -> String {
@@ -615,7 +634,7 @@ pub fn left_clip_rescue(
 
             // Build the CIGAR: prepend soft-clip for unaligned bases, then
             // iterate the reversed ksw2 CIGAR (C++ iterates n_cigar-1 down to 0).
-            let mut cigar = Cigar::new();
+            let mut cigar = Cigar::default();
 
             // in C++
             // if left_clip_bases > 0 {
@@ -806,7 +825,7 @@ pub fn right_clip_rescue(
             dummy_gexon.end = gexon.end + ref_consumed as u32;
             dummy_gexon.pos = gexon.pos_start.saturating_sub(ref_consumed as u32);
 
-            let mut cigar = Cigar::new();
+            let mut cigar = Cigar::default();
 
             let n = result.cigar.ops.len();
             for (i, (len, op)) in result.cigar.ops.iter().enumerate() {
@@ -1482,17 +1501,17 @@ impl ReadEvaluator {
         let small_exon_size = self.small_exon_size.unwrap_or(default_small_exon_size);
 
         ReadEvaluationConfig {
-            max_clip:               self.max_clip.unwrap_or(default_max_clip),
-            max_ins:                self.max_ins.unwrap_or(default_max_ins),
-            max_junc_gap:           self.max_junc_gap.unwrap_or(default_max_junc_gap),
-            similarity_threshold:   self.similarity_threshold.unwrap_or(default_similarity_threshold)
+            max_clip:               self.max_clip.unwrap_or(default_max_clip) as u32,
+            max_ins:                self.max_ins.unwrap_or(default_max_ins) as u32,
+            max_junc_gap:           self.max_junc_gap.unwrap_or(default_max_junc_gap) as u32,
+            similarity_threshold:   self.similarity_threshold.unwrap_or(default_similarity_threshold),
             ignore_small_exons:     small_exon_size > 0,
-            small_exon_size,
+            small_exon_size:        small_exon_size as u32,
             print:                  false,
             name:                   Vec::new(),
             soft_clips:             true,
             strict:                 self.strict,
-            use_fasta:              self.use_fasta,                    
+            use_fasta:              self.use_fasta,
         }
     }
 
@@ -1506,5 +1525,33 @@ impl ReadEvaluator {
     ) {
         let config = self.build_config();
         evaluate_exon_chains(read, id, g2t, config, self.lr || self.lr_hq, seq, ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cigar, CigarOp};
+
+    #[test]
+    fn query_consumed_counts_only_query_ops() {
+        // 10M 3I 5D 4S 2N: query-consuming = M(10) + I(3) = 13.
+        let mut c = Cigar::default();
+        c.ops.push((10, CigarOp::Match));
+        c.ops.push((3, CigarOp::Ins));
+        c.ops.push((5, CigarOp::Del));
+        c.ops.push((4, CigarOp::SoftClip));
+        c.ops.push((2, CigarOp::RefSkip));
+        assert_eq!(c.query_consumed(), 13);
+    }
+
+    #[test]
+    fn query_consumed_counts_equal_diff_and_overrides() {
+        // 6= 1X 2/ (InsOverride) 3, (MatchOverride): all consume query = 12.
+        let mut c = Cigar::default();
+        c.ops.push((6, CigarOp::Equal));
+        c.ops.push((1, CigarOp::Diff));
+        c.ops.push((2, CigarOp::InsOverride));
+        c.ops.push((3, CigarOp::MatchOverride));
+        assert_eq!(c.query_consumed(), 12);
     }
 }

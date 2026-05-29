@@ -4,7 +4,7 @@
 use anyhow::Result;
 use rust_htslib::bam::record::{Cigar, Record};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Segment {
     pub start: u32,
     pub end: u32,

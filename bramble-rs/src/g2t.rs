@@ -306,6 +306,8 @@ pub struct G2TTree {
     trees: HashMap<RefId, (IntervalTree, IntervalTree)>,
     name_id_map: HashMap<Tid, String>,
     tid_names: Vec<String>,
+    // Transcript length (sum of exon lengths) indexed by `Tid`.
+    tid_lengths: Vec<u32>,
 }
 
 impl G2TTree {
@@ -314,7 +316,43 @@ impl G2TTree {
             trees: HashMap::new(),
             name_id_map: HashMap::new(),
             tid_names: Vec::new(),
+            tid_lengths: Vec::new(),
         }
+    }
+
+    /// Number of transcripts indexed in this tree.
+    pub fn num_transcripts(&self) -> usize {
+        self.tid_names.len()
+    }
+
+    /// The name of the transcript with the given `tid`, if present.
+    pub fn transcript_name(&self, tid: Tid) -> Option<&str> {
+        self.tid_names.get(tid as usize).map(|s| s.as_str())
+    }
+
+    /// All transcript names, indexed by `tid` (dense, build order).
+    pub fn transcript_names(&self) -> &[String] {
+        &self.tid_names
+    }
+
+    /// The length (sum of exon lengths) of the transcript with the given `tid`.
+    pub fn transcript_len(&self, tid: Tid) -> Option<u32> {
+        self.tid_lengths.get(tid as usize).copied()
+    }
+
+    /// All transcript lengths, indexed by `tid` (dense, build order).
+    pub fn transcript_lengths(&self) -> &[u32] {
+        &self.tid_lengths
+    }
+
+    /// Record the length (sum of exon lengths) for the transcript with the
+    /// given `tid`. Used by [`build_g2t`] once the full exon chain is known.
+    pub fn set_transcript_len(&mut self, tid: Tid, len: u32) {
+        let idx = tid as usize;
+        if idx >= self.tid_lengths.len() {
+            self.tid_lengths.resize(idx + 1, 0);
+        }
+        self.tid_lengths[idx] = len;
     }
 
     fn get_trees_mut(&mut self, refid: RefId) -> &mut (IntervalTree, IntervalTree) {
@@ -458,6 +496,7 @@ pub fn build_g2t(
         }
 
         let transcript_len = pos_start;
+        g2t.set_transcript_len(tid, transcript_len);
 
         for k in 0..intervals.len() {
             let mut interval = intervals[k].clone();
@@ -484,4 +523,65 @@ pub fn build_g2t(
     }
 
     Ok(g2t)
+}
+
+/// Convenience wrapper around [`build_g2t`] that takes the reference (chromosome)
+/// names as a slice, assigning each its position in the slice as its `RefId`.
+///
+/// This lets callers build the index from, e.g., a BAM header's reference list
+/// or a minimap2 target list without constructing the internal
+/// `HashMap<String, RefId>` themselves. The resulting `RefId` for a chromosome
+/// is its 0-based index in `refnames`, which must match the `ref_id` set on the
+/// [`GenomicAlignment`](crate::GenomicAlignment)s passed to
+/// [`project_group`](crate::project_group).
+pub fn build_g2t_from_refnames(
+    transcripts: &[Transcript],
+    refnames: &[String],
+    fasta: Option<&FastaDb>,
+) -> Result<G2TTree> {
+    let mut refname_to_id: HashMap<String, RefId> = HashMap::with_capacity(refnames.len());
+    for (idx, name) in refnames.iter().enumerate() {
+        refname_to_id.insert(name.clone(), idx as RefId);
+    }
+    build_g2t(transcripts, &refname_to_id, fasta)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::annotation::{Exon, Transcript};
+
+    /// `build_g2t` must expose dense transcript ids, names, and lengths (sum of
+    /// exon lengths) so library consumers (e.g. oarfish) can build a
+    /// transcriptome header without re-reading the annotation.
+    #[test]
+    fn transcript_names_and_lengths_are_exposed() {
+        // tx1: chr1 '+', two exons [100,150) and [200,250) -> length 100.
+        // tx2: chr1 '-', one exon [300,330) -> length 30.
+        let txs = vec![
+            Transcript {
+                id: "tx1".to_string(),
+                seqname: "chr1".to_string(),
+                strand: '+',
+                exons: vec![Exon { start: 100, end: 150 }, Exon { start: 200, end: 250 }],
+            },
+            Transcript {
+                id: "tx2".to_string(),
+                seqname: "chr1".to_string(),
+                strand: '-',
+                exons: vec![Exon { start: 300, end: 330 }],
+            },
+        ];
+        let refnames = vec!["chr1".to_string()];
+        let g2t = build_g2t_from_refnames(&txs, &refnames, None).expect("build_g2t");
+
+        assert_eq!(g2t.num_transcripts(), 2);
+        assert_eq!(g2t.transcript_name(0), Some("tx1"));
+        assert_eq!(g2t.transcript_name(1), Some("tx2"));
+        assert_eq!(g2t.transcript_name(2), None);
+        assert_eq!(g2t.transcript_len(0), Some(100));
+        assert_eq!(g2t.transcript_len(1), Some(30));
+        assert_eq!(g2t.transcript_lengths(), &[100, 30]);
+        assert_eq!(g2t.transcript_names(), &["tx1".to_string(), "tx2".to_string()]);
+    }
 }

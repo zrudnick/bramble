@@ -121,7 +121,7 @@ pub fn run(
         max_clip:             args.max_clip,
         max_ins:              args.max_ins,
         max_junc_gap:         args.max_junc_gap,
-        similarity_threshold: args.similarity,
+        similarity_threshold: args.similarity_threshold,
         small_exon_size:      args.small_exon_size,
     };
     
@@ -495,9 +495,9 @@ fn process_group_records(
     assign_hit_indices(&mut entries);
     for entry in entries {
         let nh = new_nh;
-        let mapq = get_mapq(nh, evaluator.long_reads);
+        let mapq = get_mapq(nh, evaluator.lr);
         let rec = &group[entry.record_idx];
-        let out = build_projected_record(&rec.record, &rec.decoded_seq, &entry, nh, mapq, evaluator.long_reads)?;
+        let out = build_projected_record(&rec.record, &rec.decoded_seq, &entry, nh, mapq, evaluator.lr)?;
         output.push(out);
     }
 
@@ -1357,7 +1357,7 @@ fn align_and_merge(real: &[u8], ideal: &[u8]) -> Vec<u8> {
             }
         }
 
-        merge = merge_ops(r, i);
+        let merge = merge_ops(r, i);
         // if a _ is returned, nothing should be added
         if merge != b'_' {
             merged.push(merge);   

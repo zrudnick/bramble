@@ -4,14 +4,15 @@
 //!
 //! ```no_run
 //! use bramble_rs::{GenomicAlignment, ProjectionConfig, project_group};
-//! use bramble_rs::g2t::{G2TTree, build_g2t};
+//! use bramble_rs::g2t::build_g2t_from_refnames;
 //! use bramble_rs::annotation::load_transcripts;
-//! use std::collections::HashMap;
 //!
 //! // Build the genome-to-transcriptome index from a GTF/GFF.
 //! // let transcripts = load_transcripts(path_to_gtf)?;
-//! // let refname_to_id: HashMap<String, usize> = /* from BAM header or minimap2 index */;
-//! // let index = build_g2t(&transcripts, &refname_to_id, None)?;
+//! // // `refnames[i]` is the chromosome whose 0-based RefId is `i`
+//! // // (e.g. taken from a BAM header or a minimap2 target list).
+//! // let refnames: Vec<String> = /* from BAM header or minimap2 index */;
+//! // let index = build_g2t_from_refnames(&transcripts, &refnames, None)?;
 //! //
 //! // let config = ProjectionConfig { long_reads: false, use_fasta: false };
 //! //
@@ -25,7 +26,6 @@ pub(crate) mod alignment;
 pub(crate) mod bam_input;
 pub(crate) mod cli;
 pub(crate) mod evaluate;
-pub(crate) mod fasta;
 pub(crate) mod header;
 pub(crate) mod pipeline;
 pub(crate) mod sw;
@@ -33,6 +33,7 @@ pub(crate) mod types;
 
 // Public modules — stable API surface.
 pub mod annotation;
+pub mod fasta;
 pub mod g2t;
 
 // Flat re-exports for the most commonly used public types.
