@@ -340,13 +340,14 @@ pub fn project_group(
             )
         });
         // Transcript-space extent. `ref_consumed` is the number of transcript
-        // bases the alignment spans (see evaluate.rs); `fwpos` is the 1-based
-        // forward-strand start. `query_consumed()` gives the aligned read length.
+        // bases the alignment spans (see evaluate.rs). The 1-based forward-strand
+        // start is `align_pos` (== fwpos for '+' transcripts, rcpos for '-'); using
+        // `fwpos` unconditionally would put the start at the right end of the
+        // alignment for reverse-strand hits, pushing `transcript_end` past the
+        // transcript. `query_consumed()` gives the aligned read length.
         let aligned_len = entry.align.ref_consumed.max(0) as u32;
-        let transcript_end = entry
-            .align
-            .align
-            .fwpos
+        let transcript_start = align_pos(&entry.align);
+        let transcript_end = transcript_start
             .saturating_add(aligned_len)
             .saturating_sub(1);
         let query_aligned_len = entry
@@ -357,7 +358,7 @@ pub fn project_group(
             .map_or(0, |c| c.query_consumed());
         out.push(ProjectedAlignment {
             transcript_id: entry.tid,
-            transcript_start: entry.align.align.fwpos,
+            transcript_start,
             transcript_end,
             aligned_len,
             query_aligned_len,
