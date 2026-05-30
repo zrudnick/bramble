@@ -522,6 +522,25 @@ int main(int argc, char *argv[]) {
   GVec<GRefData> refguides;        // vector with guides for each chromosome
   refguides.setCount(n_refguides); // maximum reference guide ID
 
+  // Acquire the input header up front and add our @PG. The @HD line MUST be the
+  // first record of the header (SAM spec; strict parsers such as noodles reject
+  // a header whose @HD follows @SQ), so write it BEFORE the @SQ lines emitted in
+  // the transcript loop below; the remaining (@PG/@RG/@CO) lines are written
+  // after the @SQ block.
+  GSamReader hdr_reader(bam_file_in);
+  sam_hdr_t* hdr = sam_hdr_dup(hdr_reader.header());
+  sam_hdr_add_pg(hdr, "bramble", "VN", VERSION, "CL", pg_args.c_str(), (char*)NULL);
+  const char* hdr_str = sam_hdr_str(hdr);
+  for (const char* ls = hdr_str; *ls; ) {
+    const char* le = strchr(ls, '\n');
+    if (!le) le = ls + strlen(ls);
+    if (strncmp(ls, "@HD", 3) == 0) {
+      fwrite(ls, 1, le - ls + 1, header_file);
+    }
+    if (*le == '\0') break;
+    ls = le + 1;
+  }
+
   // Process each transcript for guide loading and header generation
   int last_refid = -1;
   for (int i = 0; i < gffreader->gflst.Count(); i++) {
@@ -561,21 +580,18 @@ int main(int argc, char *argv[]) {
     grefdata.add(gffreader, guide); // transcripts already sorted by location
   }
 
-  // Open reader temporarily to get the header
-  GSamReader tmp_reader(bam_file_in);
-  sam_hdr_t* hdr = sam_hdr_dup(tmp_reader.header());
-  sam_hdr_add_pg(hdr, "bramble", "VN", VERSION, "CL", pg_args.c_str(), (char*)NULL);
-  const char* hdr_str = sam_hdr_str(hdr);
+  // Write the remaining header lines (@PG/@RG/@CO from the input) AFTER the @SQ
+  // block. Skip @SQ (we emit transcript @SQ above) and @HD (already written
+  // first, so it stays the leading record).
   const char* line_start = hdr_str;
   while (*line_start) {
     const char* line_end = strchr(line_start, '\n');
     if (!line_end) line_end = line_start + strlen(line_start);
-    
-    // Only write @HD and @PG lines, skip @SQ and @RG
-    if (strncmp(line_start, "@SQ", 3) != 0) {
+
+    if (strncmp(line_start, "@SQ", 3) != 0 && strncmp(line_start, "@HD", 3) != 0) {
       fwrite(line_start, 1, line_end - line_start + 1, header_file);
     }
-    
+
     if (*line_end == '\0') break;
     line_start = line_end + 1;
   }
