@@ -35,6 +35,11 @@ pub struct ReadEvaluationConfig {
     pub soft_clips: bool,
     pub strict: bool,
     pub use_fasta: bool,
+    /// Multiplicative discount in `(0, 1]` applied per internal junction mismatch
+    /// (`junc_misses`): `similarity_score *= junc_miss_discount^junc_misses`.
+    /// `1.0` = off (default, original behavior); smaller values sharpen isoform
+    /// discrimination by penalizing transcripts the read's junctions disagree with.
+    pub junc_miss_discount: f64,
 }
 
 impl ReadEvaluationConfig {
@@ -52,6 +57,7 @@ impl ReadEvaluationConfig {
             soft_clips: true,
             strict: false,
             use_fasta: false,
+            junc_miss_discount: 1.0,
         }
     }
 
@@ -70,6 +76,7 @@ impl ReadEvaluationConfig {
             soft_clips: true,
             strict: false,
             use_fasta: false,
+            junc_miss_discount: 1.0,
         }
     }
 }
@@ -211,6 +218,11 @@ pub struct ExonChainMatch {
     pub total_operations: f64,
     pub ref_consumed: i32,
     pub junc_hits: i32,
+    /// Number of internal exon boundaries where the read does NOT match this
+    /// transcript exactly (a tolerated gap/insertion at an internal junction) —
+    /// evidence the read came from a different isoform. Used to discount the
+    /// similarity score (see `junc_miss_discount`).
+    pub junc_misses: i32,
     pub transcript_len: i32,
     pub prev_op: CigarOp,
 }
@@ -991,6 +1003,7 @@ pub fn create_match(
     match_info.ref_consumed = 0;
     match_info.prev_op = CigarOp::Match;
     match_info.junc_hits = 0;
+    match_info.junc_misses = 0;
     match_info
 }
 
@@ -1033,6 +1046,9 @@ pub fn build_cigar_match(
         {
             cigar.add_operation(left_ins, CigarOp::Ins);
             match_info.total_operations += left_ins as f64;
+            if matches!(segment.status, ExonStatus::MiddleExon | ExonStatus::LastExon) {
+                match_info.junc_misses += 1;
+            }
             if match_info.prev_op == CigarOp::Del {
                 match_info.total_coverage += left_ins as f64;
             } else if match_info.prev_op == CigarOp::Ins {
@@ -1050,6 +1066,9 @@ pub fn build_cigar_match(
             cigar.add_operation(left_gap, CigarOp::Del);
             match_info.total_operations += left_gap as f64;
             match_info.ref_consumed += left_gap as i32;
+            if matches!(segment.status, ExonStatus::MiddleExon | ExonStatus::LastExon) {
+                match_info.junc_misses += 1;
+            }
             if match_info.prev_op == CigarOp::Ins {
                 match_info.total_coverage += left_gap as f64;
             } else if match_info.prev_op == CigarOp::Del {
@@ -1087,6 +1106,9 @@ pub fn build_cigar_match(
         {
             cigar.add_operation(right_ins, CigarOp::Ins);
             match_info.total_operations += right_ins as f64;
+            if matches!(segment.status, ExonStatus::FirstExon | ExonStatus::MiddleExon) {
+                match_info.junc_misses += 1;
+            }
             if match_info.prev_op == CigarOp::Del {
                 match_info.total_coverage += right_ins as f64;
             }
@@ -1102,6 +1124,9 @@ pub fn build_cigar_match(
             cigar.add_operation(right_gap, CigarOp::Del);
             match_info.total_operations += right_gap as f64;
             match_info.ref_consumed += right_gap as i32;
+            if matches!(segment.status, ExonStatus::FirstExon | ExonStatus::MiddleExon) {
+                match_info.junc_misses += 1;
+            }
             if match_info.prev_op == CigarOp::Ins {
                 match_info.total_coverage += right_gap as f64;
             }
@@ -1179,7 +1204,15 @@ pub fn filter_by_similarity(
         if similarity > config.similarity_threshold as f64 {
             let x = (similarity - config.similarity_threshold as f64)
                 / (1.0 - config.similarity_threshold as f64);
-            m.align.similarity_score = x * x * ((m.junc_hits + 1) as f64);
+            // Discount transcripts the read's junctions disagree with: each
+            // internal junction mismatch (a tolerated gap/ins) multiplies the
+            // score by `junc_miss_discount` (<= 1), sharpening isoform choice.
+            let miss_factor = if config.junc_miss_discount < 1.0 && m.junc_misses > 0 {
+                config.junc_miss_discount.powi(m.junc_misses)
+            } else {
+                1.0
+            };
+            m.align.similarity_score = x * x * ((m.junc_hits + 1) as f64) * miss_factor;
             true
         } else {
             false
@@ -1486,6 +1519,8 @@ pub struct ReadEvaluator {
     pub max_junc_gap: Option<u8>,
     pub similarity_threshold: Option<f32>,
     pub small_exon_size: Option<u8>,
+    /// Per-junction-mismatch similarity discount in `(0, 1]`; `None` => 1.0 (off).
+    pub junc_miss_discount: Option<f64>,
 }
 
 impl ReadEvaluator {
@@ -1512,6 +1547,7 @@ impl ReadEvaluator {
             soft_clips:             true,
             strict:                 self.strict,
             use_fasta:              self.use_fasta,
+            junc_miss_discount:     self.junc_miss_discount.unwrap_or(1.0),
         }
     }
 

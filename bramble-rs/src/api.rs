@@ -197,17 +197,26 @@ pub struct ProjectionConfig {
     /// reference sequence to recover additional exon coverage.  Requires that
     /// `sequence` is set on the [`GenomicAlignment`].
     pub use_fasta: bool,
+    /// Per-internal-junction-mismatch similarity discount in `(0, 1]`.
+    ///
+    /// `1.0` (default) reproduces the original scoring. Smaller values sharpen
+    /// isoform discrimination by multiplying a transcript's similarity score by
+    /// `junc_miss_discount^(number of junction mismatches)` — penalizing
+    /// transcripts whose exon-junction structure the read disagrees with (a
+    /// tolerated gap/insertion at an internal junction), which is evidence the
+    /// read came from a different isoform.
+    pub junc_miss_discount: f64,
 }
 
 impl ProjectionConfig {
     /// Short-read (Illumina) defaults — matches C++ `ShortReadEvaluator`.
     pub fn short_read() -> Self {
-        Self { long_reads: false, use_fasta: false }
+        Self { long_reads: false, use_fasta: false, junc_miss_discount: 1.0 }
     }
 
     /// Long-read (PacBio / ONT) defaults — matches C++ `LongReadEvaluator`.
     pub fn long_read() -> Self {
-        Self { long_reads: true, use_fasta: false }
+        Self { long_reads: true, use_fasta: false, junc_miss_discount: 1.0 }
     }
 }
 
@@ -241,6 +250,7 @@ pub fn project_group(
         max_junc_gap: None,
         similarity_threshold: None,
         small_exon_size: None,
+        junc_miss_discount: Some(config.junc_miss_discount),
     };
     let mut ctx = EvalContext::new();
 

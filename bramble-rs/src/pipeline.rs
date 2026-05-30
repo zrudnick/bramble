@@ -123,6 +123,7 @@ pub fn run(
         max_junc_gap:         args.max_junc_gap,
         similarity_threshold: args.similarity_threshold,
         small_exon_size:      args.small_exon_size,
+        junc_miss_discount:   None,
     };
     
     let fr = args.fr;
