@@ -37,7 +37,10 @@ pub mod fasta;
 pub mod g2t;
 
 // Flat re-exports for the most commonly used public types.
-pub use api::{GenomicAlignment, ProjectedAlignment, ProjectionConfig, project_group};
+pub use api::{
+    GenomicAlignment, ProjectedAlignment, ProjectionConfig, ProjectionContext, project_group,
+    project_group_with,
+};
 pub use evaluate::ReadEvaluationConfig;
 pub use g2t::G2TTree;
 

@@ -97,7 +97,14 @@ pub fn run(
     fasta: Option<&crate::fasta::FastaDb>,
 ) -> Result<Stats> {
     let mut writer = hts_bam::Writer::from_path(&args.out_bam, hts_header, hts_bam::Format::Bam)?;
-    writer.set_threads(4)?;
+    // BGZF deflate of the (large) output BAM is the dominant cost; give the
+    // writer's compression thread pool enough threads to keep up with the
+    // projection workers rather than a fixed 4.
+    let io_threads = (args.threads.get() as usize).max(4);
+    writer.set_threads(io_threads)?;
+    // The input BAM is read on a single dedicated thread; parallelize its BGZF
+    // decompression so reading does not bottleneck the workers.
+    bam.reader.set_threads(io_threads)?;
 
     let progress = if !args.quiet {
         let pb = ProgressBar::new_spinner();

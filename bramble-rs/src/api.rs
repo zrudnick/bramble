@@ -220,7 +220,36 @@ impl ProjectionConfig {
     }
 }
 
+/// Reusable scratch space for [`project_group_with`].
+///
+/// Internally this holds the hash maps and the ksw2 aligner that
+/// [`project_group`] would otherwise allocate on every call. Allocate one per
+/// worker thread (or once per single-threaded run) and reuse it across many
+/// reads to avoid that per-read allocation — a significant speedup when
+/// projecting millions of reads. The buffers are cleared automatically on each
+/// call, so a single context can be reused for unrelated read groups.
+pub struct ProjectionContext {
+    ctx: EvalContext,
+}
+
+impl ProjectionContext {
+    /// Allocate a fresh projection context.
+    pub fn new() -> Self {
+        Self { ctx: EvalContext::new() }
+    }
+}
+
+impl Default for ProjectionContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Project a group of alignments for the same query name into transcriptome coordinates.
+///
+/// This is a convenience wrapper over [`project_group_with`] that allocates a
+/// fresh [`ProjectionContext`] on each call. When projecting many reads, prefer
+/// [`project_group_with`] with a reused context to avoid per-read allocation.
 ///
 /// # Parameters
 ///
@@ -240,6 +269,18 @@ pub fn project_group(
     index: &G2TTree,
     config: &ProjectionConfig,
 ) -> Vec<ProjectedAlignment> {
+    let mut pctx = ProjectionContext::new();
+    project_group_with(alignments, index, config, &mut pctx)
+}
+
+/// Like [`project_group`], but reuses the caller-provided [`ProjectionContext`]
+/// instead of allocating one per call. Use this in hot loops.
+pub fn project_group_with(
+    alignments: &[GenomicAlignment],
+    index: &G2TTree,
+    config: &ProjectionConfig,
+    pctx: &mut ProjectionContext,
+) -> Vec<ProjectedAlignment> {
     let evaluator = ReadEvaluator {
         lr: config.long_reads,
         lr_hq: false,
@@ -252,9 +293,15 @@ pub fn project_group(
         small_exon_size: None,
         junc_miss_discount: Some(config.junc_miss_discount),
     };
-    let mut ctx = EvalContext::new();
+    let ctx = &mut pctx.ctx;
 
-    let shared_seq: Option<Vec<u8>> = alignments.iter().find_map(|a| a.sequence.clone());
+    // The shared sequence is only needed for soft-clip rescue (use_fasta); skip
+    // the clone entirely otherwise (the common case).
+    let shared_seq: Option<Vec<u8>> = if config.use_fasta {
+        alignments.iter().find_map(|a| a.sequence.clone())
+    } else {
+        None
+    };
 
     let mut read_evals: Vec<ReadEval> = Vec::new();
 
@@ -281,7 +328,7 @@ pub fn project_group(
             name: a.query_name.as_bytes().to_vec(),
         };
 
-        evaluator.evaluate(&read, idx as ReadId, index, shared_seq.as_deref(), &mut ctx);
+        evaluator.evaluate(&read, idx as ReadId, index, shared_seq.as_deref(), ctx);
         let matches: HashMap<Tid, ExonChainMatch> = ctx.matches
             .drain()
             .filter(|(_, m)| m.align.cigar.is_some())
