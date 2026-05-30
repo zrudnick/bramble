@@ -31,11 +31,16 @@ if not lzma_dep.found()
   lzma_dep = cc.find_library('lzma', required: true)
 endif
 lzma_dep = dependency('liblzma', required: true)
-curl_dep = dependency('libcurl', required: true)
+# libcurl is only needed for htslib remote-URL (http/s3/gcs) access, which we do
+# not use; htslib is built with --disable-libcurl so we drop it here too.
+curl_dep = dependency('libcurl', required: false)
 libdeflate_dep = dependency('libdeflate', fallback: ['libdeflate', 'libdeflate_dep'], required: true)
 
-libs = [libdeflate_dep, zlib_dep, curl_dep, bz2_dep, lzma_dep, 
+libs = [libdeflate_dep, zlib_dep, bz2_dep, lzma_dep,
         cc.find_library('m', required: false), cc.find_library('stdc++fs', required: false)]
+if curl_dep.found()
+  libs += [curl_dep]
+endif
 
 # Paths to external directories
 # htslib_dir = 'htslib'

@@ -42,7 +42,7 @@ htslib_configure = custom_target('htslib-configure',
         # Only configure if config.status doesn't exist or is older than configure
         if [ ! -f config.status ] || [ configure -nt config.status ]; then
             echo "Running configure..."
-            ./configure --prefix="''' + install_dir + '''" --disable-shared --enable-static --disable-gcs --disable-s3
+            ./configure --prefix="''' + install_dir + '''" --disable-shared --enable-static --disable-gcs --disable-s3 --disable-libcurl --disable-ref-cache
         else
             echo "Configure is up to date, skipping..."
         fi
