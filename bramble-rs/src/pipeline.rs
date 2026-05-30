@@ -96,15 +96,16 @@ pub fn run(
     g2t: &G2TTree,
     fasta: Option<&crate::fasta::FastaDb>,
 ) -> Result<Stats> {
-    let mut writer = hts_bam::Writer::from_path(&args.out_bam, hts_header, hts_bam::Format::Bam)?;
-    // BGZF deflate of the (large) output BAM is the dominant cost; give the
-    // writer's compression thread pool enough threads to keep up with the
-    // projection workers rather than a fixed 4.
+    // BGZF (de)compression of the input and (large) output BAMs is the dominant
+    // cost. Share ONE htslib thread pool between the reader and the writer (via
+    // hts_set_thread_pool) so input decompression and output compression are both
+    // parallelized without spinning up two separate per-file pools. Declared
+    // before `writer` so it outlives it (the writer flushes on drop using it).
     let io_threads = (args.threads.get() as usize).max(4);
-    writer.set_threads(io_threads)?;
-    // The input BAM is read on a single dedicated thread; parallelize its BGZF
-    // decompression so reading does not bottleneck the workers.
-    bam.reader.set_threads(io_threads)?;
+    let tpool = rust_htslib::tpool::ThreadPool::new(io_threads as u32)?;
+    let mut writer = hts_bam::Writer::from_path(&args.out_bam, hts_header, hts_bam::Format::Bam)?;
+    writer.set_thread_pool(&tpool)?;
+    bam.reader.set_thread_pool(&tpool)?;
 
     let progress = if !args.quiet {
         let pb = ProgressBar::new_spinner();
