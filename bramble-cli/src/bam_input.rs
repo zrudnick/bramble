@@ -1,6 +1,6 @@
 // bam_input.rs is used only by the binary (BAM I/O path).
 #![allow(dead_code)]
-use crate::types::{HashMap, RefId};
+use bramble_rs::types::{HashMap, RefId};
 use anyhow::Result;
 use rust_htslib::bam;
 use rust_htslib::bam::Read as HtsRead;

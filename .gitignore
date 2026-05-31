@@ -138,3 +138,6 @@ test_data/
 
 # Rust build artifacts
 bramble-rs/target/
+bramble-cli/target/
+# Release-script scratch backups
+*.release.bak

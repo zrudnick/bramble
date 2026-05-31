@@ -286,9 +286,10 @@ pub struct ReadAln {
 
 /// Reusable scratch space for one evaluation pass.
 /// Allocate once per worker thread; cleared between reads automatically.
-pub(crate) struct EvalContext {
+#[doc(hidden)]
+pub struct EvalContext {
     /// Final output: transcript → chain match.  Filled by evaluate(); drained by caller.
-    pub(crate) matches: HashMap<Tid, ExonChainMatch>,
+    pub matches: HashMap<Tid, ExonChainMatch>,
     /// Per-strand working map: tid → accumulated TidData.
     pub(crate) data: HashMap<Tid, TidData>,
     /// Working set of matched tids for the current exon.
@@ -304,7 +305,7 @@ pub(crate) struct EvalContext {
 }
 
 impl EvalContext {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             matches: HashMap::new(),
             data: HashMap::new(),
@@ -637,7 +638,7 @@ pub fn left_clip_rescue(
             }
 
             let q_len = remaining_qseq.len() as i32;
-            let left_clip_bases = (q_len - query_consumed).max(0) as u32;
+            let _left_clip_bases = (q_len - query_consumed).max(0) as u32;
 
             let mut dummy_gexon = gexon.clone();
             dummy_gexon.start = gexon.start.saturating_sub(ref_consumed as u32);
@@ -830,7 +831,7 @@ pub fn right_clip_rescue(
             }
 
             let q_len = remaining_qseq.len() as i32;
-            let right_clip_bases = (q_len - query_consumed).max(0) as u32;
+            let _right_clip_bases = (q_len - query_consumed).max(0) as u32;
 
             let mut dummy_gexon = gexon.clone();
             dummy_gexon.start = gexon.end;

@@ -2,23 +2,20 @@
 name = "bramble-rs"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "Project spliced genomic alignments into transcriptomic coordinates."
+repository = "https://github.com/zrudnick/bramble"
+homepage = "https://github.com/zrudnick/bramble"
+readme = "README.md"
+keywords = ["bioinformatics", "genomics", "rna-seq", "transcriptomics", "splicing"]
+categories = ["science"]
 
 [dependencies]
 anyhow = "1.0"
-# Drop the default `lzma` (and `curl`) features: BAM I/O only needs bgzf/bzip2,
-# and `lzma-sys` collides on the native `lzma` link with consumers that pull
-# `liblzma` (e.g. oarfish via needletail). Keeping lzma breaks the path-dep build.
-rust-htslib = { version = "1.0", default-features = false, features = ["bzip2"] }
 ahash = "0.8"
-clap = { version = "4.5", features = ["derive"] }
 coitrees = "0.4"
-flume = "0.11"
-indicatif = "0.18.3"
-mimalloc = "0.1"
 noodles = { version = "0.101", features = ["sam", "gff", "gtf", "core"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-ksw2rs = { git = "https://github.com/alevar/ksw2rs", branch = "main" }
+ksw2rs = "0.1.4"
 needletail = { version = "0.6", default-features = false }
 
 [profile.release]

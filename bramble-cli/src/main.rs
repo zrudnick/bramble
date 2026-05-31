@@ -1,16 +1,13 @@
-mod annotation;
 mod alignment;
 mod bam_input;
 mod cli;
 mod header;
-mod g2t;
-mod fasta;
-mod evaluate;
 mod pipeline;
-mod sw;
-mod types;
 
 use anyhow::Result;
+use bramble_rs::annotation;
+use bramble_rs::fasta;
+use bramble_rs::g2t;
 use clap::Parser;
 use mimalloc::MiMalloc;
 use std::mem::ManuallyDrop;

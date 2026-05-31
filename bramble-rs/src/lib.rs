@@ -21,15 +21,22 @@
 //! // let projected = project_group(&alns, &index, &config);
 //! ```
 
-// Internal modules — not part of the public API.
-pub(crate) mod alignment;
-pub(crate) mod bam_input;
-pub(crate) mod cli;
-pub(crate) mod evaluate;
-pub(crate) mod header;
-pub(crate) mod pipeline;
+// Internal modules. The BAM I/O + CLI (the old `bam_input`/`cli`/`header`/
+// `pipeline` modules) now live in the separate `bramble-cli` binary crate so
+// that this library does not depend on rust-htslib. The modules below are
+// `#[doc(hidden)] pub` (not part of the stable API) only so `bramble-cli` can
+// reach the projection internals it needs to build BAM records.
+#[doc(hidden)]
+pub mod alignment;
+#[doc(hidden)]
+pub mod cigar;
+#[doc(hidden)]
+pub mod evaluate;
+#[doc(hidden)]
+pub mod groups;
+#[doc(hidden)]
+pub mod types;
 pub(crate) mod sw;
-pub(crate) mod types;
 
 // Public modules — stable API surface.
 pub mod annotation;
@@ -44,10 +51,10 @@ pub use api::{
 pub use evaluate::ReadEvaluationConfig;
 pub use g2t::G2TTree;
 
-// Re-exports needed by integration tests in tests/.
+// Re-exports used by bramble-cli and the integration tests.
 #[doc(hidden)]
 pub use evaluate::{Cigar, CigarOp};
 #[doc(hidden)]
-pub use pipeline::update_cigar_for_test;
+pub use cigar::update_cigar_for_test;
 
 mod api;

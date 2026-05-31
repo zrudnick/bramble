@@ -50,7 +50,7 @@
 
 use crate::evaluate::{EvalContext, ReadAln, ReadEvaluator, ExonChainMatch};
 use crate::g2t::G2TTree;
-use crate::pipeline::{
+use crate::groups::{
     ReadEval, OutputEntry,
     find_mate_pairs, assign_pair_order,
     build_paired_groups, build_unpaired_groups,
