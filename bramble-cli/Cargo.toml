@@ -1,6 +1,6 @@
 [package]
 name = "bramble-cli"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 license = "MIT"
 description = "Command-line tool to project spliced genomic alignments into transcriptomic space."
@@ -15,7 +15,7 @@ name = "bramble-rs"
 path = "src/main.rs"
 
 [dependencies]
-bramble-rs = { path = "../bramble-rs", version = "0.1.1" }
+bramble-rs = { path = "../bramble-rs", version = "0.1.2" }
 anyhow = "1.0"
 rust-htslib = { version = "1.0", default-features = false, features = ["bzip2"] }
 clap = { version = "4.5", features = ["derive"] }
