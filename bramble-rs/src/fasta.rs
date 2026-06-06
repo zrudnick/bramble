@@ -9,6 +9,19 @@ pub struct FastaDb {
 }
 
 impl FastaDb {
+    /// Build a `FastaDb` from already-extracted reference sequences, keyed by
+    /// contig name (the same first-whitespace-token convention `load` produces).
+    ///
+    /// Lets callers populate the rescue reference from a source other than a
+    /// FASTA file on disk — e.g. the reference sequences already resident in a
+    /// loaded aligner index (rammap/minimap2) — so genome-mode soft-clip rescue
+    /// works without a separate FASTA. Sequence bytes should be ASCII
+    /// nucleotides (`get_slice` upper-cases and N-maps as needed), exactly as if
+    /// they had been read from a FASTA, so downstream exon slicing is identical.
+    pub fn from_seqs(seqs: HashMap<String, Vec<u8>>) -> Self {
+        Self { seqs }
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         let mut reader = parse_fastx_file(path)
             .map_err(|e| anyhow::anyhow!("failed to open FASTA {}: {}", path.display(), e))?;
@@ -57,6 +70,19 @@ impl FastaDb {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    /// `from_seqs` yields a db whose `get_slice` behaves exactly like one loaded
+    /// from a FASTA (1-based half-open, upper-cased) — so an index-sourced rescue
+    /// reference is interchangeable with a file-sourced one.
+    #[test]
+    fn from_seqs_slices_like_load() {
+        let mut m = HashMap::new();
+        m.insert("chr1".to_string(), b"acgtACGTNN".to_vec());
+        let db = FastaDb::from_seqs(m);
+        assert_eq!(db.get_slice("chr1", 1, 5).unwrap(), b"ACGT".to_vec());
+        assert_eq!(db.get_slice("chr1", 5, 9).unwrap(), b"ACGT".to_vec());
+        assert!(db.get_slice("missing", 1, 5).is_none());
+    }
 
     /// Real genome FASTAs (RefSeq/Ensembl/GENCODE) carry a description after the
     /// accession in the header. The accession is the name used everywhere else
