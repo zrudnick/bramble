@@ -120,6 +120,24 @@ pub fn smith_waterman(aligner: &mut Aligner, bufs: &mut SwBufs, seq1: &[u8], seq
         }
     }
 
+    // Bound the extension workspace. ksw2's CIGAR traceback is O(qlen * tlen),
+    // and the aligner retains a workspace sized to the largest clip it has seen;
+    // with one aligner per worker thread, long clipped reads (full-length reads
+    // whose other end maps elsewhere) blow peak RSS up to tens of GB. The rescue
+    // extends from the exon boundary (position 0 after the anchor reversal), so
+    // only the boundary-proximal bases carry the discriminating signal — cap the
+    // query (and its guide) so the workspace is O(CAP^2). Clips shorter than the
+    // cap (the overwhelming majority, incl. all the alt-exon discriminators) are
+    // untouched, so behavior is unchanged for them.
+    const SW_MAX_CLIP: usize = 4096;
+    if bufs.qbuf.len() > SW_MAX_CLIP {
+        bufs.qbuf.truncate(SW_MAX_CLIP);
+        let tcap = SW_MAX_CLIP + 40;
+        if bufs.tbuf.len() > tcap {
+            bufs.tbuf.truncate(tcap);
+        }
+    }
+
     let input = Extz2Input {
         query: &bufs.qbuf,
         target: &bufs.tbuf,
