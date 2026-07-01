@@ -1531,7 +1531,12 @@ impl ReadEvaluator {
                 (_, _, true) => (0,   0,  0, 0.99_f32,  0),
                 (_, true, _) => (5,  10, 10, 0.90_f32,  0),
                 (true, _, _) => (40, 40, 40, 0.60_f32, 35),
-                _            => (5,   0,  0,  1.0_f32,  0),
+                // Short-read default. Must match `ReadEvaluationConfig::short_read()`
+                // (C++ ShortReadEvaluator): threshold 0.90, NOT 1.0. A threshold of
+                // 1.0 makes the `similarity > threshold` gate in `filter_by_similarity`
+                // unsatisfiable (a perfect read scores exactly 1.0) and divides by zero
+                // in the `(sim - thr)/(1 - thr)` rescale, so every short read is dropped.
+                _            => (5,   0,  0, 0.90_f32,  0),
             };
 
         let small_exon_size = self.small_exon_size.unwrap_or(default_small_exon_size);
@@ -1567,7 +1572,24 @@ impl ReadEvaluator {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cigar, CigarOp};
+    use super::{Cigar, CigarOp, ReadEvaluator};
+
+    #[test]
+    fn short_read_build_config_threshold_is_not_one() {
+        // Regression: a default (short-read) ReadEvaluator must resolve to the
+        // ShortReadEvaluator threshold 0.90, NOT 1.0. At 1.0 the
+        // `similarity > threshold` gate in filter_by_similarity is unsatisfiable
+        // (a perfect read scores exactly 1.0) and the `(sim-thr)/(1-thr)` rescale
+        // divides by zero, so every short read is silently dropped (projected 0).
+        let ev = ReadEvaluator::default();
+        let cfg = ev.build_config();
+        assert!(
+            (cfg.similarity_threshold - 0.90).abs() < 1e-6,
+            "short-read threshold must be 0.90, got {}",
+            cfg.similarity_threshold
+        );
+        assert!(cfg.similarity_threshold < 1.0, "threshold 1.0 drops all short reads");
+    }
 
     #[test]
     fn query_consumed_counts_only_query_ops() {
