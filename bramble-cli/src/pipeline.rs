@@ -675,10 +675,19 @@ fn build_projected_record(
     out.push_aux_unchecked(b"NH", Aux::I32(nh as i32))?;
     out.push_aux_unchecked(b"HI", Aux::I32(entry.align.align.hit_index))?;
     out.push_aux_unchecked(b"XS", Aux::Char(entry.align.align.strand as u8))?;
-    let score = if !long_reads {
-        (1.0 + entry.align.align.similarity_score).powi(3) * 100.0
-    } else {
+    // Projected alignment score, matching C++ exactly. C++ (core.cpp) only calls
+    // set_as_tag — `(genome_AS + clip_score) * similarity_score` — for LONG reads;
+    // for SHORT reads it leaves the original genome (STAR) AS untouched. So short
+    // reads pass the genome AS through verbatim (per-read uniform), and only long
+    // reads fold in the projection similarity. The previous Rust behavior recomputed
+    // AS for short reads too — first as `(1+similarity)^3*100`, then as the long-read
+    // formula — either of which applies the junc_hits-driven similarity variance that
+    // C++ never applies to short reads, so downstream quantifiers split multi-isoform
+    // reads unevenly on score noise (dropping accuracy vs C++).
+    let score = if long_reads {
         (gn_as + (entry.align.align.clip_score as f64)) * entry.align.align.similarity_score
+    } else {
+        gn_as
     };
     out.push_aux_unchecked(b"AS", Aux::I32(score as i32))?;
 
