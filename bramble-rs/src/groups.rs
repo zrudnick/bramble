@@ -125,38 +125,68 @@ pub fn assign_hit_indices(entries: &mut [OutputEntry]) {
 
 #[doc(hidden)]
 pub fn find_mate_pairs(reads: &[ReadEval]) -> Vec<(usize, usize)> {
-    // C++ create_read_id uses name+pos (no HI tag). Since all reads in a group
-    // share the same name, the key is just the alignment start position.
-    let mut pending: HashMap<u32, usize> = HashMap::new();
-    let mut pairs = Vec::new();
+    // Pair mates that MUTUALLY reference each other's alignment start (same name
+    // group, same reference, read.mate_start == mate.read_start and vice versa),
+    // independent of the order reads appear in the group.
+    //
+    // The previous single-pass logic (mirroring C++ `hashread[key]=id`) only
+    // *inserted* the LEFT mate (mate_start > read_start) and only *looked up* from
+    // the RIGHT mate, so it paired a fragment ONLY when the LEFT mate was processed
+    // before the RIGHT mate. When the RIGHT (higher-coordinate) mate came first —
+    // e.g. a name-collated BAM listing read1 first while read1 is the reverse mate
+    // — the lookup hit an empty map and the LEFT mate's later insert was never
+    // consumed, so BOTH mates fell through to `build_unpaired_groups` and were
+    // emitted as orphans on every transcript (losing the proper-pair fragment
+    // length signal). C++ bramble has the same order bug. Indexing all eligible
+    // reads first, then matching mutually, removes the order dependence.
+    let eligible = |r: &ReadEval| -> Option<(u32, u32)> {
+        if (r.flags & FLAG_PAIRED) == 0 || (r.flags & FLAG_MATE_UNMAPPED) != 0 {
+            return None;
+        }
+        match (
+            r.alignment_start,
+            r.mate_alignment_start,
+            r.ref_id,
+            r.mate_ref_id,
+        ) {
+            (Some(rs), Some(ms), Some(rid), Some(mid)) if rid == mid => Some((rs, ms)),
+            _ => None,
+        }
+    };
 
+    // Index eligible reads by their own alignment start (insertion order kept for
+    // deterministic candidate selection among same-position multimappers).
+    let mut by_start: HashMap<u32, Vec<usize>> = HashMap::new();
     for (idx, read) in reads.iter().enumerate() {
-        if (read.flags & FLAG_PAIRED) == 0 || (read.flags & FLAG_MATE_UNMAPPED) != 0 {
+        if let Some((rs, _)) = eligible(read) {
+            by_start.entry(rs).or_default().push(idx);
+        }
+    }
+
+    let mut paired = vec![false; reads.len()];
+    let mut pairs = Vec::new();
+    for (idx, read) in reads.iter().enumerate() {
+        if paired[idx] {
             continue;
         }
-
-        let (Some(read_start), Some(mate_start), Some(ref_id), Some(mate_ref_id)) = (
-            read.alignment_start,
-            read.mate_alignment_start,
-            read.ref_id,
-            read.mate_ref_id,
-        ) else {
+        let Some((rs, ms)) = eligible(read) else {
             continue;
         };
-
-        if ref_id != mate_ref_id {
-            continue;
-        }
-
-        if mate_start <= read_start {
-            let mate_key = mate_start;
-            if let Some(mate_idx) = pending.remove(&mate_key) {
-                pairs.push((idx, mate_idx));
+        // Our mate sits at `ms`; find an unpaired read there that points back at us.
+        if let Some(cands) = by_start.get(&ms) {
+            for &m in cands {
+                if m == idx || paired[m] {
+                    continue;
+                }
+                if let Some((_, m_ms)) = eligible(&reads[m])
+                    && m_ms == rs
+                {
+                    pairs.push((idx, m));
+                    paired[idx] = true;
+                    paired[m] = true;
+                    break;
+                }
             }
-        } else {
-            // C++ uses hashread[key] = id which overwrites any existing entry
-            // at the same position. Match this by always inserting (not or_insert).
-            pending.insert(read_start, idx);
         }
     }
 
