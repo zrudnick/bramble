@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use std::collections::HashMap;
+use crate::types::{HashMap, HashMapExt};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;

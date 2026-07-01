@@ -1,6 +1,6 @@
 use anyhow::Result;
 use needletail::parse_fastx_file;
-use std::collections::HashMap;
+use crate::types::{HashMap, HashMapExt};
 use std::path::Path;
 
 #[derive(Debug, Default)]
