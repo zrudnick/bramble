@@ -579,6 +579,10 @@ fn build_projected_record(
 
     // Build flags via u16 bit manipulation
     let mut flags = record.flags();
+    // Original mate identity (PAIRED/READ1/READ2), preserved for orphans below so
+    // the projected record keeps its read1/read2 designation like C++ (which only
+    // adjusts SECONDARY + the mate fields and never strips mate identity).
+    let orig_mate_id = flags & (FLAG_PAIRED | FLAG_READ1 | FLAG_READ2);
     // Clear: UNMAPPED, MATE_UNMAPPED, MATE_REVERSE, PROPER_PAIR, PAIRED, READ1, READ2
     flags &= !(FLAG_UNMAPPED | FLAG_MATE_UNMAPPED | FLAG_MATE_REVERSE | FLAG_PROPER_PAIR
                 | FLAG_PAIRED | FLAG_READ1 | FLAG_READ2);
@@ -656,8 +660,15 @@ fn build_projected_record(
             entry.same_transcript,
         ) as i64);
     } else {
-        flags &= !(FLAG_PAIRED | FLAG_PROPER_PAIR | FLAG_MATE_UNMAPPED
-                    | FLAG_MATE_REVERSE | FLAG_READ1 | FLAG_READ2);
+        // Orphan: this read's mate did not project onto this transcript. Preserve
+        // the original PAIRED/READ1/READ2 designation (C++ keeps mate identity),
+        // but mark the mate unmapped and clear the (genomic) mate coordinates,
+        // since there is no mate placement in transcriptome space.
+        flags &= !(FLAG_PROPER_PAIR | FLAG_MATE_REVERSE);
+        flags |= orig_mate_id;
+        if flags & FLAG_PAIRED != 0 {
+            flags |= FLAG_MATE_UNMAPPED;
+        }
         out.set_flags(flags);
         out.set_mtid(-1);
         out.set_mpos(-1);
