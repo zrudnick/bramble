@@ -272,18 +272,33 @@ void process_pairs(std::vector<CReadAln> &reads,
   int32_t read_start = reads[id].start;
   int32_t mate_start = brec->mate_start();
 
-  if (mate_start <= read_start) {
-    std::string key =
-      create_read_id(reads[id].brec->name(), mate_start);
-    auto it = hashread.find(key);
-    if (it != hashread.end()) {
-      add_pair_if_new(reads, id, it->second);
-      add_pair_if_new(reads, it->second, id);
-      hashread.erase(it);
-    }
+  // Pair mates order-independently. The previous logic only *inserted* a read
+  // when it was the left mate (mate_start > read_start) and only *looked up*
+  // when it was the right mate, so a fragment was paired ONLY if its left mate
+  // was processed before its right mate. Reads are processed in BAM order, so
+  // whenever the right (higher-coordinate) mate came first -- routine for a
+  // name-collated BAM that lists read1 first while read1 is the reverse mate
+  // (~half of FR pairs) -- the right mate's lookup hit an empty map and the
+  // left mate's later insert was never consumed, leaving BOTH mates unpaired.
+  // They then fall through to the single-end path and are emitted as orphans on
+  // every transcript, losing the proper-pair fragment-length signal and causing
+  // downstream quantifiers to under-count the affected transcripts (notably
+  // long / retained-intron isoforms). On the GEUVADIS-style human sim this
+  // roughly halved the proper-pair placements.
+  //
+  // Fix: look up our mate first (it may already be recorded, in either order);
+  // if found, pair and consume it; otherwise record ourselves so our mate can
+  // pair with us when it is processed. This removes the order dependence while
+  // keeping the name+position keying and single-pairing (erase-on-match).
+  std::string mate_key = create_read_id(reads[id].brec->name(), mate_start);
+  auto it = hashread.find(mate_key);
+  if (it != hashread.end()) {
+    add_pair_if_new(reads, id, it->second);
+    add_pair_if_new(reads, it->second, id);
+    hashread.erase(it);
   } else {
     std::string key = create_read_id(brec->name(), read_start);
-    hashread[key] = id;  // unambiguously stores the value
+    hashread[key] = id;
   }
 }
 
