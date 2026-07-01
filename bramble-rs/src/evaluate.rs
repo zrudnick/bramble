@@ -35,6 +35,14 @@ pub struct ReadEvaluationConfig {
     pub soft_clips: bool,
     pub strict: bool,
     pub use_fasta: bool,
+    /// Whether to apply the similarity filter (retain matches by
+    /// `total_coverage/total_operations > threshold` and set
+    /// `similarity_score = x²·(junc_hits+1)`). Mirrors C++
+    /// `config.filter_by_similarity`, which is `(similarity_threshold < 1.0)`:
+    /// short reads use threshold 1.0 → filter DISABLED (keep all matches, leave
+    /// `similarity_score` at its default), so short-read projection is not
+    /// re-weighted by junc_hits (C++ only rewrites AS for long reads).
+    pub filter_by_similarity: bool,
     /// Multiplicative discount in `(0, 1]` applied per internal junction mismatch
     /// (`junc_misses`): `similarity_score *= junc_miss_discount^junc_misses`.
     /// `1.0` = off (default, original behavior); smaller values sharpen isoform
@@ -49,7 +57,13 @@ impl ReadEvaluationConfig {
             max_clip: 5,
             max_ins: 0,
             max_junc_gap: 0,
-            similarity_threshold: 0.90,
+            // C++ short-read `similarity_threshold` = 1.0, which sets
+            // `filter_by_similarity = (threshold < 1.0) = false`: the similarity
+            // filter is DISABLED for short reads (all matches kept, no junc_hits
+            // re-weighting). This is a SENTINEL, not a "require perfect match"
+            // gate — the filter is skipped entirely rather than dropping reads.
+            similarity_threshold: 1.0,
+            filter_by_similarity: false,
             ignore_small_exons: false,
             small_exon_size: 0,
             print: false,
@@ -69,6 +83,7 @@ impl ReadEvaluationConfig {
             max_ins: 40,
             max_junc_gap: 40,
             similarity_threshold: 0.60,
+            filter_by_similarity: true,
             ignore_small_exons: true,
             small_exon_size: 35,
             print: false,
@@ -1195,30 +1210,38 @@ pub fn filter_by_similarity(
     config: &ReadEvaluationConfig,
     name: &[u8],
 ) {
-    matches.retain(|_tid, m| {
-        let similarity = if m.total_operations > 0.0 {
-            m.total_coverage / m.total_operations
-        } else {
-            0.0
-        };
-
-        if similarity > config.similarity_threshold as f64 {
-            let x = (similarity - config.similarity_threshold as f64)
-                / (1.0 - config.similarity_threshold as f64);
-            // Discount transcripts the read's junctions disagree with: each
-            // internal junction mismatch (a tolerated gap/ins) multiplies the
-            // score by `junc_miss_discount` (<= 1), sharpening isoform choice.
-            let miss_factor = if config.junc_miss_discount < 1.0 && m.junc_misses > 0 {
-                config.junc_miss_discount.powi(m.junc_misses)
+    // C++ gates this whole similarity retain on `config.filter_by_similarity`
+    // (= `similarity_threshold < 1.0`). Short reads (threshold 1.0) DISABLE it:
+    // no match is dropped by similarity and `similarity_score` keeps its default,
+    // so junc_hits never re-weights short-read placements (matching C++, which
+    // also only rewrites the AS tag for long reads). When enabled (long reads),
+    // drop sub-threshold matches and set `similarity_score = x²·(junc_hits+1)`.
+    if config.filter_by_similarity {
+        matches.retain(|_tid, m| {
+            let similarity = if m.total_operations > 0.0 {
+                m.total_coverage / m.total_operations
             } else {
-                1.0
+                0.0
             };
-            m.align.similarity_score = x * x * ((m.junc_hits + 1) as f64) * miss_factor;
-            true
-        } else {
-            false
-        }
-    });
+
+            if similarity > config.similarity_threshold as f64 {
+                let x = (similarity - config.similarity_threshold as f64)
+                    / (1.0 - config.similarity_threshold as f64);
+                // Discount transcripts the read's junctions disagree with: each
+                // internal junction mismatch (a tolerated gap/ins) multiplies the
+                // score by `junc_miss_discount` (<= 1), sharpening isoform choice.
+                let miss_factor = if config.junc_miss_discount < 1.0 && m.junc_misses > 0 {
+                    config.junc_miss_discount.powi(m.junc_misses)
+                } else {
+                    1.0
+                };
+                m.align.similarity_score = x * x * ((m.junc_hits + 1) as f64) * miss_factor;
+                true
+            } else {
+                false
+            }
+        });
+    }
 
     matches.retain(|_tid, m| {
         let pos = if m.align.strand == '+' {
@@ -1531,21 +1554,26 @@ impl ReadEvaluator {
                 (_, _, true) => (0,   0,  0, 0.99_f32,  0),
                 (_, true, _) => (5,  10, 10, 0.90_f32,  0),
                 (true, _, _) => (40, 40, 40, 0.60_f32, 35),
-                // Short-read default. Must match `ReadEvaluationConfig::short_read()`
-                // (C++ ShortReadEvaluator): threshold 0.90, NOT 1.0. A threshold of
-                // 1.0 makes the `similarity > threshold` gate in `filter_by_similarity`
-                // unsatisfiable (a perfect read scores exactly 1.0) and divides by zero
-                // in the `(sim - thr)/(1 - thr)` rescale, so every short read is dropped.
-                _            => (5,   0,  0, 0.90_f32,  0),
+                // Short-read default matches C++ (SIM_THR.value_or(1.0)): threshold
+                // 1.0 is a SENTINEL that DISABLES the similarity filter
+                // (`filter_by_similarity = threshold < 1.0`), NOT a "require a
+                // perfect match" gate. With the filter gated off (below), reads are
+                // no longer dropped by the `similarity > 1.0` test — that gate is
+                // never evaluated — and short-read placements are not re-weighted by
+                // junc_hits, matching C++ (which only rewrites AS for long reads).
+                _            => (5,   0,  0, 1.0_f32,  0),
             };
 
         let small_exon_size = self.small_exon_size.unwrap_or(default_small_exon_size);
+        let similarity_threshold = self.similarity_threshold.unwrap_or(default_similarity_threshold);
 
         ReadEvaluationConfig {
             max_clip:               self.max_clip.unwrap_or(default_max_clip) as u32,
             max_ins:                self.max_ins.unwrap_or(default_max_ins) as u32,
             max_junc_gap:           self.max_junc_gap.unwrap_or(default_max_junc_gap) as u32,
-            similarity_threshold:   self.similarity_threshold.unwrap_or(default_similarity_threshold),
+            similarity_threshold,
+            // C++: filter_by_similarity = (similarity_threshold < 1.0).
+            filter_by_similarity:   similarity_threshold < 1.0,
             ignore_small_exons:     small_exon_size > 0,
             small_exon_size:        small_exon_size as u32,
             print:                  false,
@@ -1575,20 +1603,22 @@ mod tests {
     use super::{Cigar, CigarOp, ReadEvaluator};
 
     #[test]
-    fn short_read_build_config_threshold_is_not_one() {
-        // Regression: a default (short-read) ReadEvaluator must resolve to the
-        // ShortReadEvaluator threshold 0.90, NOT 1.0. At 1.0 the
-        // `similarity > threshold` gate in filter_by_similarity is unsatisfiable
-        // (a perfect read scores exactly 1.0) and the `(sim-thr)/(1-thr)` rescale
-        // divides by zero, so every short read is silently dropped (projected 0).
-        let ev = ReadEvaluator::default();
-        let cfg = ev.build_config();
-        assert!(
-            (cfg.similarity_threshold - 0.90).abs() < 1e-6,
-            "short-read threshold must be 0.90, got {}",
-            cfg.similarity_threshold
-        );
-        assert!(cfg.similarity_threshold < 1.0, "threshold 1.0 drops all short reads");
+    fn short_read_similarity_filter_is_disabled() {
+        // C++ parity: a default (short-read) ReadEvaluator resolves to threshold
+        // 1.0, which DISABLES the similarity filter (`filter_by_similarity =
+        // threshold < 1.0 = false`). The filter being off is what prevents the
+        // `similarity > threshold` gate from ever running (so short reads are NOT
+        // dropped — the earlier "projected 0" bug) AND leaves similarity_score
+        // unweighted (so short-read placements aren't re-scored by junc_hits,
+        // matching C++ which only rewrites AS for long reads).
+        let short = ReadEvaluator::default().build_config();
+        assert_eq!(short.similarity_threshold, 1.0, "short-read threshold is 1.0");
+        assert!(!short.filter_by_similarity, "short-read similarity filter is disabled");
+
+        // Long reads keep the filter enabled (threshold 0.60 < 1.0).
+        let long = ReadEvaluator { lr: true, ..Default::default() }.build_config();
+        assert!(long.filter_by_similarity, "long-read similarity filter is enabled");
+        assert!((long.similarity_threshold - 0.60).abs() < 1e-6);
     }
 
     #[test]

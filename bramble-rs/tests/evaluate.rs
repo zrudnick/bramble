@@ -8,7 +8,10 @@ fn short_read_defaults_match_cpp() {
     assert_eq!(cfg.max_clip, 5,       "max_clip");
     assert_eq!(cfg.max_ins, 0,        "max_ins");
     assert_eq!(cfg.max_junc_gap, 0,   "max_junc_gap");
-    assert!((cfg.similarity_threshold - 0.90).abs() < 1e-6, "similarity_threshold");
+    // C++ short-read similarity_threshold is 1.0 (a sentinel that disables the
+    // similarity filter), NOT a sub-1.0 gate.
+    assert!((cfg.similarity_threshold - 1.0).abs() < 1e-6, "similarity_threshold");
+    assert!(!cfg.filter_by_similarity, "similarity filter disabled for short reads");
     assert!(!cfg.ignore_small_exons,  "ignore_small_exons");
     assert_eq!(cfg.small_exon_size, 0, "small_exon_size");
 }
@@ -22,6 +25,7 @@ fn long_read_defaults_match_cpp() {
     assert_eq!(cfg.max_ins, 40,        "max_ins");
     assert_eq!(cfg.max_junc_gap, 40,   "max_junc_gap");
     assert!((cfg.similarity_threshold - 0.60).abs() < 1e-6, "similarity_threshold");
+    assert!(cfg.filter_by_similarity,  "similarity filter enabled for long reads");
     assert!(cfg.ignore_small_exons,    "ignore_small_exons");
     assert_eq!(cfg.small_exon_size, 35, "small_exon_size");
 }
