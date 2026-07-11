@@ -37,24 +37,32 @@ using namespace bramble;
 
 #define USAGE                                                                  \
   "Bramble v" VERSION " usage:\n\n\
-bramble <in.bam ..> [-G <guide_gff>] [-o <out.bam>] [-p <cpus>] [-S <genome.fa>] \n\
- [--help] [--version] [--quiet] [--long] [--fr] [--rf] \n\
+bramble <in.bam ..> [-G <annotation.gtf>] [-o <out.bam>] [-p <cpus>] [-S <genome.fa>] \n\
+ [--help] [--version] [--quiet] [--fr] [--rf] [--lr] [-lr-hq] [--strict] \n\
+ [--max-soft-clip] [--max-junction-insertion] [--max-junction-deletion] \n\
+ [--max-error-exon] [--similarity-threshold]\n\
  \n\
 Project spliced genomic alignments into transcriptomic space.\n\
 Options:\n\
- --help       : print this usage message and exit\n\
- --version    : print just the version at stdout and exit\n\
- --quiet      : turn off verbose mode (log bundle processing details)\n\
- --lr         : alignments are from long reads\n\
- --lr-hq      : alignments are from high-quality long reads\n\
- --strict     : force strict boundary adherence\n\
- --fr         : assume stranded library (first-strand, read2 sense)\n\
- --rf         : assume stranded library (second-strand, read1 sense)\n\
- --paired-end : library is paired-end\n\
- -G <file>    : reference annotation to use for guiding the BAM conversion (GTF/GFF)\n\
- -o <file>    : output path/file name for the projected alignments (default: stdout)\n\
- -p <int>     : number of threads (CPUs) to use (default: 1)\n\
- -S <file>    : genome sequence file (FASTA format)\n\
+ --help                   : print this usage message and exit\n\
+ --version                : print just the version at stdout and exit\n\
+ --quiet                  : turn off verbose mode (log bundle processing details)\n\
+ --fr                     : assume stranded library (first-strand, read2 sense)\n\
+ --rf                     : assume stranded library (second-strand, read1 sense)\n\
+ --lr                     : preset: alignments are from long reads\n\
+ --lr-hq                  : preset: alignments are from high-quality long reads\n\
+ --strict                 : force strict boundary adherence\n\
+ --max-soft-clip          : maximum added soft clip (overrides preset)\n\
+ --max-junction-insertion : maximum allowed insertion at any splice junction (overrides preset)\n\
+ --max-junction-deletion  : maximum allowed deletion at any splice junction (overrides preset)\n\
+ --max-error-exon         : maximum allowed size of an insertion or deletion of an entire exon, \n\
+                            for sequencing technologies that produce long indels (overrides preset)\n\
+ --similarity-threshold   : candidate transcripts with similarity scores above this threshold \n\
+                            are kept (overrides preset)\n\
+ -G. --guide <file>       : reference annotation for guiding alignment projection (GTF/GFF)\n\
+ -S, --genome <file>      : genome sequence file for long-read clip rescue (FASTA format)\n\
+ -o, --out <file>         : output path/file name for the projected alignments (default: stdout)\n\
+ -p <int>                 : number of threads (CPUs) to use (default: 1)\n\
 "
 
 bool QUIET = false;     // Turn off verbose mode, --quiet
@@ -69,10 +77,10 @@ bool SOFT_CLIPS = true;   // Add soft clips
 bool STRICT = false;      // Use for strict boundary adherence
 
 std::optional<uint32_t> MAX_CLIP;
-std::optional<uint32_t> MAX_INS;
+std::optional<uint32_t> MAX_JUNC_INS;
 std::optional<uint32_t> MAX_JUNC_GAP;
 std::optional<float> SIM_THR;
-std::optional<uint32_t> SMALL_EXON_SIZE;
+std::optional<uint32_t> MAX_ERROR_EXON;
 
 FILE *f_out = NULL;       // Default: stdout
 uint8_t n_threads = 1;    // Threads, -p
@@ -448,26 +456,25 @@ int main(int argc, char *argv[]) {
   std::string in_fasta;
   app.add_option("in.bam", in_bam, "input bam file")->required();
   app.add_flag("--quiet", QUIET, "turn off verbose (log processing details)");
+  app.add_flag("--fr", FR_STRAND, "assume stranded library (first-strand, read2 sense)");
+  app.add_flag("--rf", RF_STRAND, "assume stranded library (second-strand, read1 sense)");
   app.add_flag("--lr", LR, "alignments are from long reads");
   app.add_flag("--lr-hq", LR_HQ, "alignments are from high-quality long reads");
   app.add_flag("--strict", STRICT, "force strict boundary adherence");
-  app.add_flag("--fr", FR_STRAND, "assume stranded library (first-strand, read2 sense)");
-  app.add_flag("--rf", RF_STRAND, "assume stranded library (second-strand, read1 sense)");
-  app.add_option("--max-clip", MAX_CLIP, "maximum soft clip (overrides preset)");
-  app.add_option("--max-ins", MAX_INS, "maximum insertion (overrides preset)");
-  app.add_option("--max-junc-gap", MAX_JUNC_GAP, "maximum junction gap (overrides preset)");
-  app.add_option("--similarity-threshold", SIM_THR, "similarity_threshold (overrides preset)");
-  app.add_option("--small_exon_size", SMALL_EXON_SIZE, "small exon size (overrides preset)");
-  app.add_option("-G", gff,
-                 "reference annotation to use for guiding the assembly process "
-                 "(GTF/GFF)")
+  app.add_option("--max-soft-clip", MAX_CLIP, "maximum added soft clip (overrides preset)");
+  app.add_option("--max-junction-insertion", MAX_JUNC_INS, 
+    "maximum allowed insertion at any splice junction (overrides preset)");
+  app.add_option("--max-junction-deletion", MAX_JUNC_GAP, 
+    "maximum allowed deletion at any splice junction (overrides preset)");
+  app.add_option("--max-error-exon", MAX_ERROR_EXON, 
+    "maximum allowed size of an insertion or deletion of an entire exon, for sequencing technologies that produce long indels (overrides preset)");
+  app.add_option("--similarity-threshold", SIM_THR, 
+    "candidate transcripts with similarity scores above this threshold are kept (overrides preset)");
+  app.add_option("-G,--guide", gff, "reference genome annotation" "(GTF/GFF)")
       ->check(CLI::ExistingFile);
-  app.add_option("-S", in_fasta,
-                 "genome sequence for improving alignments "
-                 "(FASTA)")
+  app.add_option("-S,--genome", in_fasta, "reference genome sequence" "(FASTA)")
       ->check(CLI::ExistingFile);
-  app.add_option("-o", out_bam,
-                 "output path/file name for the projected alignments")
+  app.add_option("-o,--out", out_bam, "output path/file name for the projected alignments")
       ->required();
   app.add_option("-p", n_threads, "number of threads (CPUs) to use")
       ->default_val(1);

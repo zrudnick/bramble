@@ -220,7 +220,7 @@ impl IntervalTree {
                     exon.pos = data.pos_start;
                     exon.left_ins = (s - qstart) as i32;
                     if matches!(status, ExonStatus::MiddleExon | ExonStatus::LastExon) {
-                        if (exon.left_ins as u32) > config.max_ins {
+                        if (exon.left_ins as u32) > config.max_junc_ins {
                             rejected = true;
                         }
                     } else if (exon.left_ins as u32) > config.max_clip {
@@ -232,7 +232,7 @@ impl IntervalTree {
                     if e_excl < qend {
                         exon.right_ins = (qend - e_excl) as i32;
                         if matches!(status, ExonStatus::FirstExon | ExonStatus::MiddleExon) {
-                            if (exon.right_ins as u32) > config.max_ins {
+                            if (exon.right_ins as u32) > config.max_junc_ins {
                                 rejected = true;
                             }
                         } else if (exon.right_ins as u32) > config.max_clip {
@@ -261,8 +261,8 @@ impl IntervalTree {
                     exon.right_ins = (qend - e_excl) as i32;
                     // NOTE: Match C++ behavior (g2t.cpp) which effectively
                     // treats this condition as always true due to `|| MIDDLE_EXON`.
-                    // That means `max_ins` is enforced for all statuses here.
-                    if (exon.right_ins as u32) > config.max_ins {
+                    // That means `max_junc_ins` is enforced for all statuses here.
+                    if (exon.right_ins as u32) > config.max_junc_ins {
                         rejected = true;
                     }
                 }
@@ -271,7 +271,7 @@ impl IntervalTree {
                     if qstart < s {
                         exon.left_ins = (s - qstart) as i32;
                         if matches!(status, ExonStatus::MiddleExon | ExonStatus::LastExon) {
-                            if (exon.left_ins as u32) > config.max_ins {
+                            if (exon.left_ins as u32) > config.max_junc_ins {
                                 rejected = true;
                             }
                         } else if (exon.left_ins as u32) > config.max_clip {

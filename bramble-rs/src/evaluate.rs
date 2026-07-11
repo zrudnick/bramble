@@ -23,11 +23,11 @@ pub enum ExonStatus {
 #[derive(Debug, Clone)]
 pub struct ReadEvaluationConfig {
     pub max_clip: u32,
-    pub max_ins: u32,
+    pub max_junc_ins: u32,
     pub max_junc_gap: u32,
     pub similarity_threshold: f32,
     pub ignore_small_exons: bool,
-    pub small_exon_size: u32,
+    pub max_error_exon: u32,
     #[allow(dead_code)]
     pub print: bool,
     #[allow(dead_code)]
@@ -55,7 +55,7 @@ impl ReadEvaluationConfig {
     pub fn short_read() -> Self {
         Self {
             max_clip: 5,
-            max_ins: 0,
+            max_junc_ins: 0,
             max_junc_gap: 0,
             // C++ short-read `similarity_threshold` = 1.0, which sets
             // `filter_by_similarity = (threshold < 1.0) = false`: the similarity
@@ -65,7 +65,7 @@ impl ReadEvaluationConfig {
             similarity_threshold: 1.0,
             filter_by_similarity: false,
             ignore_small_exons: false,
-            small_exon_size: 0,
+            max_error_exon: 0,
             print: false,
             name: Vec::new(),
             soft_clips: true,
@@ -80,12 +80,12 @@ impl ReadEvaluationConfig {
     pub fn long_read() -> Self {
         Self {
             max_clip: 40,
-            max_ins: 40,
+            max_junc_ins: 40,
             max_junc_gap: 40,
             similarity_threshold: 0.60,
             filter_by_similarity: true,
             ignore_small_exons: true,
-            small_exon_size: 35,
+            max_error_exon: 35,
             print: false,
             name: Vec::new(),
             soft_clips: true,
@@ -431,7 +431,7 @@ pub fn get_intervals(
     let _ = (start_ignore, end_ignore);
     let qexon = read.segs[j];
     let status = get_exon_status(exon_count, j);
-    let is_small_exon = (qexon.end - qexon.start) <= config.small_exon_size;
+    let is_small_exon = (qexon.end - qexon.start) <= config.max_error_exon;
     let data_empty = ctx.data.is_empty();
 
     g2t.get_guide_exons(refid, strand, qexon.start, qexon.end, config, status, &mut ctx.guide_exons);
@@ -691,7 +691,7 @@ pub fn left_clip_rescue(
                 gexon: Some(dummy_gexon),
                 qexon: alignment::Segment::default(), // not used
                 status: ExonStatus::LeftClipExon,
-                is_small_exon: remaining_qseq.len() as u32 <= config.small_exon_size,
+                is_small_exon: remaining_qseq.len() as u32 <= config.max_error_exon,
                 cigar,
                 score: result.score,
             };
@@ -884,7 +884,7 @@ pub fn right_clip_rescue(
                 gexon: Some(dummy_gexon),
                 qexon: alignment::Segment::default(),
                 status: ExonStatus::RightClipExon,
-                is_small_exon: remaining_qseq.len() as u32 <= config.small_exon_size,
+                is_small_exon: remaining_qseq.len() as u32 <= config.max_error_exon,
                 cigar,
                 score: result.score,
             };
@@ -945,7 +945,7 @@ pub fn correct_for_gaps(
             let gap = gexon.exon_id.saturating_sub(prev.exon_id);
 
             // here, to match C++, should only turn on for --lr (not --lr_hq)
-            // specifically, when small_exon_size > 0
+            // specifically, when max_error_exon > 0
             if !long_reads {
                 if gap != 1 {
                     tid_data.elim = true;
@@ -964,7 +964,7 @@ pub fn correct_for_gaps(
                     };
 
                     if (gap_start == 0 && gap_end == 0)
-                        || gap_end.saturating_sub(gap_start) > config.small_exon_size
+                        || gap_end.saturating_sub(gap_start) > config.max_error_exon
                     {
                         tid_data.elim = true;
                         return;
@@ -984,7 +984,7 @@ pub fn correct_for_gaps(
                         gexon: Some(prev_exon),
                         status: ExonStatus::GapExon,
                         is_small_exon: (gap_end.saturating_sub(gap_start)
-                            <= config.small_exon_size),
+                            <= config.max_error_exon),
                         ..Default::default()
                     };
 
@@ -1539,17 +1539,17 @@ pub struct ReadEvaluator {
     pub strict: bool,
     pub use_fasta: bool,
     pub max_clip: Option<u8>,
-    pub max_ins: Option<u8>,
+    pub max_junc_ins: Option<u8>,
     pub max_junc_gap: Option<u8>,
     pub similarity_threshold: Option<f32>,
-    pub small_exon_size: Option<u8>,
+    pub max_error_exon: Option<u8>,
     /// Per-junction-mismatch similarity discount in `(0, 1]`; `None` => 1.0 (off).
     pub junc_miss_discount: Option<f64>,
 }
 
 impl ReadEvaluator {
     fn build_config(&self) -> ReadEvaluationConfig {
-        let (default_max_clip, default_max_ins, default_max_junc_gap, default_similarity_threshold, default_small_exon_size) = 
+        let (default_max_clip, default_max_junc_ins, default_max_junc_gap, default_similarity_threshold, default_max_error_exon) = 
             match (self.lr, self.lr_hq, self.strict) {
                 (_, _, true) => (0,   0,  0, 0.99_f32,  0),
                 (_, true, _) => (5,  10, 10, 0.90_f32,  0),
@@ -1564,18 +1564,18 @@ impl ReadEvaluator {
                 _            => (5,   0,  0, 1.0_f32,  0),
             };
 
-        let small_exon_size = self.small_exon_size.unwrap_or(default_small_exon_size);
+        let max_error_exon = self.max_error_exon.unwrap_or(default_max_error_exon);
         let similarity_threshold = self.similarity_threshold.unwrap_or(default_similarity_threshold);
 
         ReadEvaluationConfig {
             max_clip:               self.max_clip.unwrap_or(default_max_clip) as u32,
-            max_ins:                self.max_ins.unwrap_or(default_max_ins) as u32,
+            max_junc_ins:           self.max_junc_ins.unwrap_or(default_max_junc_ins) as u32,
             max_junc_gap:           self.max_junc_gap.unwrap_or(default_max_junc_gap) as u32,
             similarity_threshold,
             // C++: filter_by_similarity = (similarity_threshold < 1.0).
             filter_by_similarity:   similarity_threshold < 1.0,
-            ignore_small_exons:     small_exon_size > 0,
-            small_exon_size:        small_exon_size as u32,
+            ignore_small_exons:     max_error_exon > 0,
+            max_error_exon:         max_error_exon as u32,
             print:                  false,
             name:                   Vec::new(),
             soft_clips:             true,

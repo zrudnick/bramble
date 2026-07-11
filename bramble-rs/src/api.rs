@@ -287,10 +287,10 @@ pub fn project_group_with(
         strict: false,
         use_fasta: config.use_fasta,
         max_clip: None,
-        max_ins: None,
+        max_junc_ins: None,
         max_junc_gap: None,
         similarity_threshold: None,
-        small_exon_size: None,
+        max_error_exon: None,
         junc_miss_discount: Some(config.junc_miss_discount),
     };
     let ctx = &mut pctx.ctx;

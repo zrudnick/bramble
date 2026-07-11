@@ -90,10 +90,10 @@ pub fn run(
         strict:               args.strict,
         use_fasta:            fasta.is_some(),
         max_clip:             args.max_clip,
-        max_ins:              args.max_ins,
+        max_junc_ins:         args.max_junc_ins,
         max_junc_gap:         args.max_junc_gap,
         similarity_threshold: args.similarity_threshold,
-        small_exon_size:      args.small_exon_size,
+        max_error_exon:       args.max_error_exon,
         junc_miss_discount:   None,
     };
     

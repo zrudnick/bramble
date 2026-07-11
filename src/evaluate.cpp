@@ -24,10 +24,10 @@ extern bool SOFT_CLIPS;
 extern bool STRICT;
 
 extern std::optional<uint32_t> MAX_CLIP;
-extern std::optional<uint32_t> MAX_INS;
+extern std::optional<uint32_t> MAX_JUNC_INS;
 extern std::optional<uint32_t> MAX_JUNC_GAP;
 extern std::optional<float> SIM_THR;
-extern std::optional<uint32_t> SMALL_EXON_SIZE;
+extern std::optional<uint32_t> MAX_ERROR_EXON;
 
 namespace bramble {
 
@@ -155,7 +155,7 @@ namespace bramble {
           seg2.gexon.prev_end : seg2.gexon.next_end;
 
         if ((gap_start == 0 && gap_end == 0) || 
-          (gap_end - gap_start > config.small_exon_size)) {
+          (gap_end - gap_start > config.max_error_exon)) {
           td.elim = true;
           return false;
         }
@@ -172,7 +172,7 @@ namespace bramble {
         gap_seg.has_gexon = true;
         gap_seg.status = GAP_EXON;
         gap_seg.is_small_exon = (gap_exon.end - gap_exon.start 
-          <= config.small_exon_size);
+          <= config.max_error_exon);
         
         td.segments.emplace_back(gap_seg);
       }
@@ -190,7 +190,7 @@ namespace bramble {
 
     auto status = get_exon_status(exon_count, j);
 
-    bool is_small_exon = (qexon.end - qexon.start <= config.small_exon_size);
+    bool is_small_exon = (qexon.end - qexon.start <= config.max_error_exon);
     bool data_empty = data.empty();
 
     thread_local std::vector<GuideExon> guide_exons;
@@ -490,7 +490,7 @@ namespace bramble {
       gexon.left_ins = 0;
 
     Segment left_clip = build_left_clip_segment(result, qseq.length(), 
-      config.small_exon_size, gexon);
+      config.max_error_exon, gexon);
     free(result.cigar_array);
 
     td.segments.emplace(td.segments.begin(), left_clip);
@@ -648,7 +648,7 @@ namespace bramble {
     if (gexon.right_ins > 0) gexon.right_ins = 0;
 
     Segment right_clip = build_right_clip_segment(result, qseq.length(), 
-      config.small_exon_size, gexon);
+      config.max_error_exon, gexon);
     free(result.cigar_array);
 
     td.segments.emplace_back(right_clip);
@@ -1147,31 +1147,31 @@ namespace bramble {
                               uint8_t *seq,
                               int seq_len) {
 
-    uint32_t max_clip, max_ins, max_junc_gap, small_exon_size;
+    uint32_t max_clip, max_junc_ins, max_junc_gap, max_error_exon;
     float similarity_threshold;
     if (!STRICT) {
       max_clip = MAX_CLIP.value_or(5);
-      max_ins = MAX_INS.value_or(0);
+      max_junc_ins = MAX_JUNC_INS.value_or(0);
       max_junc_gap = MAX_JUNC_GAP.value_or(0);
       similarity_threshold = SIM_THR.value_or(1.0);
-      small_exon_size = SMALL_EXON_SIZE.value_or(0);
+      max_error_exon = MAX_ERROR_EXON.value_or(0);
     } else {
       max_clip = MAX_CLIP.value_or(0);
-      max_ins = MAX_INS.value_or(0);
+      max_junc_ins = MAX_JUNC_INS.value_or(0);
       max_junc_gap = MAX_JUNC_GAP.value_or(0);
       similarity_threshold = SIM_THR.value_or(1.0);
-      small_exon_size = SMALL_EXON_SIZE.value_or(0);
+      max_error_exon = MAX_ERROR_EXON.value_or(0);
     }
 
-    bool ignore_small_exons = (small_exon_size > 0);
+    bool ignore_small_exons = (max_error_exon > 0);
     bool filter_by_similarity = (similarity_threshold < 1.0);
 
     ReadEvaluationConfig config = {
       max_clip,                       // max clip size
-      max_ins,                        // max insertion to intervals
+      max_junc_ins,                        // max insertion to intervals
       max_junc_gap,                   // max junction gap
       ignore_small_exons,            
-      small_exon_size,                
+      max_error_exon,                
       similarity_threshold,                         
       filter_by_similarity,          
       false,                          // print debug statements?
@@ -1187,37 +1187,37 @@ namespace bramble {
                               std::shared_ptr<g2tTree> g2t,
                               uint8_t *seq,
                               int seq_len) {
-    uint32_t max_clip, max_ins, max_junc_gap, small_exon_size;
+    uint32_t max_clip, max_junc_ins, max_junc_gap, max_error_exon;
     float similarity_threshold;                          
     if (LR) {
       max_clip = MAX_CLIP.value_or(40);
-      max_ins = MAX_INS.value_or(40);
+      max_junc_ins = MAX_JUNC_INS.value_or(40);
       max_junc_gap = MAX_JUNC_GAP.value_or(40);
       similarity_threshold = SIM_THR.value_or(0.60);
-      small_exon_size = SMALL_EXON_SIZE.value_or(35);
+      max_error_exon = MAX_ERROR_EXON.value_or(35);
     } else if (LR_HQ) {
       max_clip = MAX_CLIP.value_or(5);
-      max_ins = MAX_INS.value_or(10);
+      max_junc_ins = MAX_JUNC_INS.value_or(10);
       max_junc_gap = MAX_JUNC_GAP.value_or(10);
       similarity_threshold = SIM_THR.value_or(0.90);
-      small_exon_size = SMALL_EXON_SIZE.value_or(35);
+      max_error_exon = MAX_ERROR_EXON.value_or(35);
     } else if (STRICT) {
       max_clip = MAX_CLIP.value_or(0);
-      max_ins = MAX_INS.value_or(0);
+      max_junc_ins = MAX_JUNC_INS.value_or(0);
       max_junc_gap = MAX_JUNC_GAP.value_or(0);
       similarity_threshold = SIM_THR.value_or(1.0);
-      small_exon_size = SMALL_EXON_SIZE.value_or(35);
+      max_error_exon = MAX_ERROR_EXON.value_or(35);
     }                         
 
-    bool ignore_small_exons = (small_exon_size > 0);
+    bool ignore_small_exons = (max_error_exon > 0);
     bool filter_by_similarity = (similarity_threshold < 1.0);
     
     ReadEvaluationConfig config = {
       max_clip,                       // max clip size
-      max_ins,                        // max insertion to intervals
+      max_junc_ins,                        // max insertion to intervals
       max_junc_gap,                   // max junction gap
       ignore_small_exons,             
-      small_exon_size,             
+      max_error_exon,             
       similarity_threshold,
       filter_by_similarity,         
       false,                          // print debug statements

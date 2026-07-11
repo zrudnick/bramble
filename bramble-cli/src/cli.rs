@@ -37,15 +37,15 @@ pub struct Args {
     pub strict: bool,
 
     /// Maximum soft clipping allowed (overrides preset)
-    #[arg(long, value_name = "INT")]
+    #[arg(long = "max-soft-clip", value_name = "INT")]
     pub max_clip: Option<u8>,
 
     /// Maximum insertion allowed (overrides preset)
-    #[arg(long, value_name = "INT")]
-    pub max_ins: Option<u8>,
+    #[arg(long = "max-junction-insertion", value_name = "INT")]
+    pub max_junc_ins: Option<u8>,
 
     /// Maximum junction gap allowed (overrides preset)
-    #[arg(long, value_name = "INT")]
+    #[arg(long = "max-junction-deletion", value_name = "INT")]
     pub max_junc_gap: Option<u8>,
 
     /// Similarity threshold (overrides preset)
@@ -54,7 +54,7 @@ pub struct Args {
 
     /// Small exon size (overrides preset)
     #[arg(long, value_name = "INT")]
-    pub small_exon_size: Option<u8>,
+    pub max_error_exon: Option<u8>,
 
     /// Suppress progress bar and set logging level to WARN
     #[arg(short = 'q', long)]
