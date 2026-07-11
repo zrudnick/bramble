@@ -274,10 +274,10 @@ namespace bramble {
 
   struct ReadEvaluationConfig {
     uint32_t max_clip;              // max soft clip size
-    uint32_t max_ins;               // max insertion to intervals
+    uint32_t max_junc_ins;               // max insertion to intervals
     uint32_t max_junc_gap;          // max junc mismatch
     bool ignore_small_exons;        // should we ignore small exons?
-    uint32_t small_exon_size;       // size of small exon
+    uint32_t max_error_exon;       // size of small exon
     float similarity_threshold;     // min similarity score
     bool filter_by_similarity;      // should we filter by similarity? (yes for messy reads)
     bool print;

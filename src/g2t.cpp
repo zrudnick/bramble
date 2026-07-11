@@ -166,7 +166,7 @@ namespace bramble {
           // Left clip: query extends before interval
           left_ins = s - qstart;
           if (status == MIDDLE_EXON || status == LAST_EXON) {
-            if (left_ins > config.max_ins) continue;
+            if (left_ins > config.max_junc_ins) continue;
           } else {
             if (left_ins > config.max_clip) continue;
           }
@@ -177,7 +177,7 @@ namespace bramble {
           // Right clip: query extends past interval
           right_ins = qend - e;
           if (status == FIRST_EXON || status == MIDDLE_EXON) {
-            if (right_ins > config.max_ins) continue;
+            if (right_ins > config.max_junc_ins) continue;
           } else {
             if (right_ins > config.max_clip) continue;
           }
@@ -202,7 +202,7 @@ namespace bramble {
           // Right clip: query extends past interval
           right_ins = qend - e;
           if (status == FIRST_EXON || MIDDLE_EXON) {
-            if (right_ins > config.max_ins) continue;
+            if (right_ins > config.max_junc_ins) continue;
           } else {
             if (right_ins > config.max_clip) continue;
           }
@@ -213,7 +213,7 @@ namespace bramble {
           // Left clip: query extends before interval
           left_ins = s - qstart;
           if (status == MIDDLE_EXON || status == LAST_EXON) {
-            if (left_ins > config.max_ins) continue;
+            if (left_ins > config.max_junc_ins) continue;
           } else {
             if (left_ins > config.max_clip) continue;
           }

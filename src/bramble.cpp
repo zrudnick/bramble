@@ -33,7 +33,7 @@
 
 using namespace bramble;
 
-#define VERSION "1.0.0"
+#define VERSION "0.1.6"
 
 #define USAGE                                                                  \
   "Bramble v" VERSION " usage:\n\n\
@@ -447,8 +447,8 @@ int main(int argc, char *argv[]) {
   // console_sink->set_log_level_colour(quill::LogLevel::TraceL3, "\033[32m");
 
   CLI::App app{
-    "Project spliced genomic alignments into transcriptomic space",
-    "Bramble"};
+    "bramble: project spliced genomic alignments into transcriptomic space",
+    "bramble"};
 
   std::string gff;
   std::string out_bam;
