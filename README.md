@@ -38,11 +38,11 @@ This builds against the system htslib prerequisites (zlib, bzip2); a C compiler 
 ```
 # Genome-aligned, name-collated BAM + annotation -> transcriptome-coordinate BAM.
 # The input BAM is positional; -G/--guide is the annotation, -o/--out the output.
-bramble alignments.bam -G annotation.gtf -o output.bam
+bramble alignments.bam -G annotation.gtf -o transcriptome.bam
 
 # Long reads: enable long-read evaluation (--lr), and pass the genome FASTA
 # (-S/--genome) to recover soft-clipped ends.
-bramble alignments.bam -G annotation.gtf -o output.bam \
+bramble genome.bam -G annotation.gtf -o transcriptome.bam \
    --lr -S genome.fa -p 16
 ```
 
@@ -54,7 +54,7 @@ bramble-rs genome.bam -G annotation.gtf -o transcriptome.bam
 
 # Long reads: enable long-read evaluation (--lr), and pass the genome FASTA
 # (-S/--genome) to recover soft-clipped ends.
-bramble-rs alignments.bam -G annotation.gtf -o transcriptome.bam \
+bramble-rs genome.bam -G annotation.gtf -o transcriptome.bam \
     --lr -S genome.fa -p 16
 ```
 
@@ -85,8 +85,6 @@ Options:
  -o, --out <file>         : output path/file name for the projected alignments (default: stdout)
  -p <int>                 : number of threads (CPUs) to use (default: 1)
 ```
-
-## Usage examples
 
 ## Rust library
 
