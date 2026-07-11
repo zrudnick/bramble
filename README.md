@@ -32,6 +32,10 @@ This has been tested with meson 1.7 and 1.8, but likely also works with older ve
 
 This builds against the system htslib prerequisites (zlib, bzip2); a C compiler and libclang (for bindgen) are required at build time.
 
+bramble-cli is the command-line front-end for bramble's Rust implementation. The projection logic lives in the I/O-free bramble-rs library; this crate adds the htslib-backed BAM reader/writer, threading, and CLI.
+
+Note: the installed executable is named bramble-rs (the crate is bramble-cli only to disambiguate it from the library on crates.io).
+
 ## Quick start
 
 ### C++
