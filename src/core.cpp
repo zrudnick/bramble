@@ -211,10 +211,9 @@ namespace bramble {
 #endif
   }
 
-  int32_t get_rand(uint32_t x) {
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(0, x - 1);
+  int32_t get_rand(uint32_t x, uint64_t seed_key) {
+    std::mt19937_64 gen(seed_key);
+    std::uniform_int_distribution<uint32_t> dis(0, x - 1);
     return dis(gen);
   }
 
@@ -274,18 +273,32 @@ namespace bramble {
         }
 
         if (best_it != pairs.end()) {
-          auto &best_info = (*best_it);
           if (count_at_best == 1) {
+            auto &best_info = (*best_it);
             best_info->r_align.primary_alignment = true;
             if (best_info->is_paired) {
               best_info->m_align.primary_alignment = true;
             }
           } else {
-            // Tie: pick randomly
-            int32_t rand_idx = get_rand(pairs.size());
-            auto it = pairs.begin();
-            std::advance(it, rand_idx);
-            auto &secondary = (*it);
+            // Tie: pick deterministically among the tied candidates,
+            // seeded from the read name so the choice is stable
+            // regardless of thread scheduling / processing order.
+            std::vector<decltype(pairs.begin())> tied_its;
+            for (auto it = pairs.begin(); it != pairs.end(); ++it) {
+              auto &info = (*it);
+              double pair_score = info->r_align.similarity_score;
+              if (info->is_paired) {
+                pair_score = std::max(pair_score, info->m_align.similarity_score);
+              }
+              if (pair_score == best_score) {
+                tied_its.push_back(it);
+              }
+            }
+
+            uint64_t seed_key = std::hash<std::string>{}(read_name);
+            int32_t rand_idx = get_rand(static_cast<uint32_t>(tied_its.size()), seed_key);
+            auto &secondary = *(tied_its[rand_idx]);
+
             secondary->r_align.primary_alignment = true;
             if (secondary->is_paired) {
               secondary->m_align.primary_alignment = true;

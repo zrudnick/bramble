@@ -854,15 +854,7 @@ namespace bramble {
         if (similarity > config.similarity_threshold) {
           double x = ((similarity - config.similarity_threshold)
             / (1.0 - config.similarity_threshold));
-          match.align.similarity_score = (x * x * static_cast<double>(match.junc_hits + 1)); // static_cast<double>(match.junc_hits + 1)
-
-          if (config.print) {
-            std::string tid_string = g2t->getTidName(match.tid);
-            printf("x**3 = %f\n", x * x * x);
-            printf("match.align.junc_hits + 1 = %f\n", static_cast<double>(match.junc_hits + 1));
-            printf("tid = %s, similarity_score = %f\n", tid_string.c_str(), match.align.similarity_score);
-          }
-
+          match.align.similarity_score = (x * x * static_cast<double>(match.junc_hits + 1)); 
           ++it;
         } else {
           it = matches.erase(it);
