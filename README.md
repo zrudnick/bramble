@@ -38,6 +38,8 @@ Note: the installed executable is named bramble-rs (the crate is bramble-cli onl
 
 ## Quick start
 
+Input BAMs should be collated by read name (e.g. ```samtools collate```) so that all alignments of a read are processed together. 
+
 ### C++
 ```
 # Genome-aligned, name-collated BAM + annotation -> transcriptome-coordinate BAM.
