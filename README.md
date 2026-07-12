@@ -44,7 +44,7 @@ Input BAMs should be collated by read name (e.g. ```samtools collate```) so that
 ```
 # Genome-aligned, name-collated BAM + annotation -> transcriptome-coordinate BAM.
 # The input BAM is positional; -G/--guide is the annotation, -o/--out the output.
-bramble alignments.bam -G annotation.gtf -o transcriptome.bam
+bramble genome.bam -G annotation.gtf -o transcriptome.bam
 
 # Long reads: enable long-read evaluation (--lr), and pass the genome FASTA
 # (-S/--genome) to recover soft-clipped ends.
