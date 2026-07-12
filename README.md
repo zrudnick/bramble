@@ -105,4 +105,4 @@ For issues or questions, please open an issue!
 You may also contact us for questions or suggestions at zrudnic1@jh.edu.
 
 ## License
-Bramble is free, open source software released under an [MIT License](https://opensource.org/license/MIT).
+bramble is free, open source software released under an [MIT License](https://opensource.org/license/MIT).
