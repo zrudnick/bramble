@@ -31,10 +31,13 @@ pub struct AlignmentResult {
     /// Matches C++ `result.score == KSW_NEG_INF` check.
     pub zdropped: bool,
     pub cigar: Cigar,
+    #[allow(dead_code)]
     pub start_j: i32,
+    #[allow(dead_code)]
     pub end_j: i32,
     pub start_i: i32,
     pub end_i: i32,
+    #[allow(dead_code)]
     pub pos: i32,
     #[allow(dead_code)]
     pub matches: i32,
