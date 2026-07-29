@@ -8,12 +8,30 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Deliberately not setting `RUSTFLAGS: -D warnings` here: cargo applies
-  # RUSTFLAGS to dependency crates too, so a warning in any upstream crate
-  # would fail the build for reasons nobody here can fix. The clippy job denies
-  # warnings instead -- `cargo clippy -- -D warnings` applies only to the local
-  # crates, and clippy runs rustc's own lints (dead_code and friends) as well
-  # as clippy's, so that covers the same ground without the collateral damage.
+
+  # `bramble-rs/.cargo/config.toml` sets `-C target-cpu=native`, which is unsound
+  # in CI: the runner that populates the build cache is not necessarily the one
+  # that restores it, so binaries built for a newer CPU get executed on an older
+  # one and die with SIGILL. That is not hypothetical -- it is exactly how the
+  # bramble-rs test job failed once caching kicked in, while bramble-cli (which
+  # has no such config) was unaffected.
+  #
+  # An env RUSTFLAGS overrides `build.rustflags` from config.toml entirely, so
+  # this pins CI to a portable baseline. x86-64-v2 (SSE4.2/popcnt) is supported
+  # by every GitHub-hosted runner. `target-cpu=native` remains in effect for
+  # local development, where it is the right default.
+  #
+  # Note this means CI exercises a portable build rather than a native one. It
+  # is also worth asking separately whether `target-cpu=native` belongs in a
+  # committed config at all, since it makes any build machine-specific.
+  RUSTFLAGS: -C target-cpu=x86-64-v2
+
+  # Deliberately not adding `-D warnings` above: cargo applies RUSTFLAGS to
+  # dependency crates too, so a warning in any upstream crate would fail the
+  # build for reasons nobody here can fix. The clippy job denies warnings
+  # instead -- `cargo clippy -- -D warnings` applies only to the local crates,
+  # and clippy runs rustc's own lints (dead_code and friends) as well as
+  # clippy's, so that covers the same ground without the collateral damage.
 
 # A push that supersedes an in-flight run for the same ref cancels it; the
 # htslib build makes these runs expensive enough to be worth not duplicating.
