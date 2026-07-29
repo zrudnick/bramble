@@ -25,7 +25,10 @@ pub fn extract_exons(record: &Record) -> Result<Vec<Segment>> {
             }
             Cigar::RefSkip(n) => {
                 if ref_pos > exon_start {
-                    exons.push(Segment { start: exon_start, end: ref_pos });
+                    exons.push(Segment {
+                        start: exon_start,
+                        end: ref_pos,
+                    });
                 }
                 ref_pos = ref_pos.saturating_add(*n);
                 exon_start = ref_pos;
@@ -36,7 +39,10 @@ pub fn extract_exons(record: &Record) -> Result<Vec<Segment>> {
     }
 
     if ref_pos > exon_start {
-        exons.push(Segment { start: exon_start, end: ref_pos });
+        exons.push(Segment {
+            start: exon_start,
+            end: ref_pos,
+        });
     }
 
     Ok(exons)

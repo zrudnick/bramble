@@ -110,13 +110,10 @@ jobs:
         with:
           workspaces: ${{ matrix.crate }}
 
-      # Advisory only: both crates predate rustfmt being run over them and
-      # currently show ~140 diff hunks between them. Reformatting is a large,
-      # purely cosmetic change that would bury real diffs, so this reports
-      # rather than gates. Drop `continue-on-error` once a tree is formatted.
+      # Both crates were formatted in the same commit that made this gating, so
+      # keep them that way rather than letting drift accumulate again.
       - name: rustfmt
         working-directory: ${{ matrix.crate }}
-        continue-on-error: true
         run: cargo fmt --check
 
       # Gating: both crates are clippy-clean as of this commit, so keep them

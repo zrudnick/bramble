@@ -10,10 +10,10 @@ use bramble_rs::fasta;
 use bramble_rs::g2t;
 use clap::Parser;
 use mimalloc::MiMalloc;
-use std::mem::ManuallyDrop;
-use tracing_subscriber::EnvFilter;
 use rust_htslib::bam::Header;
 use rust_htslib::bam::Read;
+use std::mem::ManuallyDrop;
+use tracing_subscriber::EnvFilter;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -23,17 +23,14 @@ fn main() -> Result<()> {
     let args = cli::Args::parse();
 
     // Initialize tracing subscriber
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| {
-            if args.quiet {
-                EnvFilter::new("warn")
-            } else {
-                EnvFilter::new("info")
-            }
-        });
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .init();
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        if args.quiet {
+            EnvFilter::new("warn")
+        } else {
+            EnvFilter::new("info")
+        }
+    });
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     // Load annotation and FASTA in parallel — they are independent I/O-bound
     // tasks (~2.9s and ~3.4s respectively) so overlapping them saves ~2.9s.

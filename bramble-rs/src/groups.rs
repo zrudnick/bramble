@@ -25,23 +25,23 @@ pub struct ReadEval {
 
 // BAM flag constants
 #[doc(hidden)]
-pub const FLAG_PAIRED: u16       = 0x1;
+pub const FLAG_PAIRED: u16 = 0x1;
 #[doc(hidden)]
-pub const FLAG_PROPER_PAIR: u16  = 0x2;
+pub const FLAG_PROPER_PAIR: u16 = 0x2;
 #[doc(hidden)]
-pub const FLAG_UNMAPPED: u16     = 0x4;
+pub const FLAG_UNMAPPED: u16 = 0x4;
 #[doc(hidden)]
 pub const FLAG_MATE_UNMAPPED: u16 = 0x8;
 #[doc(hidden)]
-pub const FLAG_REVERSE: u16      = 0x10;
+pub const FLAG_REVERSE: u16 = 0x10;
 #[doc(hidden)]
 pub const FLAG_MATE_REVERSE: u16 = 0x20;
 #[doc(hidden)]
-pub const FLAG_READ1: u16        = 0x40;
+pub const FLAG_READ1: u16 = 0x40;
 #[doc(hidden)]
-pub const FLAG_READ2: u16        = 0x80;
+pub const FLAG_READ2: u16 = 0x80;
 #[doc(hidden)]
-pub const FLAG_SECONDARY: u16    = 0x100;
+pub const FLAG_SECONDARY: u16 = 0x100;
 
 #[derive(Debug, Clone)]
 #[doc(hidden)]
@@ -121,7 +121,6 @@ pub fn assign_hit_indices(entries: &mut [OutputEntry]) {
         }
     }
 }
-
 
 #[doc(hidden)]
 pub fn find_mate_pairs(reads: &[ReadEval]) -> Vec<(usize, usize)> {
@@ -216,11 +215,7 @@ pub fn assign_pair_order(i: usize, j: usize, reads: &[ReadEval]) -> (usize, usiz
         return (j, i);
     }
 
-    if i <= j {
-        (i, j)
-    } else {
-        (j, i)
-    }
+    if i <= j { (i, j) } else { (j, i) }
 }
 
 #[doc(hidden)]
@@ -243,8 +238,12 @@ pub fn build_paired_groups(read: &ReadEval, mate: &ReadEval) -> Vec<Vec<OutputEn
 
     if !common.is_empty() {
         for tid in common {
-            let Some(read_match) = read.matches.get(&tid) else { continue; };
-            let Some(mate_match) = mate.matches.get(&tid) else { continue; };
+            let Some(read_match) = read.matches.get(&tid) else {
+                continue;
+            };
+            let Some(mate_match) = mate.matches.get(&tid) else {
+                continue;
+            };
 
             let mate_info_for_read = MateInfo {
                 tid,
@@ -290,8 +289,12 @@ pub fn build_paired_groups(read: &ReadEval, mate: &ReadEval) -> Vec<Vec<OutputEn
         let r_tid = *read_transcripts.iter().next().unwrap();
         let m_tid = *mate_transcripts.iter().next().unwrap();
 
-        let Some(read_match) = read.matches.get(&r_tid) else { return groups; };
-        let Some(mate_match) = mate.matches.get(&m_tid) else { return groups; };
+        let Some(read_match) = read.matches.get(&r_tid) else {
+            return groups;
+        };
+        let Some(mate_match) = mate.matches.get(&m_tid) else {
+            return groups;
+        };
 
         let mate_info_for_read = MateInfo {
             tid: m_tid,
@@ -387,7 +390,6 @@ pub fn compute_template_length(
     }
 }
 
-
 #[doc(hidden)]
 pub fn sam_op_to_kind(op: u8) -> Option<CigarKind> {
     match op {
@@ -420,7 +422,10 @@ pub fn segs_from_ops(ref_start: i64, ops: &[(u32, CigarKind)]) -> Vec<alignment:
             }
             CigarKind::Skip => {
                 if ref_pos > exon_start {
-                    segs.push(alignment::Segment { start: exon_start, end: ref_pos });
+                    segs.push(alignment::Segment {
+                        start: exon_start,
+                        end: ref_pos,
+                    });
                 }
                 ref_pos = ref_pos.saturating_add(len);
                 exon_start = ref_pos;
@@ -429,9 +434,10 @@ pub fn segs_from_ops(ref_start: i64, ops: &[(u32, CigarKind)]) -> Vec<alignment:
         }
     }
     if ref_pos > exon_start {
-        segs.push(alignment::Segment { start: exon_start, end: ref_pos });
+        segs.push(alignment::Segment {
+            start: exon_start,
+            end: ref_pos,
+        });
     }
     segs
 }
-
-

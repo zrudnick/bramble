@@ -1,5 +1,5 @@
 use crate::evaluate::{Cigar, CigarOp};
-use ksw2rs::{Aligner, Extz2Input, KSW_EZ_EXTZ_ONLY, KSW_EZ_APPROX_MAX, KSW_EZ_APPROX_DROP};
+use ksw2rs::{Aligner, Extz2Input, KSW_EZ_APPROX_DROP, KSW_EZ_APPROX_MAX, KSW_EZ_EXTZ_ONLY};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Anchor {
@@ -56,11 +56,11 @@ pub struct AlignmentResult {
 /// DNA5 scoring matrix (match=1, mismatch=-4) — matches C++ bramble ksw2 parameters.
 /// Row-major 5x5 for alphabet {A=0, C=1, G=2, T=3, N=4}.
 static DNA5_MAT: [i8; 25] = [
-     1, -4, -4, -4, 0,  // A
-    -4,  1, -4, -4, 0,  // C
-    -4, -4,  1, -4, 0,  // G
-    -4, -4, -4,  1, 0,  // T
-     0,  0,  0,  0, 0,  // N
+    1, -4, -4, -4, 0, // A
+    -4, 1, -4, -4, 0, // C
+    -4, -4, 1, -4, 0, // G
+    -4, -4, -4, 1, 0, // T
+    0, 0, 0, 0, 0, // N
 ];
 
 /// Convert ASCII base to 0-4 encoding for ksw2.
@@ -84,7 +84,13 @@ fn encode_seq(ascii: &[u8], buf: &mut Vec<u8>) {
     }
 }
 
-pub fn smith_waterman(aligner: &mut Aligner, bufs: &mut SwBufs, seq1: &[u8], seq2: &[u8], anchor: Anchor) -> AlignmentResult {
+pub fn smith_waterman(
+    aligner: &mut Aligner,
+    bufs: &mut SwBufs,
+    seq1: &[u8],
+    seq2: &[u8],
+    anchor: Anchor,
+) -> AlignmentResult {
     let m = seq1.len();
     let n = seq2.len();
 
@@ -93,11 +99,17 @@ pub fn smith_waterman(aligner: &mut Aligner, bufs: &mut SwBufs, seq1: &[u8], seq
             score: -1,
             zdropped: false,
             cigar: Cigar::default(),
-            start_j: 0, end_j: 0,
-            start_i: 0, end_i: 0,
+            start_j: 0,
+            end_j: 0,
+            start_i: 0,
+            end_i: 0,
             pos: 0,
-            matches: 0, mismatches: 0, insertions: 0, deletions: 0,
-            error_rate: 0.0, accuracy: 0.0,
+            matches: 0,
+            mismatches: 0,
+            insertions: 0,
+            deletions: 0,
+            error_rate: 0.0,
+            accuracy: 0.0,
         };
     }
 
@@ -241,8 +253,16 @@ pub fn smith_waterman(aligner: &mut Aligner, bufs: &mut SwBufs, seq1: &[u8], seq
 
     let score = ez.max as i32;
     let total_errors = mismatches + insertions + deletions;
-    let error_rate = if m == 0 { 0.0 } else { total_errors as f64 / m as f64 };
-    let accuracy = if m == 0 { 0.0 } else { matches as f64 / m as f64 };
+    let error_rate = if m == 0 {
+        0.0
+    } else {
+        total_errors as f64 / m as f64
+    };
+    let accuracy = if m == 0 {
+        0.0
+    } else {
+        matches as f64 / m as f64
+    };
 
     AlignmentResult {
         score,
