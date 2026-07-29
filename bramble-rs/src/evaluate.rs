@@ -1,10 +1,10 @@
 use crate::alignment;
 use crate::g2t::{G2TTree, GuideExon};
 use crate::sw::{self, Anchor};
-use crate::types::{ReadId, RefId, Tid};
-use anyhow::Result;
-use ahash::RandomState;
 use crate::types::{HashMap, HashMapExt, HashSet, HashSetExt};
+use crate::types::{ReadId, RefId, Tid};
+use ahash::RandomState;
+use anyhow::Result;
 use noodles::sam::alignment::record::cigar::op::Kind as CigarKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -367,10 +367,7 @@ pub fn get_strands_to_check(read: &ReadAln, long_reads: bool) -> Vec<char> {
     vec!['+', '-']
 }
 
-pub fn get_clips(
-    read: &ReadAln,
-    config: &ReadEvaluationConfig,
-) -> Result<(bool, bool, u32, u32)> {
+pub fn get_clips(read: &ReadAln, config: &ReadEvaluationConfig) -> Result<(bool, bool, u32, u32)> {
     let mut has_left_clip = false;
     let mut has_right_clip = false;
     let mut n_left_clip = 0;
@@ -401,7 +398,11 @@ pub fn get_clips(
     }
 
     let (right0_len, right0_kind) = ops.last().unwrap();
-    let right1 = if ops.len() >= 2 { ops.get(ops.len() - 2) } else { None };
+    let right1 = if ops.len() >= 2 {
+        ops.get(ops.len() - 2)
+    } else {
+        None
+    };
     if *right0_kind == CigarKind::HardClip {
         if let Some((op_len, op_kind)) = right1
             && *op_kind == CigarKind::SoftClip
@@ -440,7 +441,15 @@ pub fn get_intervals(
     let is_small_exon = (qexon.end - qexon.start) <= config.max_error_exon;
     let data_empty = ctx.data.is_empty();
 
-    g2t.get_guide_exons(refid, strand, qexon.start, qexon.end, config, status, &mut ctx.guide_exons);
+    g2t.get_guide_exons(
+        refid,
+        strand,
+        qexon.start,
+        qexon.end,
+        config,
+        status,
+        &mut ctx.guide_exons,
+    );
     if !ctx.guide_exons.is_empty() {
         ctx.candidate_tids.clear();
 
@@ -457,12 +466,13 @@ pub fn get_intervals(
                     *has_gap = true;
                 }
                 ctx.data.insert(tid, tid_data);
-            } else if !ctx.data.contains_key(&tid) || ctx.data.get(&tid).map(|d| d.elim).unwrap_or(true) {
+            } else if !ctx.data.contains_key(&tid)
+                || ctx.data.get(&tid).map(|d| d.elim).unwrap_or(true)
+            {
                 continue;
             }
 
-            if matches!(status, ExonStatus::LastExon | ExonStatus::OnlyExon)
-                && gexon.right_gap > 0
+            if matches!(status, ExonStatus::LastExon | ExonStatus::OnlyExon) && gexon.right_gap > 0
             {
                 *has_gap = true;
             }
@@ -520,7 +530,12 @@ pub fn get_intervals(
     *failure = true;
 }
 
-fn seq_slice_from_shared(shared: Option<&[u8]>, read: &ReadAln, start: usize, len: usize) -> Vec<u8> {
+fn seq_slice_from_shared(
+    shared: Option<&[u8]>,
+    read: &ReadAln,
+    start: usize,
+    len: usize,
+) -> Vec<u8> {
     if let Some(seq) = shared
         && !seq.is_empty()
     {
@@ -590,9 +605,16 @@ pub fn left_clip_rescue(
             let mut n_collected = 0u32;
 
             while remaining_qseq.len() > gseq.len() {
-                let has_neighbor = if strand == '+' { curr.has_prev } else { curr.has_next };
+                let has_neighbor = if strand == '+' {
+                    curr.has_prev
+                } else {
+                    curr.has_next
+                };
                 if !has_neighbor {
-                    if n_collected == 0 { tid_data.has_left_clip = false; return; }
+                    if n_collected == 0 {
+                        tid_data.has_left_clip = false;
+                        return;
+                    }
                     break;
                 }
 
@@ -602,11 +624,17 @@ pub fn left_clip_rescue(
                     g2t.get_guide_exon_for_tid(refid, strand, tid, curr.next_start, curr.next_end)
                 };
                 let Some(next) = next else {
-                    if n_collected == 0 { tid_data.has_left_clip = false; return; }
+                    if n_collected == 0 {
+                        tid_data.has_left_clip = false;
+                        return;
+                    }
                     break;
                 };
                 if next.seq.is_empty() {
-                    if n_collected == 0 { tid_data.has_left_clip = false; return; }
+                    if n_collected == 0 {
+                        tid_data.has_left_clip = false;
+                        return;
+                    }
                     break;
                 }
 
@@ -681,9 +709,7 @@ pub fn left_clip_rescue(
                     CigarOp::InsOverride => {
                         cigar.ops.push((len, CigarOp::ClipOverride));
                     }
-                    _ => {
-                        cigar.ops.push((len, *op))
-                    }
+                    _ => cigar.ops.push((len, *op)),
                 }
                 for (len, op) in result.cigar.ops.iter().skip(1) {
                     cigar.ops.push((*len, *op))
@@ -790,9 +816,16 @@ pub fn right_clip_rescue(
             let mut n_collected = 0u32;
 
             while remaining_qseq.len() > gseq.len() {
-                let has_neighbor = if strand == '+' { curr.has_next } else { curr.has_prev };
+                let has_neighbor = if strand == '+' {
+                    curr.has_next
+                } else {
+                    curr.has_prev
+                };
                 if !has_neighbor {
-                    if n_collected == 0 { tid_data.has_right_clip = false; return; }
+                    if n_collected == 0 {
+                        tid_data.has_right_clip = false;
+                        return;
+                    }
                     break;
                 }
 
@@ -802,11 +835,17 @@ pub fn right_clip_rescue(
                     g2t.get_guide_exon_for_tid(refid, strand, tid, curr.prev_start, curr.prev_end)
                 };
                 let Some(next) = next else {
-                    if n_collected == 0 { tid_data.has_right_clip = false; return; }
+                    if n_collected == 0 {
+                        tid_data.has_right_clip = false;
+                        return;
+                    }
                     break;
                 };
                 if next.seq.is_empty() {
-                    if n_collected == 0 { tid_data.has_right_clip = false; return; }
+                    if n_collected == 0 {
+                        tid_data.has_right_clip = false;
+                        return;
+                    }
                     break;
                 }
 
@@ -825,9 +864,12 @@ pub fn right_clip_rescue(
 
             // Trim guide to query_len + 40 (matching C++).
             let window = remaining_qseq.len() + 40;
-            if gseq.len() > window { gseq.truncate(window); }
+            if gseq.len() > window {
+                gseq.truncate(window);
+            }
 
-            let result = sw::smith_waterman(aligner, sw_bufs, &remaining_qseq, &gseq, Anchor::Start);
+            let result =
+                sw::smith_waterman(aligner, sw_bufs, &remaining_qseq, &gseq, Anchor::Start);
             if result.score < 10 || result.zdropped {
                 tid_data.has_right_clip = false;
                 return;
@@ -865,7 +907,7 @@ pub fn right_clip_rescue(
             for (i, (len, op)) in result.cigar.ops.iter().enumerate() {
                 if i == n - 1 {
                     match op {
-                        CigarOp::DelOverride => { /* trailing D - discard */}
+                        CigarOp::DelOverride => { /* trailing D - discard */ }
                         CigarOp::InsOverride => {
                             cigar.ops.push((*len, CigarOp::ClipOverride));
                         }
@@ -989,8 +1031,7 @@ pub fn correct_for_gaps(
                         has_qexon: false,
                         gexon: Some(prev_exon),
                         status: ExonStatus::GapExon,
-                        is_small_exon: (gap_end.saturating_sub(gap_start)
-                            <= config.max_error_exon),
+                        is_small_exon: (gap_end.saturating_sub(gap_start) <= config.max_error_exon),
                         ..Default::default()
                     };
 
@@ -1068,7 +1109,10 @@ pub fn build_cigar_match(
         {
             cigar.add_operation(left_ins, CigarOp::Ins);
             match_info.total_operations += left_ins as f64;
-            if matches!(segment.status, ExonStatus::MiddleExon | ExonStatus::LastExon) {
+            if matches!(
+                segment.status,
+                ExonStatus::MiddleExon | ExonStatus::LastExon
+            ) {
                 match_info.junc_misses += 1;
             }
             if match_info.prev_op == CigarOp::Del {
@@ -1088,7 +1132,10 @@ pub fn build_cigar_match(
             cigar.add_operation(left_gap, CigarOp::Del);
             match_info.total_operations += left_gap as f64;
             match_info.ref_consumed += left_gap as i32;
-            if matches!(segment.status, ExonStatus::MiddleExon | ExonStatus::LastExon) {
+            if matches!(
+                segment.status,
+                ExonStatus::MiddleExon | ExonStatus::LastExon
+            ) {
                 match_info.junc_misses += 1;
             }
             if match_info.prev_op == CigarOp::Ins {
@@ -1128,7 +1175,10 @@ pub fn build_cigar_match(
         {
             cigar.add_operation(right_ins, CigarOp::Ins);
             match_info.total_operations += right_ins as f64;
-            if matches!(segment.status, ExonStatus::FirstExon | ExonStatus::MiddleExon) {
+            if matches!(
+                segment.status,
+                ExonStatus::FirstExon | ExonStatus::MiddleExon
+            ) {
                 match_info.junc_misses += 1;
             }
             if match_info.prev_op == CigarOp::Del {
@@ -1146,7 +1196,10 @@ pub fn build_cigar_match(
             cigar.add_operation(right_gap, CigarOp::Del);
             match_info.total_operations += right_gap as f64;
             match_info.ref_consumed += right_gap as i32;
-            if matches!(segment.status, ExonStatus::FirstExon | ExonStatus::MiddleExon) {
+            if matches!(
+                segment.status,
+                ExonStatus::FirstExon | ExonStatus::MiddleExon
+            ) {
                 match_info.junc_misses += 1;
             }
             if match_info.prev_op == CigarOp::Ins {
@@ -1159,12 +1212,7 @@ pub fn build_cigar_match(
     }
 }
 
-pub fn build_cigar_ins(
-    segment: &EvalSegment,
-    k: usize,
-    n: usize,
-    match_info: &mut ExonChainMatch,
-) {
+pub fn build_cigar_ins(segment: &EvalSegment, k: usize, n: usize, match_info: &mut ExonChainMatch) {
     let qstart = segment.qexon.start;
     let qend = segment.qexon.end;
     let ins_length = qend.saturating_sub(qstart);
@@ -1443,16 +1491,13 @@ pub fn evaluate_exon_chains(
                 // skipped here just like in C++.
                 if !match_created && segment.has_gexon {
                     let gexon = segment.gexon.as_ref().unwrap();
-                    let read_strand_for_match = if long_reads
-                        && read.segs.len() == 1
-                        && !read.strand_from_tag
-                    {
-                        strand
-                    } else {
-                        read.strand
-                    };
-                    td.match_info =
-                        create_match(gexon, strand, read_strand_for_match, n_ins_exon);
+                    let read_strand_for_match =
+                        if long_reads && read.segs.len() == 1 && !read.strand_from_tag {
+                            strand
+                        } else {
+                            read.strand
+                        };
+                    td.match_info = create_match(gexon, strand, read_strand_for_match, n_ins_exon);
                     match_created = true;
                     first_match_idx += 1;
                     last_match_idx += 1;
@@ -1555,39 +1600,46 @@ pub struct ReadEvaluator {
 
 impl ReadEvaluator {
     fn build_config(&self) -> ReadEvaluationConfig {
-        let (default_max_clip, default_max_junc_ins, default_max_junc_gap, default_similarity_threshold, default_max_error_exon) = 
-            match (self.lr, self.lr_hq, self.strict) {
-                (_, _, true) => (0,   0,  0, 0.99_f32,  0),
-                (_, true, _) => (5,  10, 10, 0.90_f32,  0),
-                (true, _, _) => (40, 40, 40, 0.60_f32, 35),
-                // Short-read default matches C++ (SIM_THR.value_or(1.0)): threshold
-                // 1.0 is a SENTINEL that DISABLES the similarity filter
-                // (`filter_by_similarity = threshold < 1.0`), NOT a "require a
-                // perfect match" gate. With the filter gated off (below), reads are
-                // no longer dropped by the `similarity > 1.0` test — that gate is
-                // never evaluated — and short-read placements are not re-weighted by
-                // junc_hits, matching C++ (which only rewrites AS for long reads).
-                _            => (5,   0,  0, 1.0_f32,  0),
-            };
+        let (
+            default_max_clip,
+            default_max_junc_ins,
+            default_max_junc_gap,
+            default_similarity_threshold,
+            default_max_error_exon,
+        ) = match (self.lr, self.lr_hq, self.strict) {
+            (_, _, true) => (0, 0, 0, 0.99_f32, 0),
+            (_, true, _) => (5, 10, 10, 0.90_f32, 0),
+            (true, _, _) => (40, 40, 40, 0.60_f32, 35),
+            // Short-read default matches C++ (SIM_THR.value_or(1.0)): threshold
+            // 1.0 is a SENTINEL that DISABLES the similarity filter
+            // (`filter_by_similarity = threshold < 1.0`), NOT a "require a
+            // perfect match" gate. With the filter gated off (below), reads are
+            // no longer dropped by the `similarity > 1.0` test — that gate is
+            // never evaluated — and short-read placements are not re-weighted by
+            // junc_hits, matching C++ (which only rewrites AS for long reads).
+            _ => (5, 0, 0, 1.0_f32, 0),
+        };
 
         let max_error_exon = self.max_error_exon.unwrap_or(default_max_error_exon);
-        let similarity_threshold = self.similarity_threshold.unwrap_or(default_similarity_threshold);
+        let similarity_threshold = self
+            .similarity_threshold
+            .unwrap_or(default_similarity_threshold);
 
         ReadEvaluationConfig {
-            max_clip:               self.max_clip.unwrap_or(default_max_clip) as u32,
-            max_junc_ins:           self.max_junc_ins.unwrap_or(default_max_junc_ins) as u32,
-            max_junc_gap:           self.max_junc_gap.unwrap_or(default_max_junc_gap) as u32,
+            max_clip: self.max_clip.unwrap_or(default_max_clip) as u32,
+            max_junc_ins: self.max_junc_ins.unwrap_or(default_max_junc_ins) as u32,
+            max_junc_gap: self.max_junc_gap.unwrap_or(default_max_junc_gap) as u32,
             similarity_threshold,
             // C++: filter_by_similarity = (similarity_threshold < 1.0).
-            filter_by_similarity:   similarity_threshold < 1.0,
-            ignore_small_exons:     max_error_exon > 0,
-            max_error_exon:         max_error_exon as u32,
-            print:                  false,
-            name:                   Vec::new(),
-            soft_clips:             true,
-            strict:                 self.strict,
-            use_fasta:              self.use_fasta,
-            junc_miss_discount:     self.junc_miss_discount.unwrap_or(1.0),
+            filter_by_similarity: similarity_threshold < 1.0,
+            ignore_small_exons: max_error_exon > 0,
+            max_error_exon: max_error_exon as u32,
+            print: false,
+            name: Vec::new(),
+            soft_clips: true,
+            strict: self.strict,
+            use_fasta: self.use_fasta,
+            junc_miss_discount: self.junc_miss_discount.unwrap_or(1.0),
         }
     }
 
@@ -1618,12 +1670,25 @@ mod tests {
         // unweighted (so short-read placements aren't re-scored by junc_hits,
         // matching C++ which only rewrites AS for long reads).
         let short = ReadEvaluator::default().build_config();
-        assert_eq!(short.similarity_threshold, 1.0, "short-read threshold is 1.0");
-        assert!(!short.filter_by_similarity, "short-read similarity filter is disabled");
+        assert_eq!(
+            short.similarity_threshold, 1.0,
+            "short-read threshold is 1.0"
+        );
+        assert!(
+            !short.filter_by_similarity,
+            "short-read similarity filter is disabled"
+        );
 
         // Long reads keep the filter enabled (threshold 0.60 < 1.0).
-        let long = ReadEvaluator { lr: true, ..Default::default() }.build_config();
-        assert!(long.filter_by_similarity, "long-read similarity filter is enabled");
+        let long = ReadEvaluator {
+            lr: true,
+            ..Default::default()
+        }
+        .build_config();
+        assert!(
+            long.filter_by_similarity,
+            "long-read similarity filter is enabled"
+        );
         assert!((long.similarity_threshold - 0.60).abs() < 1e-6);
     }
 

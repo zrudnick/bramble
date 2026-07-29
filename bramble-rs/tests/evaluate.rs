@@ -5,14 +5,20 @@ use bramble_rs::ReadEvaluationConfig;
 #[test]
 fn short_read_defaults_match_cpp() {
     let cfg = ReadEvaluationConfig::short_read();
-    assert_eq!(cfg.max_clip, 5,      "max_clip");
-    assert_eq!(cfg.max_junc_ins, 0,  "max_junc_ins");
-    assert_eq!(cfg.max_junc_gap, 0,  "max_junc_gap");
+    assert_eq!(cfg.max_clip, 5, "max_clip");
+    assert_eq!(cfg.max_junc_ins, 0, "max_junc_ins");
+    assert_eq!(cfg.max_junc_gap, 0, "max_junc_gap");
     // C++ short-read similarity_threshold is 1.0 (a sentinel that disables the
     // similarity filter), NOT a sub-1.0 gate.
-    assert!((cfg.similarity_threshold - 1.0).abs() < 1e-6, "similarity_threshold");
-    assert!(!cfg.filter_by_similarity, "similarity filter disabled for short reads");
-    assert!(!cfg.ignore_small_exons,  "ignore_small_exons");
+    assert!(
+        (cfg.similarity_threshold - 1.0).abs() < 1e-6,
+        "similarity_threshold"
+    );
+    assert!(
+        !cfg.filter_by_similarity,
+        "similarity filter disabled for short reads"
+    );
+    assert!(!cfg.ignore_small_exons, "ignore_small_exons");
     assert_eq!(cfg.max_error_exon, 0, "max_error_exon");
 }
 
@@ -21,12 +27,18 @@ fn short_read_defaults_match_cpp() {
 #[test]
 fn long_read_defaults_match_cpp() {
     let cfg = ReadEvaluationConfig::long_read();
-    assert_eq!(cfg.max_clip, 40,      "max_clip");
-    assert_eq!(cfg.max_junc_ins, 40,  "max_junc_ins");
-    assert_eq!(cfg.max_junc_gap, 40,  "max_junc_gap");
-    assert!((cfg.similarity_threshold - 0.60).abs() < 1e-6, "similarity_threshold");
-    assert!(cfg.filter_by_similarity,  "similarity filter enabled for long reads");
-    assert!(cfg.ignore_small_exons,    "ignore_small_exons");
+    assert_eq!(cfg.max_clip, 40, "max_clip");
+    assert_eq!(cfg.max_junc_ins, 40, "max_junc_ins");
+    assert_eq!(cfg.max_junc_gap, 40, "max_junc_gap");
+    assert!(
+        (cfg.similarity_threshold - 0.60).abs() < 1e-6,
+        "similarity_threshold"
+    );
+    assert!(
+        cfg.filter_by_similarity,
+        "similarity filter enabled for long reads"
+    );
+    assert!(cfg.ignore_small_exons, "ignore_small_exons");
     assert_eq!(cfg.max_error_exon, 35, "max_error_exon");
 }
 
@@ -34,11 +46,11 @@ fn long_read_defaults_match_cpp() {
 #[test]
 fn default_is_short_read() {
     let default = ReadEvaluationConfig::default();
-    let short   = ReadEvaluationConfig::short_read();
-    assert_eq!(default.max_clip,            short.max_clip);
-    assert_eq!(default.max_junc_ins,        short.max_junc_ins);
-    assert_eq!(default.max_junc_gap,        short.max_junc_gap);
+    let short = ReadEvaluationConfig::short_read();
+    assert_eq!(default.max_clip, short.max_clip);
+    assert_eq!(default.max_junc_ins, short.max_junc_ins);
+    assert_eq!(default.max_junc_gap, short.max_junc_gap);
     assert_eq!(default.similarity_threshold, short.similarity_threshold);
-    assert_eq!(default.ignore_small_exons,  short.ignore_small_exons);
-    assert_eq!(default.max_error_exon,      short.max_error_exon);
+    assert_eq!(default.ignore_small_exons, short.ignore_small_exons);
+    assert_eq!(default.max_error_exon, short.max_error_exon);
 }

@@ -23,7 +23,11 @@ use rust_htslib::bam::header::HeaderRecord;
 //     header
 // }
 
-pub fn build_hts_header(transcripts: &[Transcript], input_header: &Header, pg_args: &str) -> Header {
+pub fn build_hts_header(
+    transcripts: &[Transcript],
+    input_header: &Header,
+    pg_args: &str,
+) -> Header {
     let mut header = Header::new();
 
     // HD record
@@ -35,7 +39,9 @@ pub fn build_hts_header(transcripts: &[Transcript], input_header: &Header, pg_ar
     // SQ records from transcripts
     for tx in transcripts {
         let len = tx.length();
-        if len == 0 { continue; }
+        if len == 0 {
+            continue;
+        }
         let mut sq = HeaderRecord::new(b"SQ");
         sq.push_tag(b"SN", &tx.id);
         sq.push_tag(b"LN", len);

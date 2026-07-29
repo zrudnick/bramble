@@ -1,6 +1,6 @@
+use crate::types::{HashMap, HashMapExt};
 use anyhow::Result;
 use needletail::parse_fastx_file;
-use crate::types::{HashMap, HashMapExt};
 use std::path::Path;
 
 /// The map type `FastaDb` stores internally: contig name -> ASCII sequence
@@ -70,8 +70,8 @@ impl FastaDb {
         let mut seqs: HashMap<String, Vec<u8>> = HashMap::new();
 
         while let Some(result) = reader.next() {
-            let record = result
-                .map_err(|e| anyhow::anyhow!("failed to parse FASTA record: {}", e))?;
+            let record =
+                result.map_err(|e| anyhow::anyhow!("failed to parse FASTA record: {}", e))?;
             // needletail's `id()` returns the entire FASTA header line after `>`
             // (description included), but reference names everywhere else — GTF/GFF
             // `seqname`, BAM `@SQ`/`get_slice` lookups, samtools faidx, minimap2 —
@@ -161,11 +161,17 @@ mod tests {
         }
         let db = FastaDb::load(&path).unwrap();
         // Lookup by the bare accession (as a GTF seqname would supply) must hit.
-        assert_eq!(db.get_slice("NC_000001.11", 1, 5).unwrap(), b"ACGT".to_vec());
+        assert_eq!(
+            db.get_slice("NC_000001.11", 1, 5).unwrap(),
+            b"ACGT".to_vec()
+        );
         // Tab-delimited descriptions are stripped too.
         assert_eq!(db.get_slice("chr2", 1, 5).unwrap(), b"TTTT".to_vec());
         // The full header line must NOT be a valid key.
-        assert!(db.get_slice("NC_000001.11 Homo sapiens chromosome 1, GRCh38.p14", 1, 5).is_none());
+        assert!(
+            db.get_slice("NC_000001.11 Homo sapiens chromosome 1, GRCh38.p14", 1, 5)
+                .is_none()
+        );
         std::fs::remove_file(&path).ok();
     }
 }

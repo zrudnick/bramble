@@ -27,7 +27,11 @@ fn test_data_dir() -> Option<PathBuf> {
     }
     let manifest = env!("CARGO_MANIFEST_DIR");
     let default_path = PathBuf::from(manifest).join("../test_data");
-    if default_path.is_dir() { Some(default_path) } else { None }
+    if default_path.is_dir() {
+        Some(default_path)
+    } else {
+        None
+    }
 }
 
 fn count_bam_records(path: &Path) -> usize {
@@ -67,26 +71,31 @@ fn short_read_count_matches_golden() {
     let data_dir = match test_data_dir() {
         Some(d) => d,
         None => {
-            eprintln!("Skipping short_read_count_matches_golden: test data not found \
-                       (set BRAMBLE_TEST_DATA or place test_data/ next to bramble-rs/)");
+            eprintln!(
+                "Skipping short_read_count_matches_golden: test data not found \
+                       (set BRAMBLE_TEST_DATA or place test_data/ next to bramble-rs/)"
+            );
             return;
         }
     };
 
-    let gtf      = data_dir.join("input/ref/chess2.2_ALL.gtf");
-    let input    = data_dir.join("input/short_reads/subsampled.bam");
-    let golden   = data_dir.join("output/short_reads/projected.bam");
+    let gtf = data_dir.join("input/ref/chess2.2_ALL.gtf");
+    let input = data_dir.join("input/short_reads/subsampled.bam");
+    let golden = data_dir.join("output/short_reads/projected.bam");
     let out_path = std::env::temp_dir().join("bramble_rs_test_short.bam");
 
-    let gtf_str   = gtf.to_str().unwrap();
+    let gtf_str = gtf.to_str().unwrap();
     let input_str = input.to_str().unwrap();
     run_binary(&[input_str, "-G", gtf_str, "-q"], &out_path);
 
-    let got    = count_bam_records(&out_path);
+    let got = count_bam_records(&out_path);
     let golden = count_bam_records(&golden);
     let _ = std::fs::remove_file(&out_path);
 
-    assert_eq!(got, golden, "short-read record count mismatch: got {got}, expected {golden}");
+    assert_eq!(
+        got, golden,
+        "short-read record count mismatch: got {got}, expected {golden}"
+    );
 }
 
 /// Long-read projected record count must match the C++ golden BAM.
@@ -100,18 +109,21 @@ fn long_read_count_matches_golden() {
         }
     };
 
-    let gtf      = data_dir.join("input/ref/chess2.2_ALL.gtf");
-    let input    = data_dir.join("input/pacbio/long.0mm.gn.bam");
-    let golden   = data_dir.join("output/pacbio/long.0mm.tx.bam");
+    let gtf = data_dir.join("input/ref/chess2.2_ALL.gtf");
+    let input = data_dir.join("input/pacbio/long.0mm.gn.bam");
+    let golden = data_dir.join("output/pacbio/long.0mm.tx.bam");
     let out_path = std::env::temp_dir().join("bramble_rs_test_long.bam");
 
-    let gtf_str   = gtf.to_str().unwrap();
+    let gtf_str = gtf.to_str().unwrap();
     let input_str = input.to_str().unwrap();
     run_binary(&[input_str, "-G", gtf_str, "--long", "-q"], &out_path);
 
-    let got    = count_bam_records(&out_path);
+    let got = count_bam_records(&out_path);
     let golden = count_bam_records(&golden);
     let _ = std::fs::remove_file(&out_path);
 
-    assert_eq!(got, golden, "long-read record count mismatch: got {got}, expected {golden}");
+    assert_eq!(
+        got, golden,
+        "long-read record count mismatch: got {got}, expected {golden}"
+    );
 }

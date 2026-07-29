@@ -1,5 +1,5 @@
-use anyhow::{anyhow, Result};
 use crate::types::{HashMap, HashMapExt};
+use anyhow::{Result, anyhow};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
@@ -87,19 +87,21 @@ fn load_gtf(path: &Path) -> Result<Vec<Transcript>> {
         let start_1 = record.start().get();
         let end_1 = record.end().get();
         let start = u32::try_from(start_1).map_err(|_| anyhow!("GTF start out of range"))?;
-        let end = u32::try_from(end_1.saturating_add(1))
-            .map_err(|_| anyhow!("GTF end out of range"))?;
+        let end =
+            u32::try_from(end_1.saturating_add(1)).map_err(|_| anyhow!("GTF end out of range"))?;
 
         let attrs = record.attributes();
         let transcript_id = get_record_buf_attribute(attrs, b"transcript_id")
             .ok_or_else(|| anyhow!("missing transcript_id in GTF attributes"))?;
 
-        let entry = transcripts.entry(transcript_id.clone()).or_insert_with(|| Transcript {
-            id: transcript_id.clone(),
-            seqname: seqname.clone(),
-            strand,
-            exons: Vec::new(),
-        });
+        let entry = transcripts
+            .entry(transcript_id.clone())
+            .or_insert_with(|| Transcript {
+                id: transcript_id.clone(),
+                seqname: seqname.clone(),
+                strand,
+                exons: Vec::new(),
+            });
 
         if feature_type == b"exon" {
             entry.exons.push(Exon { start, end });
@@ -129,8 +131,8 @@ fn load_gff3(path: &Path) -> Result<Vec<Transcript>> {
         let start_1 = record.start().get();
         let end_1 = record.end().get();
         let start = u32::try_from(start_1).map_err(|_| anyhow!("GFF3 start out of range"))?;
-        let end = u32::try_from(end_1.saturating_add(1))
-            .map_err(|_| anyhow!("GFF3 end out of range"))?;
+        let end =
+            u32::try_from(end_1.saturating_add(1)).map_err(|_| anyhow!("GFF3 end out of range"))?;
 
         let attrs = record.attributes();
         let transcript_id = if feature_type == b"transcript" {
@@ -140,12 +142,14 @@ fn load_gff3(path: &Path) -> Result<Vec<Transcript>> {
         }
         .ok_or_else(|| anyhow!("missing transcript id in GFF3 attributes"))?;
 
-        let entry = transcripts.entry(transcript_id.clone()).or_insert_with(|| Transcript {
-            id: transcript_id.clone(),
-            seqname: seqname.clone(),
-            strand,
-            exons: Vec::new(),
-        });
+        let entry = transcripts
+            .entry(transcript_id.clone())
+            .or_insert_with(|| Transcript {
+                id: transcript_id.clone(),
+                seqname: seqname.clone(),
+                strand,
+                exons: Vec::new(),
+            });
 
         if feature_type == b"exon" {
             entry.exons.push(Exon { start, end });
