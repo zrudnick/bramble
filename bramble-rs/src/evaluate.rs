@@ -319,6 +319,12 @@ pub struct EvalContext {
     pub(crate) sw_bufs: sw::SwBufs,
 }
 
+impl Default for EvalContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EvalContext {
     pub fn new() -> Self {
         Self {
@@ -676,11 +682,11 @@ pub fn left_clip_rescue(
                         cigar.ops.push((len, CigarOp::ClipOverride));
                     }
                     _ => {
-                        cigar.ops.push((len, op.clone()))
+                        cigar.ops.push((len, *op))
                     }
                 }
                 for (len, op) in result.cigar.ops.iter().skip(1) {
-                    cigar.ops.push((*len, op.clone()))
+                    cigar.ops.push((*len, *op))
                 }
             } // else: empty CIGAR, nothing to append
 
@@ -864,11 +870,11 @@ pub fn right_clip_rescue(
                             cigar.ops.push((*len, CigarOp::ClipOverride));
                         }
                         _ => {
-                            cigar.ops.push((*len, op.clone()));
+                            cigar.ops.push((*len, *op));
                         }
                     }
                 } else {
-                    cigar.ops.push((*len, op.clone()));
+                    cigar.ops.push((*len, *op));
                 }
             }
 
