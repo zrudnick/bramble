@@ -14,7 +14,7 @@ categories = ["science"]
 anyhow = "1.0"
 ahash = "0.8"
 coitrees = "0.4"
-noodles = { version = "0.113", features = ["sam", "gff", "gtf", "core"] }
+noodles = { version = "0.115", features = ["sam", "gff", "gtf", "core"] }
 ksw2rs = "0.2.0"
 needletail = { version = "0.7", default-features = false }
 
