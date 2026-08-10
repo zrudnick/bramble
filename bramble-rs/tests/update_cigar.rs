@@ -1,6 +1,6 @@
-use bramble_rs::{Cigar, CigarOp};
 use bramble_rs::update_cigar_for_test;
-use noodles::sam::alignment::record::cigar::{op::Kind as CigarKind, Op as SamCigarOp};
+use bramble_rs::{Cigar, CigarOp};
+use noodles::sam::alignment::record::cigar::{Op as SamCigarOp, op::Kind as CigarKind};
 
 fn build_ideal(ops: &[(u32, CigarOp)]) -> Cigar {
     let mut cigar = Cigar::default();
@@ -11,7 +11,11 @@ fn build_ideal(ops: &[(u32, CigarOp)]) -> Cigar {
 }
 
 fn cigar_kinds(cigar: &noodles::sam::alignment::record_buf::Cigar) -> Vec<(CigarKind, usize)> {
-    cigar.as_ref().iter().map(|op| (op.kind(), op.len())).collect()
+    cigar
+        .as_ref()
+        .iter()
+        .map(|op| (op.kind(), op.len()))
+        .collect()
 }
 
 #[test]
@@ -20,10 +24,7 @@ fn update_cigar_override_softclip_to_match() {
         SamCigarOp::new(CigarKind::SoftClip, 2),
         SamCigarOp::new(CigarKind::Match, 8),
     ];
-    let ideal = build_ideal(&[
-        (2, CigarOp::MatchOverride),
-        (8, CigarOp::Match),
-    ]);
+    let ideal = build_ideal(&[(2, CigarOp::MatchOverride), (8, CigarOp::Match)]);
 
     let (cigar, nm) = update_cigar_for_test(real, ideal);
     assert_eq!(nm, 0);
@@ -33,11 +34,7 @@ fn update_cigar_override_softclip_to_match() {
 #[test]
 fn update_cigar_inserts_deletion_from_ideal() {
     let real = vec![SamCigarOp::new(CigarKind::Match, 10)];
-    let ideal = build_ideal(&[
-        (5, CigarOp::Match),
-        (1, CigarOp::Del),
-        (4, CigarOp::Match),
-    ]);
+    let ideal = build_ideal(&[(5, CigarOp::Match), (1, CigarOp::Del), (4, CigarOp::Match)]);
 
     let (cigar, nm) = update_cigar_for_test(real, ideal);
     assert_eq!(nm, 1);
@@ -54,11 +51,7 @@ fn update_cigar_inserts_deletion_from_ideal() {
 #[test]
 fn update_cigar_inserts_insertion_from_ideal() {
     let real = vec![SamCigarOp::new(CigarKind::Match, 10)];
-    let ideal = build_ideal(&[
-        (5, CigarOp::Match),
-        (1, CigarOp::Ins),
-        (5, CigarOp::Match),
-    ]);
+    let ideal = build_ideal(&[(5, CigarOp::Match), (1, CigarOp::Ins), (5, CigarOp::Match)]);
 
     let (cigar, nm) = update_cigar_for_test(real, ideal);
     assert_eq!(nm, 1);
@@ -105,12 +98,15 @@ fn update_cigar_adjacent_indel_preserved() {
 
     let (cigar, nm) = update_cigar_for_test(real, ideal);
     assert_eq!(nm, 6);
-    assert_eq!(cigar_kinds(&cigar), vec![
-        (CigarKind::Match, 5),
-        (CigarKind::Insertion, 3),
-        (CigarKind::Deletion, 3),
-        (CigarKind::Match, 5),
-    ]);
+    assert_eq!(
+        cigar_kinds(&cigar),
+        vec![
+            (CigarKind::Match, 5),
+            (CigarKind::Insertion, 3),
+            (CigarKind::Deletion, 3),
+            (CigarKind::Match, 5),
+        ]
+    );
 }
 
 /// A Skip (N / intron) operation in the real CIGAR is stripped during
@@ -136,10 +132,7 @@ fn update_cigar_strips_skip_n_from_real() {
 #[test]
 fn update_cigar_clip_override_converts_match_to_softclip() {
     let real = vec![SamCigarOp::new(CigarKind::Match, 10)];
-    let ideal = build_ideal(&[
-        (2, CigarOp::ClipOverride),
-        (8, CigarOp::Match),
-    ]);
+    let ideal = build_ideal(&[(2, CigarOp::ClipOverride), (8, CigarOp::Match)]);
 
     let (cigar, nm) = update_cigar_for_test(real, ideal);
     assert_eq!(nm, 0);

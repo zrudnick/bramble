@@ -1,7 +1,7 @@
 // bam_input.rs is used only by the binary (BAM I/O path).
 #![allow(dead_code)]
-use bramble_rs::types::{HashMap, RefId};
 use anyhow::Result;
+use bramble_rs::types::{HashMap, RefId};
 use rust_htslib::bam;
 use rust_htslib::bam::Read as HtsRead;
 use std::path::Path;
@@ -22,5 +22,8 @@ pub fn open_bam(path: &Path) -> Result<BamInput> {
             .map(|(i, n)| (String::from_utf8_lossy(n).to_string(), i as RefId))
             .collect()
     };
-    Ok(BamInput { refname_to_id, reader })
+    Ok(BamInput {
+        refname_to_id,
+        reader,
+    })
 }

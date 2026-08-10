@@ -48,14 +48,11 @@
 //! // };
 //! ```
 
-use crate::evaluate::{EvalContext, ReadAln, ReadEvaluator, ExonChainMatch};
+use crate::evaluate::{EvalContext, ExonChainMatch, ReadAln, ReadEvaluator};
 use crate::g2t::G2TTree;
 use crate::groups::{
-    ReadEval, OutputEntry,
-    find_mate_pairs, assign_pair_order,
-    build_paired_groups, build_unpaired_groups,
-    assign_hit_indices, align_pos, compute_template_length,
-    sam_op_to_kind, segs_from_ops,
+    OutputEntry, ReadEval, align_pos, assign_hit_indices, assign_pair_order, build_paired_groups,
+    build_unpaired_groups, compute_template_length, find_mate_pairs, sam_op_to_kind, segs_from_ops,
 };
 use crate::types::{HashMap, ReadId, Tid};
 use noodles::sam::alignment::record::cigar::op::Kind as CigarKind;
@@ -211,12 +208,20 @@ pub struct ProjectionConfig {
 impl ProjectionConfig {
     /// Short-read (Illumina) defaults — matches C++ `ShortReadEvaluator`.
     pub fn short_read() -> Self {
-        Self { long_reads: false, use_fasta: false, junc_miss_discount: 1.0 }
+        Self {
+            long_reads: false,
+            use_fasta: false,
+            junc_miss_discount: 1.0,
+        }
     }
 
     /// Long-read (PacBio / ONT) defaults — matches C++ `LongReadEvaluator`.
     pub fn long_read() -> Self {
-        Self { long_reads: true, use_fasta: false, junc_miss_discount: 1.0 }
+        Self {
+            long_reads: true,
+            use_fasta: false,
+            junc_miss_discount: 1.0,
+        }
     }
 }
 
@@ -235,7 +240,9 @@ pub struct ProjectionContext {
 impl ProjectionContext {
     /// Allocate a fresh projection context.
     pub fn new() -> Self {
-        Self { ctx: EvalContext::new() }
+        Self {
+            ctx: EvalContext::new(),
+        }
     }
 }
 
@@ -306,14 +313,20 @@ pub fn project_group_with(
     let mut read_evals: Vec<ReadEval> = Vec::new();
 
     for (idx, a) in alignments.iter().enumerate() {
-        if a.ref_id < 0 { continue; }
+        if a.ref_id < 0 {
+            continue;
+        }
 
-        let cigar_ops: Vec<(u32, CigarKind)> = a.cigar.iter()
+        let cigar_ops: Vec<(u32, CigarKind)> = a
+            .cigar
+            .iter()
             .filter_map(|&(len, op)| sam_op_to_kind(op).map(|k| (len, k)))
             .collect();
 
         let segs = segs_from_ops(a.ref_start, &cigar_ops);
-        if segs.is_empty() { continue; }
+        if segs.is_empty() {
+            continue;
+        }
 
         let (strand, strand_from_tag) = infer_strand(a);
 
@@ -329,25 +342,33 @@ pub fn project_group_with(
         };
 
         evaluator.evaluate(&read, idx as ReadId, index, shared_seq.as_deref(), ctx);
-        let matches: HashMap<Tid, ExonChainMatch> = ctx.matches
+        let matches: HashMap<Tid, ExonChainMatch> = ctx
+            .matches
             .drain()
             .filter(|(_, m)| m.align.cigar.is_some())
             .collect();
 
-        let read_len = if a.read_len > 0 { a.read_len }
-            else { a.sequence.as_ref().map_or(0, |s| s.len()) };
+        let read_len = if a.read_len > 0 {
+            a.read_len
+        } else {
+            a.sequence.as_ref().map_or(0, |s| s.len())
+        };
 
         let mut flags: u16 = 0;
         if a.is_paired {
             flags |= 0x1; // PAIRED
-            if a.mate_is_unmapped { flags |= 0x8; } // MATE_UNMAPPED
+            if a.mate_is_unmapped {
+                flags |= 0x8;
+            } // MATE_UNMAPPED
             if a.is_first_in_pair {
                 flags |= 0x40; // READ1
             } else {
                 flags |= 0x80; // READ2
             }
         }
-        if a.is_reverse { flags |= 0x10; } // REVERSE
+        if a.is_reverse {
+            flags |= 0x10;
+        } // REVERSE
 
         read_evals.push(ReadEval {
             record_idx: idx,
@@ -384,7 +405,15 @@ pub fn project_group_with(
 
     let new_nh: u32 = output_groups.iter().map(|g| g.len() as u32).sum();
     let mut entries: Vec<OutputEntry> = output_groups.into_iter().flatten().collect();
-    entries.sort_by_key(|e| (e.record_idx, e.tid, e.is_first, e.is_last, e.align.align.hit_index));
+    entries.sort_by_key(|e| {
+        (
+            e.record_idx,
+            e.tid,
+            e.is_first,
+            e.is_last,
+            e.align.align.hit_index,
+        )
+    });
     assign_hit_indices(&mut entries);
 
     let mut out = Vec::with_capacity(entries.len());
@@ -392,8 +421,10 @@ pub fn project_group_with(
         let nh = new_nh;
         let insert_size = entry.mate.as_ref().map_or(0, |mate| {
             compute_template_length(
-                align_pos(&entry.align), mate.pos,
-                entry.read_len, entry.same_transcript,
+                align_pos(&entry.align),
+                mate.pos,
+                entry.read_len,
+                entry.same_transcript,
             )
         });
         // Transcript-space extent. `ref_consumed` is the number of transcript
@@ -445,7 +476,11 @@ fn infer_strand(a: &GenomicAlignment) -> (char, bool) {
     if let Some(s) = a.ts_strand
         && (s == '+' || s == '-')
     {
-        let flipped = if a.is_reverse { if s == '+' { '-' } else { '+' } } else { s };
+        let flipped = if a.is_reverse {
+            if s == '+' { '-' } else { '+' }
+        } else {
+            s
+        };
         return (flipped, true);
     }
     // No strand tag present — return '.' so the evaluator checks both strands,

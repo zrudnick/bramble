@@ -34,9 +34,9 @@ pub mod cigar;
 pub mod evaluate;
 #[doc(hidden)]
 pub mod groups;
+pub(crate) mod sw;
 #[doc(hidden)]
 pub mod types;
-pub(crate) mod sw;
 
 // Public modules — stable API surface.
 pub mod annotation;
@@ -53,8 +53,8 @@ pub use g2t::G2TTree;
 
 // Re-exports used by bramble-cli and the integration tests.
 #[doc(hidden)]
-pub use evaluate::{Cigar, CigarOp};
-#[doc(hidden)]
 pub use cigar::update_cigar_for_test;
+#[doc(hidden)]
+pub use evaluate::{Cigar, CigarOp};
 
 mod api;

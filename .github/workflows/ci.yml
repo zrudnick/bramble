@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+  # `bramble-rs/.cargo/config.toml` sets `-C target-cpu=native`, which is unsound
+  # in CI: the runner that populates the build cache is not necessarily the one
+  # that restores it, so binaries built for a newer CPU get executed on an older
+  # one and die with SIGILL. That is not hypothetical -- it is exactly how the
+  # bramble-rs test job failed once caching kicked in, while bramble-cli (which
+  # has no such config) was unaffected.
+  #
+  # An env RUSTFLAGS overrides `build.rustflags` from config.toml entirely, so
+  # this pins CI to a portable baseline. x86-64-v2 (SSE4.2/popcnt) is supported
+  # by every GitHub-hosted runner. `target-cpu=native` remains in effect for
+  # local development, where it is the right default.
+  #
+  # Note this means CI exercises a portable build rather than a native one. It
+  # is also worth asking separately whether `target-cpu=native` belongs in a
+  # committed config at all, since it makes any build machine-specific.
+  RUSTFLAGS: -C target-cpu=x86-64-v2
+
+  # Deliberately not adding `-D warnings` above: cargo applies RUSTFLAGS to
+  # dependency crates too, so a warning in any upstream crate would fail the
+  # build for reasons nobody here can fix. The clippy job denies warnings
+  # instead -- `cargo clippy -- -D warnings` applies only to the local crates,
+  # and clippy runs rustc's own lints (dead_code and friends) as well as
+  # clippy's, so that covers the same ground without the collateral damage.
+
+# A push that supersedes an in-flight run for the same ref cancels it; the
+# htslib build makes these runs expensive enough to be worth not duplicating.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: build & test (${{ matrix.crate }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: [bramble-rs, bramble-cli]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install system dependencies
+        # Only bramble-cli actually needs these: it depends on rust-htslib,
+        # whose hts-sys crate compiles a vendored htslib and generates its
+        # bindings with bindgen. That needs libclang, htslib's compression
+        # libraries, and autotools. bramble-rs is pure Rust and needs none of
+        # it, but installing unconditionally keeps the two matrix legs
+        # identical and costs only a few seconds.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang libclang-dev \
+            autoconf automake make pkg-config \
+            zlib1g-dev libbz2-dev liblzma-dev
+
+      - name: Point bindgen at clang's builtin headers
+        # bindgen resolves `stddef.h` and the other freestanding headers from
+        # clang's own resource directory, not from /usr/include. When libclang
+        # is present but that directory is not on the default search path, the
+        # hts-sys build fails with:
+        #
+        #   ./htslib/htslib/hts.h:31:10: fatal error: 'stddef.h' file not found
+        #   panicked at hts-sys/build.rs: Unable to generate bindings.
+        #
+        # Deriving the path from `clang -print-resource-dir` rather than
+        # hardcoding it keeps this correct across runner images and clang
+        # versions, and makes the build independent of whatever the image
+        # happens to have on its default include path.
+        run: |
+          echo "BINDGEN_EXTRA_CLANG_ARGS=-I$(clang -print-resource-dir)/include" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # The two crates are separate cargo projects, not one workspace, so
+          # each gets its own cache keyed on its own lockfile.
+          workspaces: ${{ matrix.crate }}
+
+      - name: Build
+        working-directory: ${{ matrix.crate }}
+        run: cargo build --all-targets
+
+      - name: Test
+        working-directory: ${{ matrix.crate }}
+        run: cargo test
+
+  lint:
+    name: fmt & clippy (${{ matrix.crate }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: [bramble-rs, bramble-cli]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang libclang-dev \
+            autoconf automake make pkg-config \
+            zlib1g-dev libbz2-dev liblzma-dev
+
+      - name: Point bindgen at clang's builtin headers
+        run: |
+          echo "BINDGEN_EXTRA_CLANG_ARGS=-I$(clang -print-resource-dir)/include" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.crate }}
+
+      # Both crates were formatted in the same commit that made this gating, so
+      # keep them that way rather than letting drift accumulate again.
+      - name: rustfmt
+        working-directory: ${{ matrix.crate }}
+        run: cargo fmt --check
+
+      # Gating: both crates are clippy-clean as of this commit, so keep them
+      # that way. This also denies rustc's own warnings (dead_code etc.) for
+      # the local crates only -- see the note on RUSTFLAGS at the top.
+      - name: clippy
+        working-directory: ${{ matrix.crate }}
+        run: cargo clippy --all-targets -- -D warnings

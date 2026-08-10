@@ -4,16 +4,19 @@
 //! BAM writer. `#[doc(hidden)]` — not part of the stable public API.
 #![allow(clippy::all)]
 use crate::evaluate::CigarOp;
-use noodles::sam::alignment::record::cigar::{op::Kind as CigarKind, Op as SamCigarOp};
+use noodles::sam::alignment::record::cigar::{Op as SamCigarOp, op::Kind as CigarKind};
 use noodles::sam::alignment::record_buf::Cigar as SamCigar;
 
 #[doc(hidden)]
-pub fn update_cigar_ops(real_ops: &[SamCigarOp], ideal: &crate::evaluate::Cigar) -> (SamCigar, i32) {
+pub fn update_cigar_ops(
+    real_ops: &[SamCigarOp],
+    ideal: &crate::evaluate::Cigar,
+) -> (SamCigar, i32) {
     let (front_hard, front_soft) = front_clip_lengths(real_ops);
 
     let real_expanded = expand_real_cigar(real_ops);
     let ideal_runs = ideal_runs(ideal);
-    let mut ideal_expanded = expand_runs(&ideal_runs);  // mut for pad_ideal_for_leading_clips
+    let mut ideal_expanded = expand_runs(&ideal_runs); // mut for pad_ideal_for_leading_clips
 
     pad_ideal_for_leading_clips(&mut ideal_expanded, front_hard, front_soft);
     let merged = align_and_merge(&real_expanded, &ideal_expanded);
@@ -56,7 +59,8 @@ fn front_clip_lengths(ops: &[SamCigarOp]) -> (u32, u32) {
 }
 
 fn expand_real_cigar(ops: &[SamCigarOp]) -> Vec<u8> {
-    let total_len: usize = ops.iter()
+    let total_len: usize = ops
+        .iter()
         .filter(|op| op.kind() != CigarKind::Skip)
         .map(|op| op.len())
         .sum();
@@ -110,8 +114,6 @@ fn ideal_runs(cigar: &crate::evaluate::Cigar) -> Vec<(u32, u8)> {
     }
     runs
 }
-
-
 
 fn expand_runs(runs: &[(u32, u8)]) -> Vec<u8> {
     let total_len: usize = runs.iter().map(|(len, _)| *len as usize).sum();
@@ -203,8 +205,8 @@ fn align_and_merge(real: &[u8], ideal: &[u8]) -> Vec<u8> {
         let merge = merge_ops(r, i);
         // if a _ is returned, nothing should be added
         if merge != b'_' {
-            merged.push(merge);   
-        } 
+            merged.push(merge);
+        }
     }
 
     merged
@@ -215,9 +217,29 @@ fn merge_ops(real_op: u8, ideal_op: u8) -> u8 {
     // Override ops from clip rescue — handle first as they dominate in FASTA mode.
     match ideal_op {
         b';' => return if real_op == b'D' { b'_' } else { b'S' },
-        b',' => return if real_op == b'D' { b'D' } else if real_op == b'I' { b'I' } else { b'M' },
-        b'/' => return if real_op == b'D' || real_op == b'I' { b'_' } else { b'I' },
-        b'.' => return if real_op == b'D' || real_op == b'I' { b'_' } else { b'D' },
+        b',' => {
+            return if real_op == b'D' {
+                b'D'
+            } else if real_op == b'I' {
+                b'I'
+            } else {
+                b'M'
+            };
+        }
+        b'/' => {
+            return if real_op == b'D' || real_op == b'I' {
+                b'_'
+            } else {
+                b'I'
+            };
+        }
+        b'.' => {
+            return if real_op == b'D' || real_op == b'I' {
+                b'_'
+            } else {
+                b'D'
+            };
+        }
         b'*' => return real_op,
         b'_' => return real_op,
         _ => {}
@@ -247,7 +269,13 @@ fn merge_ops(real_op: u8, ideal_op: u8) -> u8 {
         _ if real_op == b'M' || real_op == b'=' || real_op == b'X' => b'M',
         (b'_', _) => ideal_op,
         (_, b'_') => real_op,
-        _ => if real_op != b'*' { real_op } else { ideal_op },
+        _ => {
+            if real_op != b'*' {
+                real_op
+            } else {
+                ideal_op
+            }
+        }
     }
 }
 

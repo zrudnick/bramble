@@ -2,7 +2,7 @@ use crate::annotation::{Exon, Transcript};
 use crate::evaluate::{ExonStatus, ReadEvaluationConfig};
 use crate::fasta::FastaDb;
 use crate::types::{HashMap, HashMapExt, HashSet, HashSetExt, RefId, Tid};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use coitrees::{BasicCOITree, Interval, IntervalTree as CoitreeIntervalTree};
 use std::sync::Arc;
 
@@ -90,7 +90,8 @@ impl IntervalTree {
             transcript_len: interval.transcript_len,
         };
         if !interval.seq.is_empty() {
-            self.seqs.insert((tid, interval.idx), Arc::clone(&interval.seq));
+            self.seqs
+                .insert((tid, interval.idx), Arc::clone(&interval.seq));
         }
         // COITree intervals are end-inclusive; convert [start, end) -> [start, end-1].
         let first = interval.start as i32;
@@ -104,12 +105,7 @@ impl IntervalTree {
         self.tree = Some(BasicCOITree::new(&self.intervals));
     }
 
-    pub fn find_overlapping_for_tid(
-        &self,
-        qstart: u32,
-        qend: u32,
-        tid: Tid,
-    ) -> Option<GuideExon> {
+    pub fn find_overlapping_for_tid(&self, qstart: u32, qend: u32, tid: Tid) -> Option<GuideExon> {
         let tree = self.tree.as_ref()?;
         if qstart == 0 && qend == 0 {
             return None;
@@ -356,18 +352,14 @@ impl G2TTree {
     }
 
     fn get_trees_mut(&mut self, refid: RefId) -> &mut (IntervalTree, IntervalTree) {
-        self.trees.entry(refid).or_insert_with(|| {
-            (IntervalTree::new(), IntervalTree::new())
-        })
+        self.trees
+            .entry(refid)
+            .or_insert_with(|| (IntervalTree::new(), IntervalTree::new()))
     }
 
     fn get_tree_mut(&mut self, refid: RefId, strand: char) -> &mut IntervalTree {
         let (fw, rc) = self.get_trees_mut(refid);
-        if strand == '-' {
-            rc
-        } else {
-            fw
-        }
+        if strand == '-' { rc } else { fw }
     }
 
     pub fn insert_tid_name(&mut self, tid: Tid, tid_name: &str) {
@@ -377,13 +369,7 @@ impl G2TTree {
         }
     }
 
-    pub fn add_interval(
-        &mut self,
-        refid: RefId,
-        tid: Tid,
-        interval: &IntervalData,
-        strand: char,
-    ) {
+    pub fn add_interval(&mut self, refid: RefId, tid: Tid, interval: &IntervalData, strand: char) {
         let tree = self.get_tree_mut(refid, strand);
         tree.add_interval(tid, interval);
     }
@@ -514,7 +500,6 @@ pub fn build_g2t(
 
             g2t.add_interval(refid, tid, &interval, tx.strand);
         }
-
     }
 
     // Index all trees only after all intervals are inserted.
@@ -563,13 +548,25 @@ mod tests {
                 id: "tx1".to_string(),
                 seqname: "chr1".to_string(),
                 strand: '+',
-                exons: vec![Exon { start: 100, end: 150 }, Exon { start: 200, end: 250 }],
+                exons: vec![
+                    Exon {
+                        start: 100,
+                        end: 150,
+                    },
+                    Exon {
+                        start: 200,
+                        end: 250,
+                    },
+                ],
             },
             Transcript {
                 id: "tx2".to_string(),
                 seqname: "chr1".to_string(),
                 strand: '-',
-                exons: vec![Exon { start: 300, end: 330 }],
+                exons: vec![Exon {
+                    start: 300,
+                    end: 330,
+                }],
             },
         ];
         let refnames = vec!["chr1".to_string()];
@@ -582,6 +579,9 @@ mod tests {
         assert_eq!(g2t.transcript_len(0), Some(100));
         assert_eq!(g2t.transcript_len(1), Some(30));
         assert_eq!(g2t.transcript_lengths(), &[100, 30]);
-        assert_eq!(g2t.transcript_names(), &["tx1".to_string(), "tx2".to_string()]);
+        assert_eq!(
+            g2t.transcript_names(),
+            &["tx1".to_string(), "tx2".to_string()]
+        );
     }
 }

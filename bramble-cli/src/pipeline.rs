@@ -5,18 +5,18 @@
 use crate::alignment;
 use crate::bam_input::BamInput;
 use crate::cli::Args;
+use anyhow::Result;
 use bramble_rs::evaluate::{EvalContext, ExonChainMatch, ReadAln, ReadEvaluator};
 use bramble_rs::g2t::G2TTree;
 use bramble_rs::groups::{
-    ReadEval, OutputEntry, find_mate_pairs, assign_pair_order, build_paired_groups,
-    build_unpaired_groups, assign_hit_indices, compute_template_length,
-    FLAG_PAIRED, FLAG_PROPER_PAIR, FLAG_UNMAPPED, FLAG_MATE_UNMAPPED, FLAG_REVERSE,
-    FLAG_MATE_REVERSE, FLAG_READ1, FLAG_READ2, FLAG_SECONDARY,
+    FLAG_MATE_REVERSE, FLAG_MATE_UNMAPPED, FLAG_PAIRED, FLAG_PROPER_PAIR, FLAG_READ1, FLAG_READ2,
+    FLAG_REVERSE, FLAG_SECONDARY, FLAG_UNMAPPED, OutputEntry, ReadEval, assign_hit_indices,
+    assign_pair_order, build_paired_groups, build_unpaired_groups, compute_template_length,
+    find_mate_pairs,
 };
 use bramble_rs::types::{HashMap, ReadId, RefId, Tid};
-use anyhow::Result;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use noodles::sam::alignment::record::cigar::{op::Kind as CigarKind, Op as SamCigarOp};
+use noodles::sam::alignment::record::cigar::{Op as SamCigarOp, op::Kind as CigarKind};
 use rust_htslib::bam as hts_bam;
 use rust_htslib::bam::Read as HtsRead;
 use rust_htslib::bam::record::{Aux, CigarString};
@@ -30,10 +30,7 @@ const BATCH_SIZE: usize = 64;
 
 /// Tags to strip from output records (they are invalid in projected coordinates
 /// or will be replaced with bramble-computed values).
-const SKIP_TAGS: &[[u8; 2]] = &[
-    *b"NH", *b"HI", *b"AS", *b"CG",
-    *b"XS", *b"SA",
-];
+const SKIP_TAGS: &[[u8; 2]] = &[*b"NH", *b"HI", *b"AS", *b"CG", *b"XS", *b"SA"];
 
 #[derive(Debug, Default)]
 pub struct Stats {
@@ -50,7 +47,6 @@ struct ReadRec {
     segs: Vec<alignment::Segment>,
     decoded_seq: Vec<u8>,
 }
-
 
 pub fn run(
     args: &Args,
@@ -85,18 +81,18 @@ pub fn run(
     };
 
     let evaluator = ReadEvaluator {
-        lr:                   args.lr,
-        lr_hq:                args.lr_hq,
-        strict:               args.strict,
-        use_fasta:            fasta.is_some(),
-        max_clip:             args.max_clip,
-        max_junc_ins:         args.max_junc_ins,
-        max_junc_gap:         args.max_junc_gap,
+        lr: args.lr,
+        lr_hq: args.lr_hq,
+        strict: args.strict,
+        use_fasta: fasta.is_some(),
+        max_clip: args.max_clip,
+        max_junc_ins: args.max_junc_ins,
+        max_junc_gap: args.max_junc_gap,
         similarity_threshold: args.similarity_threshold,
-        max_error_exon:       args.max_error_exon,
-        junc_miss_discount:   None,
+        max_error_exon: args.max_error_exon,
+        junc_miss_discount: None,
     };
-    
+
     let fr = args.fr;
     let rf = args.rf;
     let worker_count = args.threads.get() as usize;
@@ -125,7 +121,12 @@ pub fn run(
                     while let Ok(item) = rx_work.recv() {
                         for (_, group) in &item.groups {
                             let result = process_group_records(
-                                group, g2t_ref, evaluator_ref, fr, rf, &mut ctx,
+                                group,
+                                g2t_ref,
+                                evaluator_ref,
+                                fr,
+                                rf,
+                                &mut ctx,
                             );
                             if let Ok(records) = result {
                                 buffered_groups += 1;
@@ -156,8 +157,7 @@ pub fn run(
             }
 
             // Reader thread: reads BAM, groups by name, sends WorkItems.
-            let reader_jh =
-                scope.spawn(|| read_and_group(&mut bam.reader, tx_work, &progress));
+            let reader_jh = scope.spawn(|| read_and_group(&mut bam.reader, tx_work, &progress));
 
             // Main thread waits; workers and reader joined by scope exit.
             let stats = reader_jh
@@ -171,15 +171,13 @@ pub fn run(
         let (tx_work, rx_work) = flume::bounded::<WorkItem>(cap);
 
         thread::scope(|scope| -> Result<Stats> {
-            let reader_jh =
-                scope.spawn(|| read_and_group(&mut bam.reader, tx_work, &progress));
+            let reader_jh = scope.spawn(|| read_and_group(&mut bam.reader, tx_work, &progress));
 
             let mut ctx = EvalContext::new();
             while let Ok(item) = rx_work.recv() {
                 for (_, group) in &item.groups {
-                    let records = process_group_records(
-                        group, g2t_ref, evaluator_ref, fr, rf, &mut ctx,
-                    )?;
+                    let records =
+                        process_group_records(group, g2t_ref, evaluator_ref, fr, rf, &mut ctx)?;
                     for record in &records {
                         writer.write(record)?;
                     }
@@ -203,10 +201,16 @@ pub fn run(
                 scope.spawn(move || {
                     let mut ctx = EvalContext::new();
                     while let Ok(item) = rx_work.recv() {
-                        let mut results: Vec<(usize, Result<Vec<hts_bam::Record>>)> = Vec::with_capacity(item.groups.len());
+                        let mut results: Vec<(usize, Result<Vec<hts_bam::Record>>)> =
+                            Vec::with_capacity(item.groups.len());
                         for (idx, group) in &item.groups {
                             let result = process_group_records(
-                                group, g2t_ref, evaluator_ref, fr, rf, &mut ctx,
+                                group,
+                                g2t_ref,
+                                evaluator_ref,
+                                fr,
+                                rf,
+                                &mut ctx,
                             );
                             results.push((*idx, result));
                         }
@@ -217,12 +221,10 @@ pub fn run(
             drop(tx_res); // workers own the only remaining senders
 
             // Reader thread: send WorkItems; dropping tx_work when done signals workers.
-            let reader_jh =
-                scope.spawn(|| read_and_group(&mut bam.reader, tx_work, &progress));
+            let reader_jh = scope.spawn(|| read_and_group(&mut bam.reader, tx_work, &progress));
 
             // Main: receive results and write in index order.
-            let mut pending: BTreeMap<usize, Result<Vec<hts_bam::Record>>> =
-                BTreeMap::new();
+            let mut pending: BTreeMap<usize, Result<Vec<hts_bam::Record>>> = BTreeMap::new();
             let mut next_idx = 0usize;
             while let Ok(res) = rx_res.recv() {
                 for (idx, result) in res.results {
@@ -299,19 +301,33 @@ fn read_and_group(
             if current_qname.is_none() {
                 current_qname = Some(qname.to_vec());
             }
-            group.push(ReadRec { id: read_id, record: record.clone(), segs: exons, decoded_seq });
+            group.push(ReadRec {
+                id: read_id,
+                record: record.clone(),
+                segs: exons,
+                decoded_seq,
+            });
         } else {
             // Name changed: flush current group into batch
             stats.read_groups += 1;
             batch.push((group_idx, std::mem::take(&mut group)));
             group_idx += 1;
             if batch.len() >= BATCH_SIZE
-                && tx.send(WorkItem { groups: std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE)) }).is_err()
+                && tx
+                    .send(WorkItem {
+                        groups: std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE)),
+                    })
+                    .is_err()
             {
                 break;
             }
             current_qname = Some(qname.to_vec());
-            group.push(ReadRec { id: read_id, record: record.clone(), segs: exons, decoded_seq });
+            group.push(ReadRec {
+                id: read_id,
+                record: record.clone(),
+                segs: exons,
+                decoded_seq,
+            });
         }
     }
     if !group.is_empty() {
@@ -354,19 +370,30 @@ fn process_group_records(
             continue;
         }
 
-        let refid = if rec.record.tid() >= 0 { Some(rec.record.tid() as RefId) } else { None };
+        let refid = if rec.record.tid() >= 0 {
+            Some(rec.record.tid() as RefId)
+        } else {
+            None
+        };
         if refid.is_none() {
             continue;
         }
 
-        let mate_refid = if rec.record.mtid() >= 0 { Some(rec.record.mtid() as RefId) } else { None };
+        let mate_refid = if rec.record.mtid() >= 0 {
+            Some(rec.record.mtid() as RefId)
+        } else {
+            None
+        };
 
         let (strand, strand_from_tag) = splice_strand(&rec.record, fr, rf);
 
-        let cigar_ops: Vec<(u32, CigarKind)> = rec.record.cigar().iter()
-            .map(hts_cigar_to_kind)
-            .collect();
-        let sequence: Option<&[u8]> = if rec.decoded_seq.is_empty() { None } else { Some(&rec.decoded_seq) };
+        let cigar_ops: Vec<(u32, CigarKind)> =
+            rec.record.cigar().iter().map(hts_cigar_to_kind).collect();
+        let sequence: Option<&[u8]> = if rec.decoded_seq.is_empty() {
+            None
+        } else {
+            Some(&rec.decoded_seq)
+        };
         let name = rec.record.qname().to_vec();
 
         let read = ReadAln {
@@ -381,7 +408,8 @@ fn process_group_records(
         };
 
         evaluator.evaluate(&read, rec.id, g2t, shared_seq, ctx);
-        let matches: HashMap<Tid, ExonChainMatch> = ctx.matches
+        let matches: HashMap<Tid, ExonChainMatch> = ctx
+            .matches
             .drain()
             .filter(|(_, m)| m.align.cigar.is_some())
             .collect();
@@ -469,7 +497,14 @@ fn process_group_records(
         let nh = new_nh;
         let mapq = get_mapq(nh, evaluator.lr);
         let rec = &group[entry.record_idx];
-        let out = build_projected_record(&rec.record, &rec.decoded_seq, &entry, nh, mapq, evaluator.lr)?;
+        let out = build_projected_record(
+            &rec.record,
+            &rec.decoded_seq,
+            &entry,
+            nh,
+            mapq,
+            evaluator.lr,
+        )?;
         output.push(out);
     }
 
@@ -496,7 +531,11 @@ pub(crate) fn get_mapq(nh: u32, long_reads: bool) -> u8 {
 
 fn get_alignment_start(record: &hts_bam::Record) -> Option<u32> {
     let pos = record.pos();
-    if pos < 0 { None } else { Some((pos + 1) as u32) }
+    if pos < 0 {
+        None
+    } else {
+        Some((pos + 1) as u32)
+    }
 }
 
 fn splice_strand(record: &hts_bam::Record, fr: bool, rf: bool) -> (char, bool) {
@@ -524,7 +563,11 @@ fn splice_strand(record: &hts_bam::Record, fr: bool, rf: bool) -> (char, bool) {
         let is_paired = record.is_paired();
         let strand = if is_paired {
             if record.is_first_in_template() {
-                if (rf && rev) || (fr && !rev) { '+' } else { '-' }
+                if (rf && rev) || (fr && !rev) {
+                    '+'
+                } else {
+                    '-'
+                }
             } else if (rf && rev) || (fr && !rev) {
                 '-'
             } else {
@@ -550,9 +593,15 @@ fn get_char_tag(record: &hts_bam::Record, tag: &[u8; 2]) -> Option<u8> {
 }
 
 fn get_mate_start(record: &hts_bam::Record) -> Option<u32> {
-    if record.mtid() < 0 { return None; }
+    if record.mtid() < 0 {
+        return None;
+    }
     let mpos = record.mpos();
-    if mpos < 0 { None } else { Some((mpos + 1) as u32) }
+    if mpos < 0 {
+        None
+    } else {
+        Some((mpos + 1) as u32)
+    }
 }
 
 fn get_hit_index(record: &hts_bam::Record) -> i32 {
@@ -584,8 +633,13 @@ fn build_projected_record(
     // adjusts SECONDARY + the mate fields and never strips mate identity).
     let orig_mate_id = flags & (FLAG_PAIRED | FLAG_READ1 | FLAG_READ2);
     // Clear: UNMAPPED, MATE_UNMAPPED, MATE_REVERSE, PROPER_PAIR, PAIRED, READ1, READ2
-    flags &= !(FLAG_UNMAPPED | FLAG_MATE_UNMAPPED | FLAG_MATE_REVERSE | FLAG_PROPER_PAIR
-                | FLAG_PAIRED | FLAG_READ1 | FLAG_READ2);
+    flags &= !(FLAG_UNMAPPED
+        | FLAG_MATE_UNMAPPED
+        | FLAG_MATE_REVERSE
+        | FLAG_PROPER_PAIR
+        | FLAG_PAIRED
+        | FLAG_READ1
+        | FLAG_READ2);
 
     if entry.align.align.primary_alignment {
         flags &= !FLAG_SECONDARY;
@@ -642,8 +696,12 @@ fn build_projected_record(
         } else {
             flags &= !FLAG_PROPER_PAIR;
         }
-        if entry.is_first { flags |= FLAG_READ1; }
-        if entry.is_last { flags |= FLAG_READ2; }
+        if entry.is_first {
+            flags |= FLAG_READ1;
+        }
+        if entry.is_last {
+            flags |= FLAG_READ2;
+        }
         if mate.is_reverse {
             flags |= FLAG_MATE_REVERSE;
         } else {
@@ -705,7 +763,6 @@ fn build_projected_record(
     Ok(out)
 }
 
-
 /// Single-pass aux tag filter: iterate raw aux bytes once, copy everything
 /// except tags in `SKIP_TAGS`, then truncate the record's aux block and write
 /// the filtered bytes back.  O(n) total instead of O(|SKIP_TAGS| * n).
@@ -721,10 +778,9 @@ fn filter_aux_tags(out: &mut hts_bam::Record) {
     }
 
     // Copy aux bytes so we can read while mutating the record.
-    let aux_bytes: Vec<u8> = unsafe {
-        std::slice::from_raw_parts(out.inner.data.add(aux_start), l_data - aux_start)
-    }
-    .to_vec();
+    let aux_bytes: Vec<u8> =
+        unsafe { std::slice::from_raw_parts(out.inner.data.add(aux_start), l_data - aux_start) }
+            .to_vec();
 
     let mut kept = Vec::with_capacity(aux_bytes.len());
     let mut pos = 0;
@@ -779,11 +835,7 @@ fn filter_aux_tags(out: &mut hts_bam::Record) {
     out.inner.l_data = aux_start as i32;
     if !kept.is_empty() {
         unsafe {
-            std::ptr::copy_nonoverlapping(
-                kept.as_ptr(),
-                out.inner.data.add(aux_start),
-                kept.len(),
-            );
+            std::ptr::copy_nonoverlapping(kept.as_ptr(), out.inner.data.add(aux_start), kept.len());
         }
         out.inner.l_data = (aux_start + kept.len()) as i32;
     }
@@ -807,12 +859,11 @@ fn reverse_complement(seq: &mut [u8]) {
     }
 }
 
-
 /// Extract an integer value from any numeric Aux variant.
 fn hts_aux_as_int(aux: Option<Aux<'_>>) -> Option<i64> {
     match aux? {
-        Aux::I8(v)  => Some(v as i64),
-        Aux::U8(v)  => Some(v as i64),
+        Aux::I8(v) => Some(v as i64),
+        Aux::U8(v) => Some(v as i64),
         Aux::I16(v) => Some(v as i64),
         Aux::U16(v) => Some(v as i64),
         Aux::I32(v) => Some(v as i64),
@@ -825,15 +876,15 @@ fn hts_aux_as_int(aux: Option<Aux<'_>>) -> Option<i64> {
 fn hts_cigar_to_kind(op: &hts_bam::record::Cigar) -> (u32, CigarKind) {
     use hts_bam::record::Cigar::*;
     match op {
-        Match(n)    => (*n, CigarKind::Match),
-        Ins(n)      => (*n, CigarKind::Insertion),
-        Del(n)      => (*n, CigarKind::Deletion),
-        RefSkip(n)  => (*n, CigarKind::Skip),
+        Match(n) => (*n, CigarKind::Match),
+        Ins(n) => (*n, CigarKind::Insertion),
+        Del(n) => (*n, CigarKind::Deletion),
+        RefSkip(n) => (*n, CigarKind::Skip),
         SoftClip(n) => (*n, CigarKind::SoftClip),
         HardClip(n) => (*n, CigarKind::HardClip),
-        Pad(n)      => (*n, CigarKind::Pad),
-        Equal(n)    => (*n, CigarKind::SequenceMatch),
-        Diff(n)     => (*n, CigarKind::SequenceMismatch),
+        Pad(n) => (*n, CigarKind::Pad),
+        Equal(n) => (*n, CigarKind::SequenceMatch),
+        Diff(n) => (*n, CigarKind::SequenceMismatch),
     }
 }
 
@@ -847,12 +898,12 @@ fn update_cigar_hts(
     record: &hts_bam::Record,
     ideal: &bramble_rs::evaluate::Cigar,
 ) -> Result<(CigarString, i32)> {
-    let real_ops: Vec<SamCigarOp> = record.cigar().iter()
-        .map(hts_cigar_to_sam_op)
-        .collect();
+    let real_ops: Vec<SamCigarOp> = record.cigar().iter().map(hts_cigar_to_sam_op).collect();
     let (sam_cigar, nm) = bramble_rs::cigar::update_cigar_ops(&real_ops, ideal);
     // Convert SamCigar to htslib CigarString
-    let hts_ops: Vec<hts_bam::record::Cigar> = sam_cigar.as_ref().iter()
+    let hts_ops: Vec<hts_bam::record::Cigar> = sam_cigar
+        .as_ref()
+        .iter()
         .map(|op| {
             let kind = op.kind();
             let len = op.len();
