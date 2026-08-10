@@ -4,6 +4,11 @@
 #include <vector>
 #include <atomic>
 
+#include <chrono>
+#include <random>
+#include <atomic>
+#include <cstdio>
+
 #include "CLI/CLI11.hpp"
 #ifndef NOTHREADS
 #include "GThreads.h"
@@ -119,6 +124,14 @@ GFastMutex reading_mutex;
 GFastMutex bam_io_mutex;  // Protects BAM io
 #endif
 
+#ifdef _WIN32
+  #include <process.h>
+  #define GETPID _getpid
+#else
+  #include <unistd.h>
+  #define GETPID getpid
+#endif
+
 bool no_more_bundles = false;
 uint32_t total_reads;
 uint32_t unmapped_reads;
@@ -128,6 +141,27 @@ uint32_t total_unique;
 uint32_t total_processed;
 uint32_t seen_last_out;
 uint32_t print_mod;
+
+static unsigned long make_unique_stamp() {
+  using namespace std::chrono;
+
+  // Nanosecond-resolution monotonic clock — always available since C++11.
+  unsigned long long t = high_resolution_clock::now().time_since_epoch().count();
+
+  // Process ID: separates processes launched in the same instant.
+  unsigned long pid = (unsigned long)GETPID();
+
+  // Per-process call counter: separates multiple calls in one process,
+  // in case the clock's effective resolution is coarser than expected.
+  static std::atomic<unsigned long> counter{0};
+  unsigned long seq = counter.fetch_add(1);
+
+  // True randomness (or best available PRNG seed) as a final layer.
+  static std::mt19937_64 rng(std::random_device{}());
+  unsigned long long r = rng();
+
+  return (unsigned long)(t ^ (pid * 2654435761UL) ^ (seq * 40503UL) ^ r);
+}
 
 std::shared_ptr<g2tTree> build_g2t_tree(GVec<GRefData> refguides, 
                                         BamIO *io) {
@@ -510,7 +544,9 @@ int main(int argc, char *argv[]) {
   }
 
   // Create SAM header file
-  const GStr header_path = "tmp_header.sam";
+  char buf[64];
+  snprintf(buf, sizeof(buf), "tmp.%lu.sam", make_unique_stamp());
+  const GStr header_path(buf);
   FILE *header_file = fopen(header_path.chars(), "w");
   if (header_file == NULL)
     LOG_ERROR(logger, "error creating header file: {}", 
@@ -635,6 +671,7 @@ int main(int argc, char *argv[]) {
   
   BamIO *io = new BamIO(bam_file_in, bam_file_out, header_path);
   io->start();
+  std::remove(header_path.chars());
 
   auto g2t = build_g2t_tree(refguides, io);
 
@@ -722,9 +759,6 @@ int main(int argc, char *argv[]) {
   io->stop(); // close BAM reader & writer
   delete io;
   delete gfasta;
-
-  // Delete SAM header file from folder
-  std::remove(header_path.chars());
 
   if (!QUIET || BRAMBLE_DEBUG) {
     printf("\n[bramble] final report:\n");
