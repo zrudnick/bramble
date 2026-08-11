@@ -1,6 +1,6 @@
 # bramble🌿🫐 
 
-bramble is a fast and versatile program that projects spliced genomic alignments into transcriptomic space, enabling transcript quantification to work with genomic alignments. It works with any alignment method and any quantification method that can use alignments as input. Furthermore, it has several modes optimized for different short- and long-read sequencing technologies. You can access bramble as a standalone executable in either C++ or Rust, as a library in Rust, or directly in Oarfish (and coming soon: Salmon!).
+bramble is a fast and versatile program that projects spliced genomic alignments into transcriptomic space, enabling transcript quantification to work with genomic alignments. It works with any alignment method and any quantification method that can use alignments as input. Furthermore, it has several modes optimized for different short- and long-read sequencing technologies. You can access bramble as a standalone executable in either C++ or Rust, as a library in Rust, or directly in [salmon](https://github.com/COMBINE-lab/salmon) or [oarfish](https://github.com/COMBINE-lab/oarfish).
 
 ## Installation
 
