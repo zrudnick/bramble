@@ -176,6 +176,28 @@ pub struct ProjectedAlignment {
     /// Use this to correlate projected results back to the original BAM records
     /// or minimap2 mappings.
     pub input_index: usize,
+    /// Number of internal exon boundaries where the read's splice structure
+    /// *agrees* with this transcript.
+    ///
+    /// Together with [`junc_misses`](Self::junc_misses) this describes how much
+    /// junction evidence the read actually carries: a single-exon read, or one
+    /// contained within an exon, spans no internal boundaries and so has
+    /// `junc_hits == 0 && junc_misses == 0`. Such a read is uninformative about
+    /// splice structure and must be distinguished from one that spans several
+    /// boundaries and matches them all.
+    pub junc_hits: i32,
+    /// Number of internal exon boundaries where the read does **not** match this
+    /// transcript.
+    ///
+    /// This is direct evidence that the read came from a different isoform. A
+    /// read with `junc_misses > 0` against *every* candidate transcript is
+    /// evidence that its true isoform is missing from the annotation, which is
+    /// the signal an annotation-omission model needs. It is also what
+    /// `junc_miss_discount` penalizes when computing
+    /// [`similarity_score`](Self::similarity_score); that discount is already
+    /// applied to the score, so consumers combining both should avoid
+    /// double-counting.
+    pub junc_misses: i32,
 }
 
 /// Evaluation parameters for [`project_group`].
@@ -206,17 +228,65 @@ pub struct ProjectionConfig {
     /// tolerated gap/insertion at an internal junction), which is evidence the
     /// read came from a different isoform.
     pub junc_miss_discount: f64,
+    /// Override the projection similarity threshold; `None` keeps the preset
+    /// implied by `long_reads` (0.60 for long reads, the 1.0 disable-sentinel
+    /// for short reads).
+    ///
+    /// A transcript is retained as a projection target only when the read's
+    /// coverage-to-operations ratio exceeds this value, so lowering it admits
+    /// reads whose splice structure agrees less well with every annotated
+    /// transcript. Note the threshold is also the anchor of the retained score
+    /// rescale `x = (similarity - threshold) / (1 - threshold)`: it sets how
+    /// permissive projection is, not the retain cutoff alone.
+    pub similarity_threshold: Option<f32>,
+    /// Override the maximum tolerated soft clip; `None` keeps the `long_reads`
+    /// preset (40 for long reads).
+    pub max_clip: Option<u8>,
+    /// Override the maximum insertion tolerated at an internal junction; `None`
+    /// keeps the `long_reads` preset (40 for long reads).
+    ///
+    /// Together with `max_junc_gap` and `max_error_exon` this governs how much
+    /// splice-structure disagreement an exon-chain match may absorb before the
+    /// transcript stops being a viable projection target at all. These are the
+    /// knobs that actually exclude reads from an unannotated isoform — a read
+    /// whose junctions disagree beyond these tolerances yields no match, so it
+    /// never reaches the similarity filter.
+    pub max_junc_ins: Option<u8>,
+    /// Override the maximum gap tolerated at an internal junction; `None` keeps
+    /// the `long_reads` preset (40 for long reads).
+    pub max_junc_gap: Option<u8>,
+    /// Override the small-exon error tolerance; `None` keeps the `long_reads`
+    /// preset (35 for long reads). `0` disables small-exon tolerance entirely.
+    pub max_error_exon: Option<u8>,
 }
 
 impl ProjectionConfig {
     /// Short-read (Illumina) defaults — matches C++ `ShortReadEvaluator`.
     pub fn short_read() -> Self {
-        Self { long_reads: false, use_fasta: false, junc_miss_discount: 1.0 }
+        Self {
+            long_reads: false,
+            use_fasta: false,
+            junc_miss_discount: 1.0,
+            similarity_threshold: None,
+            max_clip: None,
+            max_junc_ins: None,
+            max_junc_gap: None,
+            max_error_exon: None,
+        }
     }
 
     /// Long-read (PacBio / ONT) defaults — matches C++ `LongReadEvaluator`.
     pub fn long_read() -> Self {
-        Self { long_reads: true, use_fasta: false, junc_miss_discount: 1.0 }
+        Self {
+            long_reads: true,
+            use_fasta: false,
+            junc_miss_discount: 1.0,
+            similarity_threshold: None,
+            max_clip: None,
+            max_junc_ins: None,
+            max_junc_gap: None,
+            max_error_exon: None,
+        }
     }
 }
 
@@ -286,11 +356,11 @@ pub fn project_group_with(
         lr_hq: false,
         strict: false,
         use_fasta: config.use_fasta,
-        max_clip: None,
-        max_junc_ins: None,
-        max_junc_gap: None,
-        similarity_threshold: None,
-        max_error_exon: None,
+        max_clip: config.max_clip,
+        max_junc_ins: config.max_junc_ins,
+        max_junc_gap: config.max_junc_gap,
+        similarity_threshold: config.similarity_threshold,
+        max_error_exon: config.max_error_exon,
         junc_miss_discount: Some(config.junc_miss_discount),
     };
     let ctx = &mut pctx.ctx;
@@ -427,6 +497,8 @@ pub fn project_group_with(
             same_transcript_as_mate: entry.same_transcript,
             insert_size,
             input_index: entry.record_idx,
+            junc_hits: entry.align.junc_hits,
+            junc_misses: entry.align.junc_misses,
         });
     }
     out
@@ -451,4 +523,46 @@ fn infer_strand(a: &GenomicAlignment) -> (char, bool) {
     // No strand tag present — return '.' so the evaluator checks both strands,
     // matching C++ get_strand() behavior when no --fr/--rf flag is set.
     ('.', false)
+}
+
+#[cfg(test)]
+mod junction_evidence_tests {
+    use super::*;
+
+    /// The junction counts must survive onto the public projection result;
+    /// consumers use them to detect reads whose splice structure disagrees with
+    /// every candidate transcript.
+    #[test]
+    fn projected_alignment_exposes_junction_counts() {
+        let p = ProjectedAlignment {
+            transcript_id: 0,
+            transcript_start: 1,
+            transcript_end: 100,
+            aligned_len: 100,
+            query_aligned_len: 100,
+            is_reverse: false,
+            similarity_score: 1.0,
+            nh: 1,
+            hi: 1,
+            is_primary: true,
+            same_transcript_as_mate: false,
+            insert_size: 0,
+            input_index: 0,
+            junc_hits: 3,
+            junc_misses: 1,
+        };
+        assert_eq!(p.junc_hits, 3);
+        assert_eq!(p.junc_misses, 1);
+    }
+
+    /// A read spanning no internal boundary is uninformative about splice
+    /// structure, and must be distinguishable from one that spans several and
+    /// matches them all. Both have `junc_misses == 0`.
+    #[test]
+    fn zero_misses_is_ambiguous_without_hits() {
+        let uninformative = (0i32, 0i32); // (hits, misses): single-exon read
+        let confirming = (4i32, 0i32); // spans four boundaries, all matching
+        assert_eq!(uninformative.1, confirming.1);
+        assert_ne!(uninformative.0, confirming.0);
+    }
 }

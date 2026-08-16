@@ -155,6 +155,27 @@ impl IntervalTree {
         found
     }
 
+    /// Every transcript with an exon overlapping `[qstart, qend)`, ignoring
+    /// splice compatibility, clip tolerance, strand and exon status.
+    ///
+    /// This answers "which annotated transcripts does this read sit on top
+    /// of?", not "which can it be projected onto?" — so it still returns
+    /// something for a read whose splice structure matches no annotated
+    /// isoform, which is exactly the read [`find_overlapping`] rejects.
+    /// Results are appended to `out` and may contain duplicates (one entry per
+    /// overlapping exon); de-duplicate if you need a transcript set.
+    ///
+    /// [`find_overlapping`]: IntervalTree::find_overlapping
+    pub fn overlapping_tids(&self, qstart: u32, qend: u32, out: &mut Vec<Tid>) {
+        let tree = match self.tree.as_ref() {
+            Some(t) => t,
+            None => return,
+        };
+        tree.query(qstart as i32, qend.saturating_sub(1) as i32, |node| {
+            out.push(node.metadata.tid)
+        });
+    }
+
     pub fn find_overlapping(
         &self,
         qstart: u32,
@@ -394,6 +415,23 @@ impl G2TTree {
         rc.index();
     }
 
+    /// Transcripts with an exon overlapping `[start, end)` on `refid`, on either
+    /// strand, ignoring splice compatibility entirely.
+    ///
+    /// Intended for attributing a read that failed projection to the locus it
+    /// physically lies on. Returns a de-duplicated, ascending list of transcript
+    /// ids; empty when the interval touches no annotated exon (intergenic).
+    pub fn overlapping_transcripts(&self, refid: RefId, start: u32, end: u32) -> Vec<Tid> {
+        let mut out = Vec::new();
+        if let Some((fw, rc)) = self.trees.get(&refid) {
+            fw.overlapping_tids(start, end, &mut out);
+            rc.overlapping_tids(start, end, &mut out);
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     pub fn get_guide_exon_for_tid(
         &self,
         refid: RefId,
@@ -583,5 +621,42 @@ mod tests {
         assert_eq!(g2t.transcript_len(1), Some(30));
         assert_eq!(g2t.transcript_lengths(), &[100, 30]);
         assert_eq!(g2t.transcript_names(), &["tx1".to_string(), "tx2".to_string()]);
+    }
+
+    /// `overlapping_transcripts` locates a read's *locus* and must therefore
+    /// ignore splice compatibility and strand entirely -- it is the fallback for
+    /// reads that `find_overlapping` rejects.
+    #[test]
+    fn overlapping_transcripts_ignores_strand_and_compatibility() {
+        let txs = vec![
+            Transcript {
+                id: "tx1".to_string(),
+                seqname: "chr1".to_string(),
+                strand: '+',
+                exons: vec![Exon { start: 100, end: 150 }, Exon { start: 200, end: 250 }],
+            },
+            Transcript {
+                id: "tx2".to_string(),
+                seqname: "chr1".to_string(),
+                strand: '-',
+                exons: vec![Exon { start: 300, end: 330 }],
+            },
+        ];
+        let refnames = vec!["chr1".to_string()];
+        let g2t = build_g2t_from_refnames(&txs, &refnames, None).expect("build_g2t");
+
+        // Inside tx1's first exon.
+        assert_eq!(g2t.overlapping_transcripts(0, 110, 120), vec![0]);
+        // A span crossing tx1's intron still reports tx1 once (de-duplicated
+        // across the two overlapping exons), even though nothing about the
+        // span's splice structure was checked.
+        assert_eq!(g2t.overlapping_transcripts(0, 140, 210), vec![0]);
+        // tx2 is on the opposite strand and must still be found.
+        assert_eq!(g2t.overlapping_transcripts(0, 305, 310), vec![1]);
+        // A span covering both transcripts reports both, ascending.
+        assert_eq!(g2t.overlapping_transcripts(0, 100, 400), vec![0, 1]);
+        // Intergenic and unknown-reference queries are empty, not errors.
+        assert!(g2t.overlapping_transcripts(0, 260, 290).is_empty());
+        assert!(g2t.overlapping_transcripts(7, 100, 200).is_empty());
     }
 }
