@@ -283,6 +283,67 @@ pub struct TidData {
     pub has_right_clip: bool,
 }
 
+/// Why a candidate transcript was eliminated during evaluation.
+///
+/// Every variant is a *silent binary* kill in the normal pipeline: the
+/// transcript simply produces no [`ExonChainMatch`]. When diagnostics are
+/// enabled the reason is recorded instead of lost, which is the information an
+/// annotation-omission or read-exclusion model needs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ElimReason {
+    /// A read segment overlapped none of this transcript's exons (the read has
+    /// aligned genomic sequence outside the transcript's structure).
+    SegmentOutsideTranscript,
+    /// The read's exon chain skips transcript exons beyond the tolerated
+    /// single-small-exon gap (exon-id gap > 2, an oversized skipped exon, or a
+    /// missing guide exon for a tolerated gap).
+    ExonSkip,
+    /// The chain matched the same guide exon twice in a row.
+    DuplicateExon,
+    /// No CIGAR was ever built for the match (no matched exon segment).
+    NoCigar,
+    /// Similarity `total_coverage / total_operations` at or below the
+    /// projection threshold; payload is the raw similarity.
+    LowSimilarity(f64),
+    /// Projected alignment would extend past the transcript's 3' end.
+    BeyondTranscriptEnd,
+}
+
+/// A whole-strand projection failure: some aligned read segment found no
+/// annotated exon on that strand, so *every* transcript on the strand was
+/// abandoned before per-transcript evaluation (see `get_intervals`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StrandFailure {
+    /// Strand pass that failed ('+' or '-').
+    pub strand: char,
+    /// Index of the offending aligned segment within the read's exon chain.
+    pub segment_index: usize,
+    /// Total aligned segments in the read's exon chain.
+    pub segment_count: usize,
+    /// The offending segment was the first or last segment of the chain.
+    pub terminal: bool,
+    /// The offending segment was small enough (<= max_error_exon) that it
+    /// could have been tolerated in an internal position.
+    pub small_exon: bool,
+}
+
+/// Diagnostics for one `evaluate()` call (one genomic alignment), collected
+/// only when enabled on the [`EvalContext`]. Zero-cost when disabled.
+#[derive(Debug, Default, Clone)]
+pub struct EvalDiag {
+    /// Strand passes abandoned because a read segment had no annotated exon.
+    pub strand_failures: Vec<StrandFailure>,
+    /// Candidate transcripts eliminated, with reasons. A transcript eliminated
+    /// on one strand pass may still match on the other; consumers should treat
+    /// an entry here as "eliminated on some strand pass" and check whether the
+    /// tid also appears among the kept matches.
+    pub eliminated: Vec<(Tid, ElimReason)>,
+    /// Soft-clip lengths detected on the read (0 when clip rescue disabled).
+    pub left_clip_bases: u32,
+    /// See `left_clip_bases`.
+    pub right_clip_bases: u32,
+}
+
 #[derive(Debug)]
 pub struct ReadAln {
     pub strand: char,
@@ -317,6 +378,9 @@ pub struct EvalContext {
     pub(crate) aligner: ksw2rs::Aligner,
     /// Reusable scratch buffers for SW encoding.
     pub(crate) sw_bufs: sw::SwBufs,
+    /// When `Some`, kill sites record why candidates were eliminated instead of
+    /// dropping them silently. `None` (the default) is zero-cost.
+    pub diag: Option<Box<EvalDiag>>,
 }
 
 impl EvalContext {
@@ -329,6 +393,7 @@ impl EvalContext {
             tids_buf: Vec::new(),
             aligner: ksw2rs::Aligner::new(),
             sw_bufs: sw::SwBufs::new(),
+            diag: None,
         }
     }
 }
@@ -477,8 +542,11 @@ pub fn get_intervals(
         }
 
         for (tid, td) in ctx.data.iter_mut() {
-            if !ctx.candidate_tids.contains(tid) {
+            if !ctx.candidate_tids.contains(tid) && !td.elim {
                 td.elim = true;
+                if let Some(d) = ctx.diag.as_deref_mut() {
+                    d.eliminated.push((*tid, ElimReason::SegmentOutsideTranscript));
+                }
             }
         }
 
@@ -486,10 +554,22 @@ pub fn get_intervals(
     }
 
     // guide exons empty
+    let record_failure = |ctx: &mut EvalContext| {
+        if let Some(d) = ctx.diag.as_deref_mut() {
+            d.strand_failures.push(StrandFailure {
+                strand,
+                segment_index: j,
+                segment_count: exon_count,
+                terminal: j == 0 || j + 1 == exon_count,
+                small_exon: is_small_exon,
+            });
+        }
+    };
     if status != ExonStatus::OnlyExon && config.ignore_small_exons && is_small_exon {
         if status == ExonStatus::MiddleExon {
             if ctx.data.is_empty() {
                 *failure = true;
+                record_failure(ctx);
                 return;
             }
             for td in ctx.data.values_mut() {
@@ -507,11 +587,13 @@ pub fn get_intervals(
             }
         } else {
             *failure = true;
+            record_failure(ctx);
         }
         return;
     }
 
     *failure = true;
+    record_failure(ctx);
 }
 
 fn seq_slice_from_shared(shared: Option<&[u8]>, read: &ReadAln, start: usize, len: usize) -> Vec<u8> {
@@ -924,7 +1006,16 @@ pub fn correct_for_gaps(
     strand: char,
     refid: RefId,
     long_reads: bool,
+    mut diag: Option<&mut EvalDiag>,
 ) {
+    // Record the elimination reason (when diagnostics are on) at every kill
+    // site below; the normal pipeline just sets `elim` and forgets why.
+    let mut elim_skip = |tid_data: &mut TidData, diag: &mut Option<&mut EvalDiag>| {
+        tid_data.elim = true;
+        if let Some(d) = diag.as_deref_mut() {
+            d.eliminated.push((tid, ElimReason::ExonSkip));
+        }
+    };
     // Take ownership of segments to avoid cloning each one.
     let segments = std::mem::take(&mut tid_data.segments);
     let mut out: Vec<EvalSegment> = Vec::with_capacity(segments.len() + 4);
@@ -948,12 +1039,12 @@ pub fn correct_for_gaps(
             // specifically, when max_error_exon > 0
             if !long_reads {
                 if gap != 1 {
-                    tid_data.elim = true;
+                    elim_skip(tid_data, &mut diag);
                     return;
                 }
             } else {
                 if gap > 2 {
-                    tid_data.elim = true;
+                    elim_skip(tid_data, &mut diag);
                     return;
                 }
                 if gap == 2 {
@@ -966,14 +1057,14 @@ pub fn correct_for_gaps(
                     if (gap_start == 0 && gap_end == 0)
                         || gap_end.saturating_sub(gap_start) > config.max_error_exon
                     {
-                        tid_data.elim = true;
+                        elim_skip(tid_data, &mut diag);
                         return;
                     }
 
                     let prev_exon =
                         g2t.get_guide_exon_for_tid(refid, strand, tid, gap_start, gap_end);
                     let Some(prev_exon) = prev_exon else {
-                        tid_data.elim = true;
+                        elim_skip(tid_data, &mut diag);
                         return;
                     };
 
@@ -1209,6 +1300,7 @@ pub fn filter_by_similarity(
     matches: &mut HashMap<Tid, ExonChainMatch>,
     config: &ReadEvaluationConfig,
     name: &[u8],
+    mut diag: Option<&mut EvalDiag>,
 ) {
     // C++ gates this whole similarity retain on `config.filter_by_similarity`
     // (= `similarity_threshold < 1.0`). Short reads (threshold 1.0) DISABLE it:
@@ -1217,7 +1309,7 @@ pub fn filter_by_similarity(
     // also only rewrites the AS tag for long reads). When enabled (long reads),
     // drop sub-threshold matches and set `similarity_score = x²·(junc_hits+1)`.
     if config.filter_by_similarity {
-        matches.retain(|_tid, m| {
+        matches.retain(|tid, m| {
             let similarity = if m.total_operations > 0.0 {
                 m.total_coverage / m.total_operations
             } else {
@@ -1238,18 +1330,25 @@ pub fn filter_by_similarity(
                 m.align.similarity_score = x * x * ((m.junc_hits + 1) as f64) * miss_factor;
                 true
             } else {
+                if let Some(d) = diag.as_deref_mut() {
+                    d.eliminated.push((*tid, ElimReason::LowSimilarity(similarity)));
+                }
                 false
             }
         });
     }
 
-    matches.retain(|_tid, m| {
+    matches.retain(|tid, m| {
         let pos = if m.align.strand == '+' {
             m.align.fwpos
         } else {
             m.align.rcpos
         } as i32;
-        pos + m.ref_consumed <= m.transcript_len
+        let keep = pos + m.ref_consumed <= m.transcript_len;
+        if !keep && let Some(d) = diag.as_deref_mut() {
+            d.eliminated.push((*tid, ElimReason::BeyondTranscriptEnd));
+        }
+        keep
     });
 
     if matches.is_empty() {
@@ -1310,6 +1409,10 @@ pub fn evaluate_exon_chains(
     } else {
         (false, false, 0, 0)
     };
+    if let Some(d) = ctx.diag.as_deref_mut() {
+        d.left_clip_bases = n_left_clip;
+        d.right_clip_bases = n_right_clip;
+    }
 
     let strands_to_check = get_strands_to_check(read, long_reads);
     for strand in strands_to_check {
@@ -1347,11 +1450,21 @@ pub fn evaluate_exon_chains(
         ctx.tids_buf.clear();
         ctx.tids_buf.extend(ctx.data.keys().copied());
         for tid in &ctx.tids_buf {
-            let td = ctx.data.get_mut(tid).unwrap();
+            let EvalContext { data, diag, .. } = ctx;
+            let td = data.get_mut(tid).unwrap();
             if td.elim {
                 continue;
             }
-            correct_for_gaps(td, *tid, &config, g2t, strand, refid, long_reads);
+            correct_for_gaps(
+                td,
+                *tid,
+                &config,
+                g2t,
+                strand,
+                refid,
+                long_reads,
+                diag.as_deref_mut(),
+            );
         }
 
         if long_reads && config.use_fasta {
@@ -1402,7 +1515,13 @@ pub fn evaluate_exon_chains(
             }
         }
 
-        for (tid, td) in ctx.data.iter_mut() {
+        let EvalContext {
+            data,
+            diag,
+            matches,
+            ..
+        } = &mut *ctx;
+        for (tid, td) in data.iter_mut() {
             if td.elim {
                 continue;
             }
@@ -1426,6 +1545,9 @@ pub fn evaluate_exon_chains(
                 if let Some(gexon) = segment.gexon.as_ref() {
                     if gexon.start == prev_s && gexon.end == prev_e {
                         td.elim = true;
+                        if let Some(d) = diag.as_deref_mut() {
+                            d.eliminated.push((*tid, ElimReason::DuplicateExon));
+                        }
                         break;
                     }
                     prev_s = gexon.start;
@@ -1469,6 +1591,9 @@ pub fn evaluate_exon_chains(
 
             if td.match_info.align.cigar.is_none() {
                 td.elim = true;
+                if let Some(d) = diag.as_deref_mut() {
+                    d.eliminated.push((*tid, ElimReason::NoCigar));
+                }
                 continue;
             }
 
@@ -1523,13 +1648,18 @@ pub fn evaluate_exon_chains(
             }
 
             if !td.elim {
-                ctx.matches.insert(*tid, std::mem::take(&mut td.match_info));
+                matches.insert(*tid, std::mem::take(&mut td.match_info));
             }
         }
     }
 
     if !ctx.matches.is_empty() {
-        filter_by_similarity(&mut ctx.matches, &config, &read.name);
+        filter_by_similarity(
+            &mut ctx.matches,
+            &config,
+            &read.name,
+            ctx.diag.as_deref_mut(),
+        );
     }
 }
 #[derive(Debug, Default)]

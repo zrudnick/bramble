@@ -198,6 +198,46 @@ pub struct ProjectedAlignment {
     /// applied to the score, so consumers combining both should avoid
     /// double-counting.
     pub junc_misses: i32,
+    /// Summed ksw2 soft-clip rescue score against this transcript (0 when no
+    /// clip was rescued or rescue is disabled).
+    ///
+    /// A clipped read tail that re-aligns well to this transcript's adjacent
+    /// exons is evidence *for* this transcript; a tail that rescues poorly (or
+    /// not at all) while the genome aligner placed those bases elsewhere is
+    /// evidence the read arose outside the transcript.
+    pub clip_score: i32,
+    /// Raw similarity numerator: bases covered by annotated exonic structure.
+    ///
+    /// `total_coverage / total_operations` is the *unshaped* similarity that
+    /// [`similarity_score`](Self::similarity_score) is derived from; the raw
+    /// ratio is monotone in agreement and free of the junction-count shaping.
+    pub total_coverage: f64,
+    /// Raw similarity denominator: total evaluated operations (matched +
+    /// inserted + gapped + clipped, with consecutive-indel penalties).
+    pub total_operations: f64,
+}
+
+/// Per-input-alignment projection diagnostics: why candidates were eliminated
+/// and how much of the read was clipped. Collected only after
+/// [`ProjectionContext::enable_diagnostics`]; drain with
+/// [`ProjectionContext::take_diagnostics`] after each
+/// [`project_group_with`] call.
+#[derive(Debug, Clone, Default)]
+pub struct ProjectionDiagnostics {
+    /// Index of the input [`GenomicAlignment`] these diagnostics describe.
+    pub input_index: usize,
+    /// Strand passes abandoned because an aligned read segment overlapped no
+    /// annotated exon (unannotated exon / retained intron / intergenic span).
+    pub strand_failures: Vec<crate::evaluate::StrandFailure>,
+    /// Candidate transcripts eliminated during evaluation, with reasons. A
+    /// transcript eliminated on one strand pass may still be kept via the
+    /// other; check membership among the kept results before treating an entry
+    /// as a hard rejection.
+    pub eliminated: Vec<(u32, crate::evaluate::ElimReason)>,
+    /// Soft-clip length detected at the reference-left end of the read.
+    pub left_clip_bases: u32,
+    /// Soft-clip length detected at the reference-right end of the read.
+    pub right_clip_bases: u32,
 }
 
 /// Evaluation parameters for [`project_group`].
@@ -300,12 +340,35 @@ impl ProjectionConfig {
 /// call, so a single context can be reused for unrelated read groups.
 pub struct ProjectionContext {
     ctx: EvalContext,
+    collected_diags: Vec<ProjectionDiagnostics>,
 }
 
 impl ProjectionContext {
     /// Allocate a fresh projection context.
     pub fn new() -> Self {
-        Self { ctx: EvalContext::new() }
+        Self {
+            ctx: EvalContext::new(),
+            collected_diags: Vec::new(),
+        }
+    }
+
+    /// Turn on elimination/failure diagnostics for subsequent
+    /// [`project_group_with`] calls using this context.
+    ///
+    /// When enabled, each call records one [`ProjectionDiagnostics`] per input
+    /// alignment; retrieve them with
+    /// [`take_diagnostics`](Self::take_diagnostics). Disabled contexts pay no
+    /// cost.
+    pub fn enable_diagnostics(&mut self) {
+        if self.ctx.diag.is_none() {
+            self.ctx.diag = Some(Box::default());
+        }
+    }
+
+    /// Drain the diagnostics accumulated since the last call (one entry per
+    /// input alignment of each projected group, in input order).
+    pub fn take_diagnostics(&mut self) -> Vec<ProjectionDiagnostics> {
+        std::mem::take(&mut self.collected_diags)
     }
 }
 
@@ -363,7 +426,10 @@ pub fn project_group_with(
         max_error_exon: config.max_error_exon,
         junc_miss_discount: Some(config.junc_miss_discount),
     };
-    let ctx = &mut pctx.ctx;
+    let ProjectionContext {
+        ctx,
+        collected_diags,
+    } = pctx;
 
     // The shared sequence is only needed for soft-clip rescue (use_fasta); skip
     // the clone entirely otherwise (the common case).
@@ -399,6 +465,17 @@ pub fn project_group_with(
         };
 
         evaluator.evaluate(&read, idx as ReadId, index, shared_seq.as_deref(), ctx);
+        if let Some(d) = ctx.diag.as_deref_mut() {
+            collected_diags.push(ProjectionDiagnostics {
+                input_index: idx,
+                strand_failures: std::mem::take(&mut d.strand_failures),
+                eliminated: std::mem::take(&mut d.eliminated),
+                left_clip_bases: d.left_clip_bases,
+                right_clip_bases: d.right_clip_bases,
+            });
+            d.left_clip_bases = 0;
+            d.right_clip_bases = 0;
+        }
         let matches: HashMap<Tid, ExonChainMatch> = ctx.matches
             .drain()
             .filter(|(_, m)| m.align.cigar.is_some())
@@ -499,6 +576,9 @@ pub fn project_group_with(
             input_index: entry.record_idx,
             junc_hits: entry.align.junc_hits,
             junc_misses: entry.align.junc_misses,
+            clip_score: entry.align.align.clip_score,
+            total_coverage: entry.align.total_coverage,
+            total_operations: entry.align.total_operations,
         });
     }
     out
@@ -550,6 +630,9 @@ mod junction_evidence_tests {
             input_index: 0,
             junc_hits: 3,
             junc_misses: 1,
+            clip_score: 0,
+            total_coverage: 100.0,
+            total_operations: 100.0,
         };
         assert_eq!(p.junc_hits, 3);
         assert_eq!(p.junc_misses, 1);

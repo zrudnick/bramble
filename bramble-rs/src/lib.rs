@@ -45,10 +45,11 @@ pub mod g2t;
 
 // Flat re-exports for the most commonly used public types.
 pub use api::{
-    GenomicAlignment, ProjectedAlignment, ProjectionConfig, ProjectionContext, project_group,
-    project_group_with,
+    GenomicAlignment, ProjectedAlignment, ProjectionConfig, ProjectionContext,
+    ProjectionDiagnostics, project_group, project_group_with,
 };
 pub use evaluate::ReadEvaluationConfig;
+pub use evaluate::{ElimReason, StrandFailure};
 pub use g2t::G2TTree;
 
 // Re-exports used by bramble-cli and the integration tests.
