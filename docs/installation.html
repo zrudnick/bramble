@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — installation</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="brand">bramble 🌿🫐</span>
+  <nav>
+    <a href="index.html">Overview</a>
+    <a href="installation.html" class="active">Installation</a>
+    <a href="usage.html">Usage</a>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<main>
+  <h1>Installation</h1>
+  <p class="subtitle">bramble is available as a C++ executable or a Rust crate.</p>
+
+  <h2>C++</h2>
+  <p>
+    bramble uses the <code>meson</code> build system. System dependencies are required
+    for <code>zlib</code>, <code>bz2</code>, and <code>lzma</code> (meson will try to build
+    <code>zlib</code> and <code>bz2</code> via wrapdb if they aren't found on the system).
+    You'll also need <code>meson</code>, <code>ninja</code>, and <code>autotools</code> installed.
+  </p>
+  <p>Run <code>build.sh</code> directly, or build manually:</p>
+  <pre><code>&gt; meson setup build
+&gt; cd build
+&gt; ninja</code></pre>
+  <p>This produces the <code>bramble</code> executable. Tested with meson 1.7 and 1.8 (likely works with older versions too).</p>
+
+  <h2>Rust</h2>
+  <pre><code>&gt; cargo install bramble-cli</code></pre>
+  <p>
+    This builds against the system htslib prerequisites (zlib, bzip2); a C compiler and
+    libclang (for bindgen) are required at build time.
+  </p>
+  <p>
+    <code>bramble-cli</code> is the command-line front-end for bramble's Rust implementation.
+    The projection logic lives in the I/O-free <code>bramble-rs</code> library; this crate adds
+    the htslib-backed BAM reader/writer, threading, and CLI.
+  </p>
+  <p>
+    Note: the installed executable is named <code>bramble-rs</code> (the crate is
+    <code>bramble-cli</code> only, to disambiguate it from the library on crates.io).
+  </p>
+
+  <p><a href="usage.html">Next: Usage &rarr;</a></p>
+</main>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>

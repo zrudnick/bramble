@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — usage</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="brand">bramble 🌿🫐</span>
+  <nav>
+    <a href="index.html">Overview</a>
+    <a href="installation.html">Installation</a>
+    <a href="usage.html" class="active">Usage</a>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<main>
+  <h1>Usage</h1>
+  <p class="subtitle">
+    Input BAMs should be collated by read name (e.g. <code>samtools collate</code>) so that
+    all alignments of a read are processed together.
+  </p>
+
+  <h2>Quick start</h2>
+
+  <h3>C++</h3>
+  <pre><code># Genome-aligned, name-collated BAM + annotation -> transcriptome-coordinate BAM.
+# The input BAM is positional; -G/--guide is the annotation, -o/--out the output.
+bramble genome.bam -G annotation.gtf -o transcriptome.bam
+
+# Long reads: enable long-read evaluation (--lr), and pass the genome FASTA
+# (-S/--genome) to recover soft-clipped ends.
+bramble genome.bam -G annotation.gtf -o transcriptome.bam \
+   --lr -S genome.fa -p 16</code></pre>
+
+  <h3>Rust</h3>
+  <pre><code># Genome-aligned, name-collated BAM + annotation -> transcriptome-coordinate BAM.
+# The input BAM is positional; -G/--guide is the annotation, -o/--out the output.
+bramble-rs genome.bam -G annotation.gtf -o transcriptome.bam
+
+# Long reads: enable long-read evaluation (--lr), and pass the genome FASTA
+# (-S/--genome) to recover soft-clipped ends.
+bramble-rs genome.bam -G annotation.gtf -o transcriptome.bam \
+    --lr -S genome.fa -p 16</code></pre>
+
+  <h2>Full option reference</h2>
+  <pre><code>bramble &lt;in.bam&gt; [-G &lt;annotation.gtf&gt;] [-o &lt;out.bam&gt;] [-p &lt;UINT&gt;] [-S &lt;genome.fa&gt;]
+ [--help] [--version] [--quiet] [--fr] [--rf] [--lr] [--lr-hq] [--strict]
+ [--max-soft-clip &lt;UINT&gt;] [--max-junction-insertion &lt;UINT&gt;] [--max-junction-deletion &lt;UINT&gt;]
+ [--max-error-exon &lt;UINT&gt;] [--similarity-threshold &lt;FLOAT&gt;]</code></pre>
+
+  <table>
+    <tr><th>Option</th><th>Description</th></tr>
+    <tr><td><code>--help</code></td><td>print the usage message and exit</td></tr>
+    <tr><td><code>--version</code></td><td>print just the version and exit</td></tr>
+    <tr><td><code>--quiet</code></td><td>turn off verbose mode (log bundle processing details)</td></tr>
+    <tr><td><code>--fr</code></td><td>assume stranded library (first-strand, read2 sense)</td></tr>
+    <tr><td><code>--rf</code></td><td>assume stranded library (second-strand, read1 sense)</td></tr>
+    <tr><td><code>--lr</code></td><td>preset: alignments are from long reads</td></tr>
+    <tr><td><code>--lr-hq</code></td><td>preset: alignments are from high-quality long reads</td></tr>
+    <tr><td><code>--strict</code></td><td>force strict boundary adherence</td></tr>
+    <tr><td><code>--max-soft-clip</code></td><td>maximum added soft clip</td></tr>
+    <tr><td><code>--max-junction-insertion</code></td><td>maximum allowed insertion at any splice junction</td></tr>
+    <tr><td><code>--max-junction-deletion</code></td><td>maximum allowed deletion at any splice junction</td></tr>
+    <tr><td><code>--max-error-exon</code></td><td>maximum allowed size of an insertion or deletion of an entire exon, for sequencing technologies that produce long indels</td></tr>
+    <tr><td><code>--similarity-threshold</code></td><td>candidate transcripts with similarity scores above this threshold are kept</td></tr>
+    <tr><td><code>-G, --guide &lt;file&gt;</code></td><td>reference annotation for guiding alignment projection (GTF/GFF)</td></tr>
+    <tr><td><code>-S, --genome &lt;file&gt;</code></td><td>genome sequence file for long-read clip rescue (FASTA format)</td></tr>
+    <tr><td><code>-o, --out &lt;file&gt;</code></td><td>output path/file name for the projected alignments (default: stdout)</td></tr>
+    <tr><td><code>-p &lt;int&gt;</code></td><td>number of threads (CPUs) to use (default: 1)</td></tr>
+  </table>
+
+  <h2>Rust library</h2>
+  <p>
+    <code>bramble-rs</code> is the Rust library at the core of bramble. This crate is I/O-free:
+    it has no dependency on htslib / rust-htslib. You bring the alignments (from rust-htslib,
+    noodles, minimap2-rs, etc.) as plain structs, and bramble returns projected alignments as
+    plain structs. The companion <code>bramble-cli</code> crate wraps this library in a
+    BAM-in/BAM-out command-line tool (the <code>bramble-rs</code> executable).
+  </p>
+  <p>
+    See the <a href="https://github.com/zrudnick/bramble/blob/main/bramble-rs/README.md">bramble-rs README</a>
+    for usage examples.
+  </p>
+</main>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>

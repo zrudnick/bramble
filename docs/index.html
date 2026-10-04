@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — docs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="brand">bramble 🌿🫐</span>
+  <nav>
+    <a href="index.html" class="active">Overview</a>
+    <a href="installation.html">Installation</a>
+    <a href="usage.html">Usage</a>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<main>
+  <h1>bramble</h1>
+  <p class="subtitle">Projects spliced genomic alignments into transcriptomic space, enabling transcript quantification to work with genomic alignments.</p>
+
+  <div class="badge-row">
+    <span class="badge">C++</span>
+    <span class="badge">Rust</span>
+    <span class="badge">MIT License</span>
+  </div>
+
+  <p>
+    bramble works with any alignment method and any quantification method that can use
+    alignments as input, with several modes optimized for different short- and long-read
+    sequencing technologies. It's available as a standalone executable in either C++ or
+    Rust, as a library in Rust, or directly embedded in
+    <a href="https://github.com/COMBINE-lab/oarfish">Oarfish</a> (with Salmon support coming soon).
+  </p>
+
+  <h2>Get started</h2>
+  <div class="card-grid">
+    <div class="card">
+      <h3>Installation</h3>
+      <p>Build from source with meson, or install the Rust CLI via cargo.</p>
+      <p><a href="installation.html">Read the install guide &rarr;</a></p>
+    </div>
+    <div class="card">
+      <h3>Usage</h3>
+      <p>Quick start commands and the full CLI option reference.</p>
+      <p><a href="usage.html">Read the usage guide &rarr;</a></p>
+    </div>
+    <div class="card">
+      <h3>Rust library</h3>
+      <p>bramble-rs is the I/O-free core library used by the CLI and by Oarfish.</p>
+      <p><a href="https://github.com/zrudnick/bramble/blob/main/bramble-rs/README.md">bramble-rs README &rarr;</a></p>
+    </div>
+  </div>
+
+  <h2>Getting help</h2>
+  <p>
+    Run <code>bramble --help</code> to see all available options. For issues or
+    questions, please <a href="https://github.com/zrudnick/bramble/issues">open an issue</a>
+    on GitHub, or reach out at <a href="mailto:zrudnic1@jh.edu">zrudnic1@jh.edu</a>.
+  </p>
+</main>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>
