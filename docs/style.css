@@ -1,26 +1,28 @@
 :root {
   --bg: #fbfbf9;
-  --fg: #1a1f1c;
-  --muted: #5b6b5e;
+  --fg: #16201a;
+  --muted: #55684f;
   --accent: #3f7d4f;
   --accent2: #6a4c93;
+  --accent-soft: #e3f0e6;
   --card-bg: #ffffff;
-  --border: #e2e6e0;
-  --code-bg: #f0f2ee;
-  --code-fg: #1a1f1c;
+  --border: #dbe6dd;
+  --code-bg: #eef5ef;
+  --code-fg: #16201a;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #11140f;
-    --fg: #eef1ec;
-    --muted: #9fb0a2;
+    --bg: #10140e;
+    --fg: #eaf1ea;
+    --muted: #93ab93;
     --accent: #6fcf8a;
     --accent2: #b79bf0;
-    --card-bg: #181c15;
-    --border: #2a2f26;
-    --code-bg: #1d2118;
-    --code-fg: #eef1ec;
+    --accent-soft: #1b2e1f;
+    --card-bg: #151c14;
+    --border: #253326;
+    --code-bg: #182218;
+    --code-fg: #eaf1ea;
   }
 }
 
@@ -32,11 +34,11 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  line-height: 1.6;
+  font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+  line-height: 1.65;
 }
 
-a { color: var(--accent2); text-decoration: none; }
+a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
 .topbar {
@@ -48,19 +50,19 @@ a:hover { text-decoration: underline; }
   gap: 1.5rem;
   padding: 0.9rem 1.5rem;
   background: var(--bg);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 2px solid var(--accent-soft);
   flex-wrap: wrap;
 }
 
 .topbar .brand {
   font-weight: 700;
-  font-size: 1.1rem;
-  color: var(--fg);
+  font-size: 1.15rem;
+  color: var(--accent);
   margin-right: auto;
 }
 
 .topbar nav { display: flex; gap: 1.25rem; }
-.topbar nav a { color: var(--muted); font-weight: 500; }
+.topbar nav a { color: var(--muted); font-weight: 600; }
 .topbar nav a.active, .topbar nav a:hover { color: var(--accent); text-decoration: none; }
 
 main {
@@ -69,11 +71,16 @@ main {
   padding: 2.5rem 1.5rem 5rem;
 }
 
-h1 { font-size: 2.1rem; margin-bottom: 0.3rem; }
-h2 { font-size: 1.4rem; margin-top: 2.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
-h3 { font-size: 1.1rem; margin-top: 1.8rem; color: var(--accent); }
+h1 { font-size: 2.2rem; margin-bottom: 0.3rem; color: var(--accent); }
+h2 {
+  font-size: 1.45rem;
+  margin-top: 2.5rem;
+  border-bottom: 2px solid var(--accent-soft);
+  padding-bottom: 0.4rem;
+}
+h3 { font-size: 1.15rem; margin-top: 1.8rem; color: var(--accent); }
 
-.subtitle { color: var(--muted); font-size: 1.05rem; margin-top: 0; }
+.subtitle { color: var(--muted); font-size: 1.1rem; margin-top: 0; }
 
 .badge-row { display: flex; gap: 0.5rem; margin: 1rem 0; flex-wrap: wrap; }
 .badge {
@@ -82,7 +89,7 @@ h3 { font-size: 1.1rem; margin-top: 1.8rem; color: var(--accent); }
   border-radius: 999px;
   font-size: 0.78rem;
   font-weight: 600;
-  background: var(--code-bg);
+  background: var(--accent-soft);
   color: var(--accent);
   border: 1px solid var(--border);
 }
@@ -94,7 +101,9 @@ pre {
   border-radius: 8px;
   overflow-x: auto;
   border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
   font-size: 0.88rem;
+  font-family: "SF Mono", Consolas, Menlo, monospace;
 }
 
 code {
@@ -102,6 +111,7 @@ code {
   padding: 0.15rem 0.35rem;
   border-radius: 4px;
   font-size: 0.9em;
+  font-family: "SF Mono", Consolas, Menlo, monospace;
 }
 
 pre code { background: none; padding: 0; }
@@ -120,7 +130,7 @@ th, td {
   vertical-align: top;
 }
 
-th { color: var(--muted); font-weight: 600; }
+th { color: var(--accent); font-weight: 700; }
 
 .card-grid {
   display: grid;
@@ -134,8 +144,10 @@ th { color: var(--muted); font-weight: 600; }
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 1.1rem;
+  transition: border-color 0.15s ease;
 }
 
+.card:hover { border-color: var(--accent); }
 .card h3 { margin-top: 0; }
 .card p { color: var(--muted); margin: 0.4rem 0 0; font-size: 0.92rem; }
 
@@ -145,5 +157,5 @@ footer {
   padding: 1.5rem 1.5rem 3rem;
   color: var(--muted);
   font-size: 0.85rem;
-  border-top: 1px solid var(--border);
+  border-top: 2px solid var(--accent-soft);
 }
