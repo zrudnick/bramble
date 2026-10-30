@@ -18,5 +18,14 @@ noodles = { version = "0.119", features = ["sam", "gff", "gtf", "core"] }
 ksw2rs = "0.2.0"
 needletail = { version = "0.7", default-features = false }
 
+[features]
+# Projection internals for bramble-cli. Not part of the stable API: they expose
+# noodles types and may change in any release.
+internals = []
+
+[dev-dependencies]
+# The integration tests exercise the internals too.
+bramble-rs = { path = ".", features = ["internals"] }
+
 [profile.release]
 debug = true
