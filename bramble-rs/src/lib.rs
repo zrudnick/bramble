@@ -23,20 +23,28 @@
 
 // Internal modules. The BAM I/O + CLI (the old `bam_input`/`cli`/`header`/
 // `pipeline` modules) now live in the separate `bramble-cli` binary crate so
-// that this library does not depend on rust-htslib. The modules below are
-// `#[doc(hidden)] pub` (not part of the stable API) only so `bramble-cli` can
-// reach the projection internals it needs to build BAM records.
-#[doc(hidden)]
-pub mod alignment;
-#[doc(hidden)]
-pub mod cigar;
-#[doc(hidden)]
-pub mod evaluate;
-#[doc(hidden)]
-pub mod groups;
+// that this library does not depend on rust-htslib. `bramble-cli` reaches the
+// projection internals it needs to build BAM records through the `internals`
+// feature, which makes the modules below public. Their signatures use noodles
+// types, so they are not part of the stable API: without the feature they are
+// private, and the public API carries no noodles type — a noodles upgrade is
+// then not a breaking change for library users.
+macro_rules! internal_mod {
+    ($name:ident) => {
+        #[cfg(feature = "internals")]
+        #[doc(hidden)]
+        pub mod $name;
+        #[cfg(not(feature = "internals"))]
+        #[allow(dead_code)]
+        mod $name;
+    };
+}
+internal_mod!(alignment);
+internal_mod!(cigar);
+internal_mod!(evaluate);
+internal_mod!(groups);
+internal_mod!(types);
 pub(crate) mod sw;
-#[doc(hidden)]
-pub mod types;
 
 // Public modules — stable API surface.
 pub mod annotation;
@@ -52,8 +60,10 @@ pub use evaluate::ReadEvaluationConfig;
 pub use g2t::G2TTree;
 
 // Re-exports used by bramble-cli and the integration tests.
+#[cfg(feature = "internals")]
 #[doc(hidden)]
 pub use cigar::update_cigar_for_test;
+#[cfg(feature = "internals")]
 #[doc(hidden)]
 pub use evaluate::{Cigar, CigarOp};
 

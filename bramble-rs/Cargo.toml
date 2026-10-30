@@ -1,6 +1,6 @@
 [package]
 name = "bramble-rs"
-version = "0.1.9"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 description = "Project spliced genomic alignments into transcriptomic coordinates."
@@ -14,9 +14,18 @@ categories = ["science"]
 anyhow = "1.0"
 ahash = "0.8"
 coitrees = "0.4"
-noodles = { version = "0.116", features = ["sam", "gff", "gtf", "core"] }
+noodles = { version = "0.119", features = ["sam", "gff", "gtf", "core"] }
 ksw2rs = "0.2.0"
 needletail = { version = "0.7", default-features = false }
+
+[features]
+# Projection internals for bramble-cli. Not part of the stable API: they expose
+# noodles types and may change in any release.
+internals = []
+
+[dev-dependencies]
+# The integration tests exercise the internals too.
+bramble-rs = { path = ".", features = ["internals"] }
 
 [profile.release]
 debug = true
