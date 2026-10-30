@@ -67,6 +67,7 @@ version = "0.1.9"
 dependencies = [
  "ahash",
  "anyhow",
+ "bramble-rs",
  "coitrees",
  "ksw2rs",
  "needletail",
