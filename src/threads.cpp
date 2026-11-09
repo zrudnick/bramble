@@ -103,6 +103,7 @@ namespace bramble {
     bundle->Clear();
   }
 
+#ifndef NOTHREADS
   // Check that there aren't any threads waiting
   bool no_threads_waiting() {
     int threads = 
@@ -176,9 +177,10 @@ namespace bramble {
 
     return idx;
   }
+#endif // NOTHREADS
 
   // Process reads in previous bundle
-  void push_bundle(BundleData *bundle, GPVec<BundleData> *bundle_queue) {
+  void push_bundle(BundleData *bundle, GPVec<BundleData> *bundle_queue, BamIO *io) {
 
     if (bundle->reads.size() > 0) {
       bundle->getReady();

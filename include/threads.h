@@ -1,4 +1,3 @@
-
 #pragma once
 
 namespace bramble {
@@ -12,11 +11,13 @@ namespace bramble {
 
   void process_bundle(BundleData *bundle, BamIO *io);
 
+#ifndef NOTHREADS
   bool no_threads_waiting();
 
   void worker_thread(GThreadData &td);
 
   int wait_for_data(BundleData *bundles);
+#endif
 
-  void push_bundle(BundleData *bundle, GPVec<BundleData> *bundle_queue);
+  void push_bundle(BundleData *bundle, GPVec<BundleData> *bundle_queue, BamIO *io);
 }

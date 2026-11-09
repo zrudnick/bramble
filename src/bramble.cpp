@@ -87,7 +87,6 @@ std::optional<uint32_t> MAX_JUNC_GAP;
 std::optional<float> SIM_THR;
 std::optional<uint32_t> MAX_ERROR_EXON;
 
-FILE *f_out = NULL;       // Default: stdout
 uint8_t n_threads = 1;    // Threads, -p
 GStr bam_path_out;        // Output BAM path, -o
 GStr guide_gff;           // Reference annotation, -G
@@ -112,14 +111,14 @@ char bundle_work =
        // yet) Bit 1 set if there are Bundles ready in the queue
 
 GMutex wait_mutex;       // Controls threads_waiting (idle threads counter)
-std::atomic<uint8_t> threads_waiting; // Idle worker threads; // Idle worker threads
+std::atomic<uint8_t> threads_waiting; // Idle worker threads
 GConditionVar
     have_threads; // Will notify the bundle loader when a thread
                   // Is available to process the currently loaded bundle
 
 GConditionVar have_clear; // Will notify when bundle buf space available
 GMutex queue_mutex;       // Controls bundle_queue and bundles access
-GFastMutex log_mutex;     // Only when verbose - to avoid mangling the log output
+GFastMutex log_mutex;     // Only when verbose, to avoid mangling the log output
 GFastMutex reading_mutex;
 GFastMutex bam_io_mutex;  // Protects BAM io
 #endif
@@ -444,7 +443,7 @@ void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,
       bundle->evaluator = evaluator;
 
       // Push completed bundle
-      push_bundle(bundle, bundle_queue);
+      push_bundle(bundle, bundle_queue, io);
       id = 0;
 
       if (!more_alignments) {
@@ -557,7 +556,7 @@ int main(int argc, char *argv[]) {
   if (f == NULL) {
     LOG_ERROR(logger, "error: could not open reference annotation file {}", 
       guide_gff.chars());
-    return 0;
+    return 1;
   }
 
   // GffReader: transcripts only, sort by location
@@ -574,7 +573,7 @@ int main(int argc, char *argv[]) {
   if (n_refguides == 0 || gffreader->gflst.Count() == 0) {
     LOG_ERROR(logger, "error: could not find valid reference transcripts in {}\n", 
       guide_gff.chars());
-    return 0;
+    return 1;
   }
 
   GVec<GRefData> refguides;        // vector with guides for each chromosome
@@ -690,6 +689,8 @@ int main(int argc, char *argv[]) {
   for (GffObj* guide : used_guides)
     delete guide;            // free used guides (skipped by freeUnused)
 
+  GPVec<BundleData> bundle_queue(false);
+
   #ifndef NOTHREADS
 
 #define DEF_TSTACK_SIZE 8388608
@@ -710,7 +711,6 @@ int main(int argc, char *argv[]) {
 #endif
 
   GThread *threads = new GThread[n_threads]; // threads for processing bundles
-  GPVec<BundleData> bundle_queue(false);
   BundleData *bundles =
     new BundleData[n_threads + 1];           // redef with more bundles
 
@@ -769,5 +769,5 @@ int main(int argc, char *argv[]) {
     printf("# unique alignments:  %d\n\n", total_unique);
   }
   
-  f_out = stdout;
+  return 0;
 }

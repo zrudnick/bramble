@@ -23,7 +23,9 @@
 #include "quill/Logger.h"
 #include "quill/sinks/ConsoleSink.h"
 
+#ifndef NOTHREADS
 extern GFastMutex bam_io_mutex;     // protects BAM io
+#endif
 const uint32_t CHUNK_SIZE = 5000;   // size of each write to BAM
 extern double similarity_threshold;
 
