@@ -34,8 +34,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font-family: "Fraunces", Georgia, "Times New Roman", serif;
-  font-variation-settings: "WONK" 0;
+  font-family: "Literata", Georgia, "Times New Roman", serif;
   line-height: 1.65;
 }
 
