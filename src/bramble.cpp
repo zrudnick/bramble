@@ -40,37 +40,7 @@ using namespace bramble;
 
 #define VERSION "0.1.6"
 
-#define USAGE                                                                  \
-  "Bramble v" VERSION " usage:\n\n\
-bramble <in.bam ..> [-G <annotation.gtf>] [-o <out.bam>] [-p <cpus>] [-S <genome.fa>] \n\
- [--help] [--version] [--quiet] [--fr] [--rf] [--lr] [-lr-hq] [--strict] \n\
- [--max-soft-clip] [--max-junction-insertion] [--max-junction-deletion] \n\
- [--max-error-exon] [--similarity-threshold]\n\
- \n\
-Project spliced genomic alignments into transcriptomic space.\n\
-Options:\n\
- --help                   : print this usage message and exit\n\
- --version                : print just the version at stdout and exit\n\
- --quiet                  : turn off verbose mode (log bundle processing details)\n\
- --fr                     : assume stranded library (first-strand, read2 sense)\n\
- --rf                     : assume stranded library (second-strand, read1 sense)\n\
- --lr                     : preset: alignments are from long reads\n\
- --lr-hq                  : preset: alignments are from high-quality long reads\n\
- --strict                 : force strict boundary adherence\n\
- --max-soft-clip          : maximum added soft clip (overrides preset)\n\
- --max-junction-insertion : maximum allowed insertion at any splice junction (overrides preset)\n\
- --max-junction-deletion  : maximum allowed deletion at any splice junction (overrides preset)\n\
- --max-error-exon         : maximum allowed size of an insertion or deletion of an entire exon, \n\
-                            for sequencing technologies that produce long indels (overrides preset)\n\
- --similarity-threshold   : candidate transcripts with similarity scores above this threshold \n\
-                            are kept (overrides preset)\n\
- -G. --guide <file>       : reference annotation for guiding alignment projection (GTF/GFF)\n\
- -S, --genome <file>      : genome sequence file for long-read clip rescue (FASTA format)\n\
- -o, --out <file>         : output path/file name for the projected alignments (default: stdout)\n\
- -p <int>                 : number of threads (CPUs) to use (default: 1)\n\
-"
-
-bool QUIET = false;     // Turn off verbose mode, --quiet
+bool QUIET = false;     // Turn off verbose mode, -q/--quiet
 bool BRAMBLE_DEBUG = false;
 bool LONG_READS = false;  // BAM file contains long reads
 bool LR = false;          // lr preset
@@ -87,7 +57,7 @@ std::optional<uint32_t> MAX_JUNC_GAP;
 std::optional<float> SIM_THR;
 std::optional<uint32_t> MAX_ERROR_EXON;
 
-uint8_t n_threads = 1;    // Threads, -p
+uint8_t n_threads = 1;    // Threads, -p/--threads
 GStr bam_path_out;        // Output BAM path, -o
 GStr guide_gff;           // Reference annotation, -G
 GFastaDb *gfasta = NULL;  // FASTA file, -S
@@ -488,7 +458,7 @@ int main(int argc, char *argv[]) {
   std::string in_bam;
   std::string in_fasta;
   app.add_option("in.bam", in_bam, "input bam file")->required();
-  app.add_flag("--quiet", QUIET, "turn off verbose (log processing details)");
+  app.add_flag("-q,--quiet", QUIET, "turn off verbose mode (log processing details)");
   app.add_flag("--fr", FR_STRAND, "assume stranded library (first-strand, read2 sense)");
   app.add_flag("--rf", RF_STRAND, "assume stranded library (second-strand, read1 sense)");
   app.add_flag("--lr", LR, "alignments are from long reads");
@@ -503,13 +473,14 @@ int main(int argc, char *argv[]) {
     "maximum allowed size of an insertion or deletion of an entire exon, for sequencing technologies that produce long indels (overrides preset)");
   app.add_option("--similarity-threshold", SIM_THR, 
     "candidate transcripts with similarity scores above this threshold are kept (overrides preset)");
-  app.add_option("-G,--guide", gff, "reference genome annotation" "(GTF/GFF)")
-      ->check(CLI::ExistingFile);
-  app.add_option("-S,--genome", in_fasta, "reference genome sequence" "(FASTA)")
+  app.add_option("-G,--guide", gff, "reference genome annotation (GTF/GFF)")
+      ->check(CLI::ExistingFile)
+      ->required();
+  app.add_option("-S,--genome", in_fasta, "reference genome sequence (FASTA)")
       ->check(CLI::ExistingFile);
   app.add_option("-o,--out", out_bam, "output path/file name for the projected alignments")
       ->required();
-  app.add_option("-p", n_threads, "number of threads (CPUs) to use")
+  app.add_option("-p,--threads", n_threads, "number of threads (CPUs) to use")
       ->default_val(1);
   auto version_callback = [](int count) {
     std::cout << "version: " << VERSION << "\n";

@@ -20,7 +20,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 fn main() -> Result<()> {
     let pg_args: String = std::env::args().collect::<Vec<_>>().join(" ");
-    let args = cli::Args::parse();
+    let mut args = cli::Args::parse();
 
     // Initialize tracing subscriber
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
@@ -31,6 +31,12 @@ fn main() -> Result<()> {
         }
     });
     tracing_subscriber::fmt().with_env_filter(filter).init();
+
+    // --lr:hq is the old spelling of --lr-hq; keep accepting it, but warn
+    if args.lr_hq_deprecated {
+        tracing::warn!("--lr:hq is deprecated and will be removed; use --lr-hq instead");
+        args.lr_hq = true;
+    }
 
     // Load annotation and FASTA in parallel — they are independent I/O-bound
     // tasks (~2.9s and ~3.4s respectively) so overlapping them saves ~2.9s.

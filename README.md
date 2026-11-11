@@ -38,7 +38,7 @@ Note: the installed executable is named bramble-rs (the crate is bramble-cli onl
 
 ## Quick start
 
-Input BAMs should be collated by read name (e.g. ```samtools collate```) so that all alignments of a read are processed together. 
+Input BAMs should be collated by read name (e.g. `samtools collate`) so that all alignments of a read are processed together. 
 
 ### C++
 ```
@@ -49,7 +49,7 @@ bramble genome.bam -G annotation.gtf -o transcriptome.bam
 # Long reads: enable long-read evaluation (--lr), and pass the genome FASTA
 # (-S/--genome) to recover soft-clipped ends.
 bramble genome.bam -G annotation.gtf -o transcriptome.bam \
-   --lr -S genome.fa -p 16
+    --lr -S genome.fa -p 16
 ```
 
 ### Rust
@@ -67,15 +67,15 @@ bramble-rs genome.bam -G annotation.gtf -o transcriptome.bam \
 ## Usage
 
 ```
-bramble <in.bam> [-G <annotation.gtf>] [-o <out.bam>] [-p <UINT>] [-S <genome.fa>]
- [--help] [--version] [--quiet] [--fr] [--rf] [--lr] [-lr-hq] [--strict]
+bramble <in.bam> -G <annotation.gtf> -o <out.bam> [-p, --threads <UINT>] [-S <genome.fa>]
+ [-h, --help] [-V, --version] [-q, --quiet] [--fr] [--rf] [--lr] [--lr-hq] [--strict]
  [--max-soft-clip <UINT>] [--max-junction-insertion <UINT>] [--max-junction-deletion <UINT>]
  [--max-error-exon <UINT>] [--similarity-threshold <FLOAT>]
 
 Options:
- --help                   : print this usage message and exit
- --version                : print just the version at stdout and exit
- --quiet                  : turn off verbose mode (log bundle processing details)
+ -h, --help               : print this usage message and exit
+ -V, --version            : print just the version to stdout and exit
+ -q, --quiet              : turn off verbose mode (log bundle processing details)
  --fr                     : assume stranded library (first-strand, read2 sense)
  --rf                     : assume stranded library (second-strand, read1 sense)
  --lr                     : preset: alignments are from long reads
@@ -86,10 +86,20 @@ Options:
  --max-junction-deletion  : maximum allowed deletion at any splice junction
  --max-error-exon         : maximum allowed size of an insertion or deletion of an entire exon, for sequencing technologies that produce long indels
  --similarity-threshold   : candidate transcripts with similarity scores above this threshold are kept
- -G, --guide <file>       : reference annotation for guiding alignment projection (GTF/GFF)
- -S, --genome <file>      : genome sequence file for long-read clip rescue (FASTA format)\n\
- -o, --out <file>         : output path/file name for the projected alignments (default: stdout)
- -p <int>                 : number of threads (CPUs) to use (default: 1)
+ -G, --guide <file>       : reference annotation for guiding alignment projection (GTF/GFF) (required)
+ -S, --genome <file>      : genome sequence file for long-read clip rescue (FASTA format)
+ -o, --out <file>         : output path/file name for the projected alignments (required)
+ -p, --threads <int>      : number of threads (CPUs) to use (default: 1)
+```
+
+### Rust-only options
+
+These options are currently available only in `bramble-rs`, not in the C++ `bramble`.
+
+```
+ --unordered                     : write each thread's output as soon as it's ready; faster with -p > 1,
+                                   but output order is not deterministic (alignments of a read stay together)
+ --unordered-flush-records <int> : with --unordered, records each thread buffers before writing (default: 1024)
 ```
 
 ## Rust library
@@ -99,7 +109,7 @@ bramble-rs is the Rust library at the core of bramble. This crate is I/O-free: i
 See [bramble-rs](https://github.com/zrudnick/bramble/blob/main/bramble-rs/README.md) for usage examples.
 
 ## Getting Help
-Run ```bramble --help``` to see all available options.
+Run `bramble --help` to see all available options.
 For issues or questions, please open an issue!
 
 You may also contact us for questions or suggestions at zrudnic1@jh.edu.

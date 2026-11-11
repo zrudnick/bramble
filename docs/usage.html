@@ -37,7 +37,7 @@ bramble genome.bam -G annotation.gtf -o transcriptome.bam
 # Long reads: enable long-read evaluation (--lr), and pass the genome FASTA
 # (-S/--genome) to recover soft-clipped ends.
 bramble genome.bam -G annotation.gtf -o transcriptome.bam \
-   --lr -S genome.fa -p 16</code></pre>
+    --lr -S genome.fa -p 16</code></pre>
 
   <h3>Rust</h3>
   <pre><code># Genome-aligned, name-collated BAM + annotation -> transcriptome-coordinate BAM.
@@ -50,16 +50,16 @@ bramble-rs genome.bam -G annotation.gtf -o transcriptome.bam \
     --lr -S genome.fa -p 16</code></pre>
 
   <h2>Full option reference</h2>
-  <pre><code>bramble &lt;in.bam&gt; [-G &lt;annotation.gtf&gt;] [-o &lt;out.bam&gt;] [-p &lt;UINT&gt;] [-S &lt;genome.fa&gt;]
- [--help] [--version] [--quiet] [--fr] [--rf] [--lr] [--lr-hq] [--strict]
+  <pre><code>bramble &lt;in.bam&gt; -G &lt;annotation.gtf&gt; -o &lt;out.bam&gt; [-p, --threads &lt;UINT&gt;] [-S &lt;genome.fa&gt;]
+ [-h, --help] [-V, --version] [-q, --quiet] [--fr] [--rf] [--lr] [--lr-hq] [--strict]
  [--max-soft-clip &lt;UINT&gt;] [--max-junction-insertion &lt;UINT&gt;] [--max-junction-deletion &lt;UINT&gt;]
  [--max-error-exon &lt;UINT&gt;] [--similarity-threshold &lt;FLOAT&gt;]</code></pre>
 
   <table>
     <tr><th>Option</th><th>Description</th></tr>
-    <tr><td><code>--help</code></td><td>print the usage message and exit</td></tr>
-    <tr><td><code>--version</code></td><td>print just the version and exit</td></tr>
-    <tr><td><code>--quiet</code></td><td>turn off verbose mode (log bundle processing details)</td></tr>
+    <tr><td><code>-h, --help</code></td><td>print the usage message and exit</td></tr>
+    <tr><td><code>-V, --version</code></td><td>print just the version and exit</td></tr>
+    <tr><td><code>-q, --quiet</code></td><td>turn off verbose mode (log bundle processing details)</td></tr>
     <tr><td><code>--fr</code></td><td>assume stranded library (first-strand, read2 sense)</td></tr>
     <tr><td><code>--rf</code></td><td>assume stranded library (second-strand, read1 sense)</td></tr>
     <tr><td><code>--lr</code></td><td>preset: alignments are from long reads</td></tr>
@@ -70,10 +70,18 @@ bramble-rs genome.bam -G annotation.gtf -o transcriptome.bam \
     <tr><td><code>--max-junction-deletion</code></td><td>maximum allowed deletion at any splice junction</td></tr>
     <tr><td><code>--max-error-exon</code></td><td>maximum allowed size of an insertion or deletion of an entire exon, for sequencing technologies that produce long indels</td></tr>
     <tr><td><code>--similarity-threshold</code></td><td>candidate transcripts with similarity scores above this threshold are kept</td></tr>
-    <tr><td><code>-G, --guide &lt;file&gt;</code></td><td>reference annotation for guiding alignment projection (GTF/GFF)</td></tr>
+    <tr><td><code>-G, --guide &lt;file&gt;</code></td><td>reference annotation for guiding alignment projection (GTF/GFF) (required)</td></tr>
     <tr><td><code>-S, --genome &lt;file&gt;</code></td><td>genome sequence file for long-read clip rescue (FASTA format)</td></tr>
-    <tr><td><code>-o, --out &lt;file&gt;</code></td><td>output path/file name for the projected alignments (default: stdout)</td></tr>
-    <tr><td><code>-p &lt;int&gt;</code></td><td>number of threads (CPUs) to use (default: 1)</td></tr>
+    <tr><td><code>-o, --out &lt;file&gt;</code></td><td>output path/file name for the projected alignments (required)</td></tr>
+    <tr><td><code>-p, --threads &lt;int&gt;</code></td><td>number of threads (CPUs) to use (default: 1)</td></tr>
+  </table>
+
+  <h3>Rust-only options</h3>
+  <p>These options are currently available only in <code>bramble-rs</code>, not in the C++ <code>bramble</code>.</p>
+  <table>
+    <tr><th>Option</th><th>Description</th></tr>
+    <tr><td><code>--unordered</code></td><td>write each thread's output as soon as it's ready; faster with <code>-p</code> &gt; 1, but output order is not deterministic (alignments of a read stay together)</td></tr>
+    <tr><td><code>--unordered-flush-records &lt;int&gt;</code></td><td>with <code>--unordered</code>, records each thread buffers before writing (default: 1024)</td></tr>
   </table>
 
   <h2>Rust library</h2>
