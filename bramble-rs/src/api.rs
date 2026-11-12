@@ -415,29 +415,34 @@ pub fn project_group_with(
             a.cigar.clone(),
         )
     });
-    let new_nh: u32 = output_groups.iter().map(|g| g.len() as u32).sum();
+    let read_end = |idx: usize| -> u8 {
+        let a = &alignments[idx];
+        if !a.is_paired {
+            0
+        } else if a.is_first_in_pair {
+            1
+        } else {
+            2
+        }
+    };
+    // NH per read end: the number of records of that end (SAM spec)
+    let mut nh_by_end = [0u32; 3];
+    for e in output_groups.iter().flatten() {
+        nh_by_end[read_end(e.record_idx) as usize] += 1;
+    }
     // primary + HI over the whole read, before flattening loses the pair units
     assign_primary_and_hit_indices(
         &mut output_groups,
         alignments[0].query_name.as_bytes(),
         index,
-        |idx| {
-            let a = &alignments[idx];
-            if !a.is_paired {
-                0
-            } else if a.is_first_in_pair {
-                1
-            } else {
-                2
-            }
-        },
+        read_end,
     );
     // Unit order (as sorted above), each pair as read then mate: mates adjacent
     let entries: Vec<OutputEntry> = output_groups.into_iter().flatten().collect();
 
     let mut out = Vec::with_capacity(entries.len());
     for entry in &entries {
-        let nh = new_nh;
+        let nh = nh_by_end[read_end(entry.record_idx) as usize];
         let insert_size = entry.mate.as_ref().map_or(0, |mate| {
             compute_template_length(
                 align_pos(&entry.align),

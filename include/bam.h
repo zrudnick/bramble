@@ -63,6 +63,7 @@ namespace bramble {
   void set_projected_nm(bam1_t* b, const std::vector<uint32_t>& gcigar,
                         const AlignInfo& align);
   void keep_only_known_tags(bam1_t* b);
+  void order_tags(bam1_t* b);
 
   void set_hi_tag(bam1_t* b, int32_t hi_i);
 

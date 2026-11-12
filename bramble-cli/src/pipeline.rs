@@ -489,11 +489,7 @@ fn process_group_records(
         (flags, r.tid(), r.pos(), cigar)
     });
 
-    // Count total output records (both read1 and read2 for paired), matching
-    // C++ total_matches which increments once per r_align and once per m_align.
-    let new_nh: u32 = output_groups.iter().map(|g| g.len() as u32).sum();
-    // primary + HI over the whole read, before flattening loses the pair units
-    assign_primary_and_hit_indices(&mut output_groups, group[0].record.qname(), g2t, |idx| {
+    let read_end = |idx: usize| -> u8 {
         let f = group[idx].record.flags();
         if f & FLAG_PAIRED == 0 {
             0
@@ -504,7 +500,14 @@ fn process_group_records(
         } else {
             0
         }
-    });
+    };
+    // NH per read end: the number of records of that end (SAM spec; as C++)
+    let mut nh_by_end = [0u32; 3];
+    for e in output_groups.iter().flatten() {
+        nh_by_end[read_end(e.record_idx) as usize] += 1;
+    }
+    // primary + HI over the whole read, before flattening loses the pair units
+    assign_primary_and_hit_indices(&mut output_groups, group[0].record.qname(), g2t, read_end);
     // Output in unit order (as sorted above), each pair as read then mate, so
     // mates are adjacent: salmon pairs adjacent records (C++ writes the same way)
     let entries: Vec<OutputEntry> = output_groups.into_iter().flatten().collect();
@@ -512,7 +515,7 @@ fn process_group_records(
     // --lr and --lr-hq are both long reads (C++ LONG_READS = LR || LR_HQ)
     let long_reads = evaluator.lr || evaluator.lr_hq;
     for entry in entries {
-        let nh = new_nh;
+        let nh = nh_by_end[read_end(entry.record_idx) as usize];
         let mapq = get_mapq(nh, long_reads);
         let rec = &group[entry.record_idx];
         let out =
@@ -754,11 +757,9 @@ fn build_projected_record(
 
     // Append our projected tags.  filter_aux_tags guarantees none of these
     // exist, so push_aux_unchecked is safe (skips the duplicate scan).
+    let kept_len = aux_len(&out);
     out.push_aux_unchecked(b"NH", Aux::I32(nh as i32))?;
     out.push_aux_unchecked(b"HI", Aux::I32(entry.align.align.hit_index))?;
-    if let Some(nm) = nm {
-        out.push_aux_unchecked(b"NM", Aux::I32(nm))?;
-    }
     // Projected alignment score, matching C++ exactly. C++ (core.cpp) only calls
     // set_as_tag — `(genome_AS + clip_score) * similarity_score` — for LONG reads;
     // for SHORT reads it leaves the original genome (STAR) AS untouched. So short
@@ -774,18 +775,46 @@ fn build_projected_record(
         gn_as
     };
     out.push_aux_unchecked(b"AS", Aux::I32(score as i32))?;
+    if let Some(nm) = nm {
+        out.push_aux_unchecked(b"NM", Aux::I32(nm))?;
+    }
+    // Our tags first (NH HI AS NM, as STAR), then the kept input tags in input
+    // order: the same order as C++ (bam.cpp order_tags)
+    rotate_aux_left(&mut out, kept_len);
 
     Ok(out)
+}
+
+/// Offset of the aux block within the record data.
+fn aux_start(out: &hts_bam::Record) -> usize {
+    out.inner.core.l_qname as usize
+        + out.cigar_len() * std::mem::size_of::<u32>()
+        + out.seq_len().div_ceil(2)
+        + out.seq_len()
+}
+
+/// Length in bytes of the record's aux block.
+fn aux_len(out: &hts_bam::Record) -> usize {
+    (out.inner.l_data as usize).saturating_sub(aux_start(out))
+}
+
+/// Rotate the aux block left by `n` bytes (moves the first `n` bytes to the end).
+fn rotate_aux_left(out: &mut hts_bam::Record, n: usize) {
+    let start = aux_start(out);
+    let len = aux_len(out);
+    if n == 0 || n >= len {
+        return;
+    }
+    // SAFETY: [start, start + len) is the aux block inside the record's data
+    let aux = unsafe { std::slice::from_raw_parts_mut(out.inner.data.add(start), len) };
+    aux.rotate_left(n);
 }
 
 /// Single-pass aux tag filter: iterate raw aux bytes once, copy only the
 /// tags in `KEEP_TAGS`, then truncate the record's aux block and write the
 /// filtered bytes back.  O(n) total instead of one scan per tag.
 fn filter_aux_tags(out: &mut hts_bam::Record) {
-    let aux_start = out.inner.core.l_qname as usize
-        + out.cigar_len() * std::mem::size_of::<u32>()
-        + out.seq_len().div_ceil(2)
-        + out.seq_len();
+    let aux_start = aux_start(out);
 
     let l_data = out.inner.l_data as usize;
     if aux_start >= l_data {

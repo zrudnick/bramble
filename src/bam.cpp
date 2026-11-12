@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cctype>
+#include <cstring>
 
 #include "types.h"
 #include "bramble.h"
@@ -654,6 +655,40 @@ namespace bramble {
       }
       a = keep ? bam_aux_next(b, a) : bam_aux_remove(b, a);
     }
+  }
+
+  // Put bramble's own tags first, in a fixed order (NH HI AS NM, as STAR
+  // writes them), then the kept input tags in their input order. Same order as
+  // the Rust version (pipeline.rs). Call after all tags are set.
+  void order_tags(bam1_t* b) {
+    static const char* const FIRST[] = {"NH", "HI", "AS", "NM"};
+    uint8_t* aux = bam_get_aux(b);
+    size_t len = bam_get_l_aux(b);
+    if (len == 0) return;
+    // [start, end) of each tag, tag name included
+    thread_local std::vector<std::pair<size_t, size_t>> spans;
+    spans.clear();
+    uint8_t* a = bam_aux_first(b);
+    while (a) {
+      uint8_t* next = bam_aux_next(b, a);
+      size_t start = (a - 2) - aux;
+      size_t end = next ? (size_t)((next - 2) - aux) : len;
+      spans.emplace_back(start, end);
+      a = next;
+    }
+    thread_local std::vector<uint8_t> out;
+    out.clear();
+    auto is_first = [&](size_t start) {
+      for (const char* t : FIRST)
+        if (aux[start] == t[0] && aux[start + 1] == t[1]) return true;
+      return false;
+    };
+    for (const char* t : FIRST)
+      for (auto [s, e] : spans)
+        if (aux[s] == t[0] && aux[s + 1] == t[1]) out.insert(out.end(), aux + s, aux + e);
+    for (auto [s, e] : spans)
+      if (!is_first(s)) out.insert(out.end(), aux + s, aux + e);
+    if (out.size() == len) std::memcpy(aux, out.data(), len);
   }
 
   // Set mate information for a read

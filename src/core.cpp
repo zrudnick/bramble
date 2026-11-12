@@ -194,6 +194,7 @@ namespace bramble {
         }
 
         set_mate_info(b, pair, is_first); // must be called for both paired and non-paired instances
+        order_tags(b);
         to_write.push_back(b);
 
       };
@@ -247,6 +248,30 @@ namespace bramble {
     read_id_t m_idx = info->read2 ? info->read2->index : 0;
     return {g2t->getTidName(info->r_tid), pos(info->r_align), true,
             g2t->getTidName(info->m_tid), pos(info->m_align), r_idx, m_idx};
+  }
+
+  // Output order of a read's units, the same in the Rust version (groups.rs
+  // assign_primary_and_hit_indices): pairs before single records, then input
+  // order of the genomic alignments, then transcript names and positions
+  // (not tids: tid numbering differs between the two versions)
+  static std::tuple<bool, read_id_t, read_id_t, std::string, pos_t, std::string, pos_t>
+  unit_key(const BamInfo *info, std::shared_ptr<g2tTree> &g2t) {
+    auto pos = [](const AlignInfo &a) { return a.strand == '+' ? a.fwpos : a.rcpos; };
+    read_id_t r_idx = info->read1 ? info->read1->index : 0;
+    if (!info->is_paired) {
+      return {true, r_idx, 0, g2t->getTidName(info->r_tid), pos(info->r_align),
+              std::string(), 0};
+    }
+    read_id_t m_idx = info->read2 ? info->read2->index : 0;
+    return {false, r_idx, m_idx, g2t->getTidName(info->r_tid), pos(info->r_align),
+            g2t->getTidName(info->m_tid), pos(info->m_align)};
+  }
+
+  // Read end of a record: 0 single-end, 1 read 1, 2 read 2
+  static int end_of(const std::shared_ptr<ReadOut> &r) {
+    uint16_t f = r->brec->get_b()->core.flag;
+    if (!(f & BAM_FPAIRED)) return 0;
+    return (f & BAM_FREAD1) ? 1 : ((f & BAM_FREAD2) ? 2 : 0);
   }
 
   // Identity of a projected record: its genomic alignment (read end, strand,
@@ -317,15 +342,21 @@ namespace bramble {
     // causing each genomic alignment of the same read to land in a separate
     // bucket and receive an incorrect per-alignment NH count.
     std::unordered_map<std::string, std::vector<BamInfo*>> pairs_by_name;
+    std::vector<std::string> name_order;  // reads are written in input order
     uint32_t n_pairs = 0;
 
     auto flush = [&]() {
       // Filter by strand before writing
       std::vector<BamInfo*> filtered_bam_info;
       
-      for (auto& [read_name, pairs] : pairs_by_name) {
+      for (const std::string& read_name : name_order) {
+        auto& pairs = pairs_by_name[read_name];
         // drop duplicate records (same genomic alignment, same placement)
         collapse_duplicates(pairs);
+        // fixed unit order: HI follows it, and records are written in it
+        std::stable_sort(pairs.begin(), pairs.end(), [&](BamInfo* a, BamInfo* b) {
+          return unit_key(a, g2t) < unit_key(b, g2t);
+        });
 
         // Determine primary/secondary alignment status
         auto best_it = pairs.end();
@@ -334,15 +365,21 @@ namespace bramble {
         int32_t hit_index = 1;
         int total_matches = 0;
 
+        // HI per unit, shared by the two mates of a pair (as STAR); NH per read
+        // end: the number of records of that end (SAM spec)
+        uint32_t nh_by_end[3] = {0, 0, 0};
         for (auto it = pairs.begin(); it != pairs.end(); ++it) {
           auto &info = (*it);
-          info->r_align.hit_index = hit_index++;
+          info->r_align.hit_index = hit_index;
+          nh_by_end[end_of(info->read1)]++;
           total_matches++;
 
           if (info->is_paired) {
-            info->m_align.hit_index = hit_index++;
+            info->m_align.hit_index = hit_index;
+            nh_by_end[end_of(info->read2)]++;
             total_matches++;
           }
+          hit_index++;
 
           // Best score for this pair is the higher of the two
           double pair_score = info->r_align.similarity_score;
@@ -401,11 +438,6 @@ namespace bramble {
         // position and input order, picked by the read-name hash (as Rust
         // assign_primary_and_hit_indices).
         {
-          auto end_of = [](const std::shared_ptr<ReadOut> &r) -> int {
-            uint16_t f = r->brec->get_b()->core.flag;
-            if (!(f & BAM_FPAIRED)) return 0;
-            return (f & BAM_FREAD1) ? 1 : ((f & BAM_FREAD2) ? 2 : 0);
-          };
           struct Rec { AlignInfo* align; tid_t tid; read_id_t index; int end; };
           std::vector<Rec> recs;
           std::vector<int> covered;
@@ -436,20 +468,17 @@ namespace bramble {
           }
         }
 
-        // Recalculate NH and MAPQ based on number of kept alignments
-        uint32_t new_nh = total_matches;
-        uint32_t new_mapq = get_mapq(new_nh);
-
         // Update statistics
         total_complete += total_matches;
-        if (total_matches == 1) total_unique++;
-        
+        if (pairs.size() == 1) total_unique++;
+
+        // NH and MAPQ per read end
         for (auto* pair : pairs) {
-          pair->read1->nh = new_nh;
-          pair->read1->mapq = new_mapq;
+          pair->read1->nh = nh_by_end[end_of(pair->read1)];
+          pair->read1->mapq = get_mapq(pair->read1->nh);
           if (pair->is_paired && pair->read2) {
-            pair->read2->nh = new_nh;
-            pair->read2->mapq = new_mapq;
+            pair->read2->nh = nh_by_end[end_of(pair->read2)];
+            pair->read2->mapq = get_mapq(pair->read2->nh);
           }
           filtered_bam_info.push_back(pair);
         }
@@ -458,12 +487,15 @@ namespace bramble {
       write_to_bam(io, filtered_bam_info);
       for (auto* info : filtered_bam_info) delete info;
       pairs_by_name.clear();
+      name_order.clear();
       n_pairs = 0;
     };
 
     auto emit_pair = [&](BamInfo* pair, bool /*is_last*/) {
       if (pair && pair->read1) {
-        pairs_by_name[pair->read1->brec->name()].push_back(pair);
+        auto [it, inserted] = pairs_by_name.try_emplace(pair->read1->brec->name());
+        if (inserted) name_order.push_back(it->first);
+        it->second.push_back(pair);
         n_pairs++;
         // Flushing is deferred to the end of each read-name group so that all
         // genomic alignments of a multi-mapper are grouped before NH is computed.

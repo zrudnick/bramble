@@ -117,9 +117,35 @@ pub fn assign_primary_and_hit_indices(
     g2t: &G2TTree,
     read_end: impl Fn(usize) -> u8,
 ) {
-    // deterministic unit order, independent of HashMap iteration order
-    groups.sort_by_key(|g| g.first().map(|e| (e.record_idx, e.tid)));
+    // Fixed unit order, the same in C++ (core.cpp unit_key): pairs before single
+    // records, then input order of the genomic alignments, then transcript names
+    // and positions (not tids: tid numbering differs between the two versions)
+    groups.sort_by_cached_key(|g| {
+        let tname = |e: &OutputEntry| g2t.transcript_name(e.tid).unwrap_or("").to_string();
+        match (g.first(), g.get(1)) {
+            (None, _) => (true, 0, 0, String::new(), 0, String::new(), 0),
+            (Some(r), None) => (
+                true,
+                r.record_idx,
+                0,
+                tname(r),
+                align_pos(&r.align),
+                String::new(),
+                0,
+            ),
+            (Some(r), Some(m)) => (
+                false,
+                r.record_idx,
+                m.record_idx,
+                tname(r),
+                align_pos(&r.align),
+                tname(m),
+                align_pos(&m.align),
+            ),
+        }
+    });
 
+    // HI per unit, shared by the two mates of a pair (as STAR)
     let mut hit_index: i32 = 0;
     let mut best_score = f64::NEG_INFINITY;
     let mut tied: Vec<usize> = Vec::new();
@@ -129,8 +155,8 @@ pub fn assign_primary_and_hit_indices(
             continue;
         }
         let mut unit_score = f64::NEG_INFINITY;
+        hit_index += 1;
         for entry in group.iter_mut() {
-            hit_index += 1;
             entry.align.align.hit_index = hit_index;
             entry.align.align.primary_alignment = false;
             unit_score = unit_score.max(entry.align.align.similarity_score);
