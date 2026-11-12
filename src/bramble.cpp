@@ -38,7 +38,7 @@
 
 using namespace bramble;
 
-#define VERSION "0.1.6"
+#define VERSION "0.2.1"
 
 bool QUIET = false;     // Turn off verbose mode, -q/--quiet
 bool BRAMBLE_DEBUG = false;

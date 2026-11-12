@@ -57,7 +57,12 @@ fn main() -> Result<()> {
     let g2t = g2t::build_g2t(&transcripts, &bam.refname_to_id, fasta.as_ref())?;
     // let hts_header = header::build_hts_header(&transcripts);
     let header_in = Header::from_template(bam.reader.header());
-    let hts_header = header::build_hts_header(&transcripts, &header_in, &pg_args);
+    let hts_header = header::build_hts_header(
+        &transcripts,
+        &header_in,
+        &pg_args,
+        &args.guide_gff.to_string_lossy(),
+    );
 
     // Optimization: wrap large data structures in ManuallyDrop so their
     // destructors are skipped when main() returns.  The OS reclaims all
