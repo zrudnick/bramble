@@ -1685,16 +1685,16 @@ impl ReadEvaluator {
             .unwrap_or(default_similarity_threshold);
 
         ReadEvaluationConfig {
-            max_clip: self.max_clip.unwrap_or(default_max_clip) as u32,
-            max_junc_ins: self.max_junc_ins.unwrap_or(default_max_junc_ins) as u32,
-            max_junc_gap: self.max_junc_gap.unwrap_or(default_max_junc_gap) as u32,
+            max_clip: self.max_clip.unwrap_or(default_max_clip),
+            max_junc_ins: self.max_junc_ins.unwrap_or(default_max_junc_ins),
+            max_junc_gap: self.max_junc_gap.unwrap_or(default_max_junc_gap),
             similarity_threshold,
             // C++: filter_by_similarity = (similarity_threshold < 1.0).
             filter_by_similarity: similarity_threshold < 1.0,
             // C++: true in LongReadEvaluator, false in ShortReadEvaluator.
             score_by_similarity: self.lr || self.lr_hq,
             ignore_small_exons: max_error_exon > 0,
-            max_error_exon: max_error_exon as u32,
+            max_error_exon,
             print: false,
             name: Vec::new(),
             soft_clips: true,

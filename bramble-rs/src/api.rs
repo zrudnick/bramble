@@ -51,8 +51,9 @@
 use crate::evaluate::{EvalContext, ExonChainMatch, ReadAln, ReadEvaluator};
 use crate::g2t::G2TTree;
 use crate::groups::{
-    OutputEntry, ReadEval, align_pos, assign_pair_order, assign_primary_and_hit_indices, collapse_duplicate_units, build_paired_groups,
-    build_unpaired_groups, compute_template_length, find_mate_pairs, sam_op_to_kind, segs_from_ops,
+    OutputEntry, ReadEval, align_pos, assign_pair_order, assign_primary_and_hit_indices,
+    build_paired_groups, build_unpaired_groups, collapse_duplicate_units, compute_template_length,
+    find_mate_pairs, sam_op_to_kind, segs_from_ops,
 };
 use crate::types::{HashMap, ReadId, Tid};
 use noodles::sam::alignment::record::cigar::op::Kind as CigarKind;
@@ -406,14 +407,31 @@ pub fn project_group_with(
     // Drop duplicate records (same genomic alignment, same transcript placement)
     collapse_duplicate_units(&mut output_groups, |idx| {
         let a = &alignments[idx];
-        (a.is_first_in_pair, a.is_reverse, a.ref_id, a.ref_start, a.cigar.clone())
+        (
+            a.is_first_in_pair,
+            a.is_reverse,
+            a.ref_id,
+            a.ref_start,
+            a.cigar.clone(),
+        )
     });
     let new_nh: u32 = output_groups.iter().map(|g| g.len() as u32).sum();
     // primary + HI over the whole read, before flattening loses the pair units
-    assign_primary_and_hit_indices(&mut output_groups, alignments[0].query_name.as_bytes(), index, |idx| {
-        let a = &alignments[idx];
-        if !a.is_paired { 0 } else if a.is_first_in_pair { 1 } else { 2 }
-    });
+    assign_primary_and_hit_indices(
+        &mut output_groups,
+        alignments[0].query_name.as_bytes(),
+        index,
+        |idx| {
+            let a = &alignments[idx];
+            if !a.is_paired {
+                0
+            } else if a.is_first_in_pair {
+                1
+            } else {
+                2
+            }
+        },
+    );
     // Unit order (as sorted above), each pair as read then mate: mates adjacent
     let entries: Vec<OutputEntry> = output_groups.into_iter().flatten().collect();
 

@@ -172,7 +172,10 @@ use bramble_rs::cigar::projected_nm;
 #[test]
 fn projected_nm_unchanged_alignment_keeps_mismatches() {
     let g = ops(&[(M, 150)]);
-    assert_eq!(projected_nm(&g, &g, Some(1), Some(b"16C133"), 0, 0, 0), Some(1));
+    assert_eq!(
+        projected_nm(&g, &g, Some(1), Some(b"16C133"), 0, 0, 0),
+        Some(1)
+    );
 }
 
 #[test]
@@ -180,7 +183,10 @@ fn projected_nm_insertion_absorbed_into_clip_is_not_an_edit() {
     // the CIGAR-bug read: 181M1I17M -> 172M27S
     let g = ops(&[(M, 181), (I, 1), (M, 17)]);
     let p = ops(&[(M, 172), (S, 27)]);
-    assert_eq!(projected_nm(&g, &p, Some(1), Some(b"198"), 0, 0, 0), Some(0));
+    assert_eq!(
+        projected_nm(&g, &p, Some(1), Some(b"198"), 0, 0, 0),
+        Some(0)
+    );
 }
 
 #[test]
@@ -188,7 +194,10 @@ fn projected_nm_mismatch_in_new_clip_dropped_with_md_kept_without() {
     let g = ops(&[(M, 100)]);
     let p = ops(&[(M, 90), (S, 10)]);
     // MD places the mismatch at position 95, inside the new clip
-    assert_eq!(projected_nm(&g, &p, Some(1), Some(b"95A4"), 0, 0, 0), Some(0));
+    assert_eq!(
+        projected_nm(&g, &p, Some(1), Some(b"95A4"), 0, 0, 0),
+        Some(0)
+    );
     // without MD the genome mismatch count is all we have
     assert_eq!(projected_nm(&g, &p, Some(1), None, 0, 0, 0), Some(1));
 }
@@ -197,10 +206,16 @@ fn projected_nm_mismatch_in_new_clip_dropped_with_md_kept_without() {
 fn projected_nm_counts_added_indels_and_md_deletions() {
     let g = ops(&[(M, 100)]);
     let p = ops(&[(M, 50), (D, 2), (M, 50)]);
-    assert_eq!(projected_nm(&g, &p, Some(0), Some(b"100"), 0, 0, 0), Some(2));
+    assert_eq!(
+        projected_nm(&g, &p, Some(0), Some(b"100"), 0, 0, 0),
+        Some(2)
+    );
     // genome deletion with a mismatch: MD 20A29^GG50 -> 1 mismatch + 2 deleted
     let g2 = ops(&[(M, 50), (D, 2), (M, 50)]);
-    assert_eq!(projected_nm(&g2, &g2, Some(3), Some(b"20A29^GG50"), 0, 0, 0), Some(3));
+    assert_eq!(
+        projected_nm(&g2, &g2, Some(3), Some(b"20A29^GG50"), 0, 0, 0),
+        Some(3)
+    );
 }
 
 #[test]
@@ -208,7 +223,10 @@ fn projected_nm_rescued_bases_use_rescue_mismatches() {
     // left 10 soft-clipped bases rescued as matches with 2 mismatches
     let g = ops(&[(S, 10), (M, 90)]);
     let p = ops(&[(M, 100)]);
-    assert_eq!(projected_nm(&g, &p, Some(0), Some(b"90"), 10, 0, 2), Some(2));
+    assert_eq!(
+        projected_nm(&g, &p, Some(0), Some(b"90"), 10, 0, 2),
+        Some(2)
+    );
 }
 
 #[test]
@@ -255,6 +273,10 @@ fn update_cigar_left_rescue_after_hard_clip() {
     let (cigar, _) = update_cigar_for_test(real, ideal);
     assert_eq!(
         cigar_kinds(&cigar),
-        vec![(CigarKind::HardClip, 5), (CigarKind::SoftClip, 4), (CigarKind::Match, 96)]
+        vec![
+            (CigarKind::HardClip, 5),
+            (CigarKind::SoftClip, 4),
+            (CigarKind::Match, 96)
+        ]
     );
 }

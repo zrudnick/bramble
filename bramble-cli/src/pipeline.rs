@@ -10,9 +10,9 @@ use bramble_rs::evaluate::{EvalContext, ExonChainMatch, ReadAln, ReadEvaluator};
 use bramble_rs::g2t::G2TTree;
 use bramble_rs::groups::{
     FLAG_MATE_REVERSE, FLAG_MATE_UNMAPPED, FLAG_PAIRED, FLAG_PROPER_PAIR, FLAG_READ1, FLAG_READ2,
-    FLAG_REVERSE, FLAG_SECONDARY, FLAG_UNMAPPED, OutputEntry, ReadEval, assign_primary_and_hit_indices, collapse_duplicate_units,
-    assign_pair_order, build_paired_groups, build_unpaired_groups, compute_template_length,
-    find_mate_pairs,
+    FLAG_REVERSE, FLAG_SECONDARY, FLAG_UNMAPPED, OutputEntry, ReadEval, assign_pair_order,
+    assign_primary_and_hit_indices, build_paired_groups, build_unpaired_groups,
+    collapse_duplicate_units, compute_template_length, find_mate_pairs,
 };
 use bramble_rs::types::{HashMap, ReadId, RefId, Tid};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
@@ -38,8 +38,8 @@ const BATCH_SIZE: usize = 64;
 const KEEP_TAGS: &[[u8; 2]] = &[
     *b"RG", // read group
     *b"BC", *b"QT", *b"CB", *b"CR", *b"CY", *b"MI", *b"OX", // barcodes and UMIs
-    *b"BZ", *b"RX", *b"QX", *b"UB", *b"UR", *b"UY", *b"BX",
-    *b"MM", *b"ML", *b"MN", *b"Mm", *b"Ml", // base modifications
+    *b"BZ", *b"RX", *b"QX", *b"UB", *b"UR", *b"UY", *b"BX", *b"MM", *b"ML", *b"MN", *b"Mm",
+    *b"Ml", // base modifications
 ];
 
 #[derive(Debug, Default)]
@@ -495,7 +495,15 @@ fn process_group_records(
     // primary + HI over the whole read, before flattening loses the pair units
     assign_primary_and_hit_indices(&mut output_groups, group[0].record.qname(), g2t, |idx| {
         let f = group[idx].record.flags();
-        if f & FLAG_PAIRED == 0 { 0 } else if f & FLAG_READ1 != 0 { 1 } else if f & FLAG_READ2 != 0 { 2 } else { 0 }
+        if f & FLAG_PAIRED == 0 {
+            0
+        } else if f & FLAG_READ1 != 0 {
+            1
+        } else if f & FLAG_READ2 != 0 {
+            2
+        } else {
+            0
+        }
     });
     // Output in unit order (as sorted above), each pair as read then mate, so
     // mates are adjacent: salmon pairs adjacent records (C++ writes the same way)
@@ -507,14 +515,8 @@ fn process_group_records(
         let nh = new_nh;
         let mapq = get_mapq(nh, long_reads);
         let rec = &group[entry.record_idx];
-        let out = build_projected_record(
-            &rec.record,
-            &rec.decoded_seq,
-            &entry,
-            nh,
-            mapq,
-            long_reads,
-        )?;
+        let out =
+            build_projected_record(&rec.record, &rec.decoded_seq, &entry, nh, mapq, long_reads)?;
         output.push(out);
     }
 
@@ -912,7 +914,8 @@ fn update_cigar_hts(
     align: &bramble_rs::evaluate::AlignInfo,
 ) -> Result<(CigarString, Option<i32>)> {
     let real_ops: Vec<SamCigarOp> = record.cigar().iter().map(hts_cigar_to_sam_op).collect();
-    let (sam_cigar, _) = bramble_rs::cigar::update_cigar_ops(&real_ops, align.cigar.as_ref().unwrap());
+    let (sam_cigar, _) =
+        bramble_rs::cigar::update_cigar_ops(&real_ops, align.cigar.as_ref().unwrap());
     // NM from the genome and projected CIGARs already at hand (no extra copies)
     let genome_nm = hts_aux_as_int(record.aux(b"NM").ok());
     let md = match record.aux(b"MD") {
