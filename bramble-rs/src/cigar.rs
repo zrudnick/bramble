@@ -22,7 +22,8 @@ pub fn update_cigar_ops(
     let merged = align_and_merge(&real_expanded, &ideal_expanded);
 
     let mut nm = 0i32;
-    let compressed = compress_cigar(merged, &mut nm);
+    let mut compressed = compress_cigar(merged, &mut nm);
+    absorb_insertions_between_clips(&mut compressed, &mut nm);
     let cigar = runs_to_sam_cigar(&compressed);
 
     (cigar, nm)
@@ -139,7 +140,7 @@ fn pad_ideal_for_leading_clips(ideal: &mut Vec<u8>, front_hard: u32, front_soft:
     // This ensures rescue ops appear BEFORE padding in the merged output,
     // matching C++ merge_cigars which processes override ops first.
     let mut ideal_pos = 0usize;
-    for _ in front_hard..front_soft {
+    for _ in 0..front_soft {
         if ideal_pos < ideal.len() && matches!(ideal[ideal_pos], b',' | b'.' | b'/' | b';') {
             padded.push(ideal[ideal_pos]);
             ideal_pos += 1;
@@ -324,6 +325,30 @@ fn compress_cigar(cleaned: Vec<u8>, nm: &mut i32) -> Vec<(u32, u8)> {
     runs
 }
 
+/// An insertion between two clips (e.g. `9S 1I 17S`, from a read insertion that
+/// falls in the clipped overhang past the transcript end) is part of the clip:
+/// turn it into the clip op and merge the neighbours, giving `27S`. A clip in
+/// the middle of a CIGAR is invalid SAM. Mirrors the C++ pass in merge_cigars
+/// (bam.cpp). The insertion's bases are no longer edits, so they leave `nm`.
+fn absorb_insertions_between_clips(runs: &mut Vec<(u32, u8)>, nm: &mut i32) {
+    let is_clip = |op: u8| op == b'S' || op == b'H';
+    for i in 1..runs.len().saturating_sub(1) {
+        if runs[i].1 == b'I' && is_clip(runs[i - 1].1) && is_clip(runs[i + 1].1) {
+            *nm -= runs[i].0 as i32;
+            runs[i].1 = runs[i - 1].1;
+        }
+    }
+    // merge neighbouring runs that now share an op
+    let mut merged: Vec<(u32, u8)> = Vec::with_capacity(runs.len());
+    for &(len, op) in runs.iter() {
+        match merged.last_mut() {
+            Some(last) if last.1 == op => last.0 += len,
+            _ => merged.push((len, op)),
+        }
+    }
+    *runs = merged;
+}
+
 fn runs_to_sam_cigar(runs: &[(u32, u8)]) -> SamCigar {
     let ops: Vec<SamCigarOp> = runs
         .iter()
@@ -348,4 +373,153 @@ fn runs_to_sam_cigar(runs: &[(u32, u8)]) -> SamCigar {
         .collect();
 
     ops.into_iter().collect()
+}
+
+/// Count the MD mismatches that fall in `keep` (sorted, disjoint query
+/// intervals [start, end), genome orientation), walking the MD tag and the
+/// genome CIGAR together without allocating (this runs once per output record).
+/// `None` if MD is malformed or does not fit the CIGAR. Mirrors C++
+/// count_md_mismatches (bam.cpp).
+fn count_md_mismatches(genome_ops: &[SamCigarOp], md: &[u8], keep: &[(u32, u32)]) -> Option<i64> {
+    let is_aligned =
+        |k: CigarKind| matches!(k, CigarKind::Match | CigarKind::SequenceMatch | CigarKind::SequenceMismatch);
+    let mut ci = 0usize; // current genome CIGAR op
+    let mut off = 0u32; // aligned bases already used in op ci
+    let mut q = 0u32; // query position at the start of op ci
+    // move to the next unused reference-aligned base; false if none left
+    let next_aligned = |ci: &mut usize, off: &mut u32, q: &mut u32| -> bool {
+        while *ci < genome_ops.len() {
+            let op = &genome_ops[*ci];
+            let len = op.len() as u32;
+            if is_aligned(op.kind()) && *off < len {
+                return true;
+            }
+            if op.kind().consumes_read() {
+                *q += len;
+            }
+            *ci += 1;
+            *off = 0;
+        }
+        false
+    };
+
+    let mut count = 0i64;
+    let mut kp = 0usize;
+    let mut i = 0usize;
+    while i < md.len() {
+        let c = md[i];
+        if c.is_ascii_digit() {
+            let mut n = 0u64;
+            while i < md.len() && md[i].is_ascii_digit() {
+                n = n * 10 + (md[i] - b'0') as u64;
+                i += 1;
+            }
+            while n > 0 {
+                // matching bases
+                if !next_aligned(&mut ci, &mut off, &mut q) {
+                    return None;
+                }
+                let avail = genome_ops[ci].len() as u32 - off;
+                let take = (n.min(avail as u64)) as u32;
+                off += take;
+                n -= take as u64;
+            }
+        } else if c == b'^' {
+            // deleted reference bases: no query position
+            i += 1;
+            while i < md.len() && md[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+        } else if c.is_ascii_alphabetic() {
+            if !next_aligned(&mut ci, &mut off, &mut q) {
+                return None;
+            }
+            let pos = q + off;
+            off += 1;
+            while kp < keep.len() && keep[kp].1 <= pos {
+                kp += 1;
+            }
+            if kp < keep.len() && keep[kp].0 <= pos {
+                count += 1;
+            }
+            i += 1;
+        } else {
+            return None;
+        }
+    }
+    // MD must cover every aligned base
+    if next_aligned(&mut ci, &mut off, &mut q) { None } else { Some(count) }
+}
+
+thread_local! {
+    // aligned query intervals of the projected CIGAR, reused across records
+    static KEEP: std::cell::RefCell<Vec<(u32, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// NM for the projected alignment: mismatches of bases still aligned outside
+/// clip rescue (from MD; else genome NM minus genome indels), plus mismatches in
+/// rescued bases, plus every inserted/deleted base of the projected CIGAR.
+/// `projected_ops` must be in genome orientation (before reversing for '-').
+/// `None` when the genome record has neither NM nor MD. Mirrors C++
+/// set_projected_nm (bam.cpp).
+#[doc(hidden)]
+pub fn projected_nm(
+    genome_ops: &[SamCigarOp],
+    projected_ops: &[SamCigarOp],
+    genome_nm: Option<i64>,
+    md: Option<&[u8]>,
+    rescue_left: u32,
+    rescue_right: u32,
+    rescue_mm: u32,
+) -> Option<i32> {
+    if genome_nm.is_none() && md.is_none() {
+        return None;
+    }
+    let qlen: u32 = projected_ops
+        .iter()
+        .filter(|op| op.kind().consumes_read())
+        .map(|op| op.len() as u32)
+        .sum();
+    let lo = rescue_left.min(qlen);
+    let hi = qlen - rescue_right.min(qlen);
+
+    KEEP.with(|keep| {
+        // aligned (M/=/X) query intervals of the projected CIGAR, outside the
+        // ranges realigned by clip rescue
+        let mut keep = keep.borrow_mut();
+        keep.clear();
+        let mut new_indels = 0i64;
+        let mut q = 0u32;
+        for op in projected_ops {
+            let len = op.len() as u32;
+            match op.kind() {
+                CigarKind::Match | CigarKind::SequenceMatch | CigarKind::SequenceMismatch => {
+                    let (s, e) = (q.max(lo), (q + len).min(hi));
+                    if s < e {
+                        keep.push((s, e));
+                    }
+                }
+                CigarKind::Insertion | CigarKind::Deletion => new_indels += len as i64,
+                _ => {}
+            }
+            if op.kind().consumes_read() {
+                q += len;
+            }
+        }
+
+        let mismatches = match md.and_then(|md| count_md_mismatches(genome_ops, md, &keep)) {
+            Some(m) => m,
+            None => {
+                // no usable MD
+                let genome_nm = genome_nm?;
+                let genome_indels: i64 = genome_ops
+                    .iter()
+                    .filter(|op| matches!(op.kind(), CigarKind::Insertion | CigarKind::Deletion))
+                    .map(|op| op.len() as i64)
+                    .sum();
+                (genome_nm - genome_indels).max(0)
+            }
+        };
+        Some((mismatches + rescue_mm as i64 + new_indels) as i32)
+    })
 }

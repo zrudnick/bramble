@@ -29,11 +29,11 @@ pub struct Args {
     pub lr: bool,
 
     /// Preset: alignments are from high-quality long reads
-    #[arg(long = "lr-hq")]
+    #[arg(long = "lr-hq", conflicts_with = "lr")]
     pub lr_hq: bool,
 
     /// Deprecated spelling of --lr-hq; still accepted, but hidden from --help
-    #[arg(long = "lr:hq", hide = true)]
+    #[arg(long = "lr:hq", hide = true, conflicts_with = "lr")]
     pub lr_hq_deprecated: bool,
 
     /// Force strict boundary adherence
@@ -42,15 +42,15 @@ pub struct Args {
 
     /// Maximum added soft clip (overrides preset)
     #[arg(long = "max-soft-clip", value_name = "INT")]
-    pub max_clip: Option<u8>,
+    pub max_clip: Option<u32>,
 
     /// Maximum allowed insertion at any splice junction (overrides preset)
     #[arg(long = "max-junction-insertion", value_name = "INT")]
-    pub max_junc_ins: Option<u8>,
+    pub max_junc_ins: Option<u32>,
 
     /// Maximum allowed deletion at any splice junction (overrides preset)
     #[arg(long = "max-junction-deletion", value_name = "INT")]
-    pub max_junc_gap: Option<u8>,
+    pub max_junc_gap: Option<u32>,
 
     /// Candidate transcripts with similarity scores above this threshold are kept (overrides preset)
     #[arg(long, value_name = "FLOAT")]
@@ -58,7 +58,7 @@ pub struct Args {
 
     /// Maximum allowed size of an insertion or deletion of an entire exon, for sequencing technologies that produce long indels (overrides preset)
     #[arg(long, value_name = "INT")]
-    pub max_error_exon: Option<u8>,
+    pub max_error_exon: Option<u32>,
 
     /// Suppress progress bar and set logging level to WARN
     #[arg(short = 'q', long)]

@@ -193,24 +193,6 @@ pub fn smith_waterman(
             0 => {
                 // M (match/mismatch)
                 cigar.add_operation(len as u32, CigarOp::MatchOverride);
-                // Count actual matches/mismatches by comparing sequences
-                let qi = query_consumed as usize;
-                let ti = target_consumed as usize;
-                for k in 0..len as usize {
-                    let qpos = match anchor {
-                        Anchor::End => m - 1 - (qi + k),
-                        Anchor::Start => qi + k,
-                    };
-                    let tpos = match anchor {
-                        Anchor::End => n - 1 - (ti + k),
-                        Anchor::Start => ti + k,
-                    };
-                    if qpos < m && tpos < n && seq1[qpos] == seq2[tpos] {
-                        matches += 1;
-                    } else {
-                        mismatches += 1;
-                    }
-                }
                 query_consumed += len;
                 target_consumed += len;
             }
@@ -227,6 +209,32 @@ pub fn smith_waterman(
                 target_consumed += len;
             }
             _ => {}
+        }
+    }
+
+    // Count matches/mismatches in ksw2's own order on the sequences it aligned
+    // (reversed for Anchor::End): the extension starts at index 0 of both.
+    // Bases are encoded case-insensitively; N (4) counts as a mismatch, as in
+    // SAM NM and the C++ align().
+    {
+        let (mut qi, mut ti) = (0usize, 0usize);
+        for &packed in cigar_slice.iter() {
+            let len = (packed >> 4) as usize;
+            match packed & 0xf {
+                0 => {
+                    for k in 0..len {
+                        match (bufs.qbuf.get(qi + k), bufs.tbuf.get(ti + k)) {
+                            (Some(&q), Some(&t)) if q == t && t != 4 => matches += 1,
+                            _ => mismatches += 1,
+                        }
+                    }
+                    qi += len;
+                    ti += len;
+                }
+                1 => qi += len,
+                2 => ti += len,
+                _ => {}
+            }
         }
     }
 

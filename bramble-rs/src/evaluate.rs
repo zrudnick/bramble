@@ -3,7 +3,6 @@ use crate::g2t::{G2TTree, GuideExon};
 use crate::sw::{self, Anchor};
 use crate::types::{HashMap, HashMapExt, HashSet, HashSetExt};
 use crate::types::{ReadId, RefId, Tid};
-use ahash::RandomState;
 use anyhow::Result;
 use noodles::sam::alignment::record::cigar::op::Kind as CigarKind;
 
@@ -43,6 +42,10 @@ pub struct ReadEvaluationConfig {
     /// `similarity_score` at its default), so short-read projection is not
     /// re-weighted by junc_hits (C++ only rewrites AS for long reads).
     pub filter_by_similarity: bool,
+    /// Set `similarity_score` even when the filter is off (long reads, whose AS
+    /// is rewritten from it). With the filter off, matches are scored as if the
+    /// threshold were 0 (`x = similarity`) and none are dropped.
+    pub score_by_similarity: bool,
     /// Multiplicative discount in `(0, 1]` applied per internal junction mismatch
     /// (`junc_misses`): `similarity_score *= junc_miss_discount^junc_misses`.
     /// `1.0` = off (default, original behavior); smaller values sharpen isoform
@@ -64,6 +67,7 @@ impl ReadEvaluationConfig {
             // gate — the filter is skipped entirely rather than dropping reads.
             similarity_threshold: 1.0,
             filter_by_similarity: false,
+            score_by_similarity: false,
             ignore_small_exons: false,
             max_error_exon: 0,
             print: false,
@@ -84,6 +88,7 @@ impl ReadEvaluationConfig {
             max_junc_gap: 40,
             similarity_threshold: 0.60,
             filter_by_similarity: true,
+            score_by_similarity: true,
             ignore_small_exons: true,
             max_error_exon: 35,
             print: false,
@@ -222,6 +227,11 @@ pub struct AlignInfo {
     pub clip_score: i32,
     pub similarity_score: f64,
     pub hit_index: i32,
+    /// Clip rescue, for NM: query bases realigned at each end (genome
+    /// orientation) and the mismatches in those realignments.
+    pub rescue_left: u32,
+    pub rescue_right: u32,
+    pub rescue_mm: u32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -256,6 +266,9 @@ pub struct EvalSegment {
     pub is_small_exon: bool,
     pub cigar: Cigar,
     pub score: i32,
+    /// Clip rescue: query bases realigned, and mismatches in the realignment.
+    pub rescue_qlen: u32,
+    pub rescue_mm: u32,
 }
 
 impl Default for EvalSegment {
@@ -270,6 +283,8 @@ impl Default for EvalSegment {
             is_small_exon: false,
             cigar: Cigar::default(),
             score: 0,
+            rescue_qlen: 0,
+            rescue_mm: 0,
         }
     }
 }
@@ -687,21 +702,23 @@ pub fn left_clip_rescue(
             }
 
             let q_len = remaining_qseq.len() as i32;
-            let _left_clip_bases = (q_len - query_consumed).max(0) as u32;
+            // bases the extension did not reach: the clip's left end
+            let left_clip_bases = (q_len - query_consumed).max(0) as u32;
 
             let mut dummy_gexon = gexon.clone();
             dummy_gexon.start = gexon.start.saturating_sub(ref_consumed as u32);
             dummy_gexon.end = gexon.start;
             dummy_gexon.pos = gexon.pos_start.saturating_sub(ref_consumed as u32);
 
-            // Build the CIGAR: prepend soft-clip for unaligned bases, then
-            // iterate the reversed ksw2 CIGAR (C++ iterates n_cigar-1 down to 0).
+            // Build the CIGAR: the extension runs leftward from the exon, so the
+            // bases it did not reach come first, as a clip (C++
+            // build_left_clip_segment), then the rescued ops in original order.
+            // Without the leading clip the merge put the unrescued bases between
+            // the rescue and the exon (invalid CIGARs like 16M6S280M).
             let mut cigar = Cigar::default();
-
-            // in C++
-            // if left_clip_bases > 0 {
-            //     cigar.ops.push((left_clip_bases, CigarOp::ClipOverride))
-            // }
+            if left_clip_bases > 0 {
+                cigar.ops.push((left_clip_bases, CigarOp::ClipOverride));
+            }
 
             if let Some(&(len, ref op)) = result.cigar.ops.first() {
                 match op {
@@ -726,6 +743,8 @@ pub fn left_clip_rescue(
                 is_small_exon: remaining_qseq.len() as u32 <= config.max_error_exon,
                 cigar,
                 score: result.score,
+                rescue_qlen: q_len.max(0) as u32,
+                rescue_mm: result.mismatches.max(0) as u32,
             };
 
             tid_data.segments.insert(0, left_clip);
@@ -747,10 +766,6 @@ pub fn left_clip_rescue(
         }
     }
 
-    // Do NOT add ClipOverride for unrescued bases. The unrescued query bases
-    // from the leading soft clip will naturally pass through the merge as S
-    // ops when they hit the non-override M ops of the ideal (via pad_ideal_for_leading_clips).
-    // Adding ClipOverride here would cause wrong ordering (before the rescue match).
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -935,6 +950,8 @@ pub fn right_clip_rescue(
                 is_small_exon: remaining_qseq.len() as u32 <= config.max_error_exon,
                 cigar,
                 score: result.score,
+                rescue_qlen: q_len.max(0) as u32,
+                rescue_mm: result.mismatches.max(0) as u32,
             };
             tid_data.segments.push(right_clip);
             // Match C++: zero out right_ins on the original last segment
@@ -990,10 +1007,17 @@ pub fn correct_for_gaps(
         let gexon = segment.gexon.as_ref().unwrap();
 
         if let Some(ref prev) = prev_gexon {
-            let gap = gexon.exon_id.saturating_sub(prev.exon_id);
+            // signed: a step back to an earlier guide exon is never consistent
+            // (saturating_sub turned it into 0, which long reads accepted)
+            let gap = gexon.exon_id as i64 - prev.exon_id as i64;
+            if gap < 0 {
+                tid_data.elim = true;
+                return;
+            }
 
-            // here, to match C++, should only turn on for --lr (not --lr_hq)
-            // specifically, when max_error_exon > 0
+            // Short reads: consecutive guide exons only. Long reads (--lr and
+            // --lr-hq, as C++ correct_for_gaps): one skipped guide exon is
+            // allowed if it is at most max_error_exon bases long.
             if !long_reads {
                 if gap != 1 {
                     tid_data.elim = true;
@@ -1249,14 +1273,27 @@ pub fn build_cigar_clip(segment: &EvalSegment, match_info: &mut ExonChainMatch) 
         }
     }
     match_info.align.clip_score += segment.score;
+    if segment.status == ExonStatus::LeftClipExon {
+        match_info.align.rescue_left = segment.rescue_qlen;
+    } else {
+        match_info.align.rescue_right = segment.rescue_qlen;
+    }
+    match_info.align.rescue_mm += segment.rescue_mm;
 }
 
-fn deterministic_index(name: &[u8], n: usize) -> usize {
+/// Index in `0..n` chosen from a fixed hash of the read name (64-bit FNV-1a,
+/// then `% n`). Fully specified, so the choice is the same on every platform and
+/// in the C++ version (core.cpp fnv1a_64).
+pub(crate) fn deterministic_index(name: &[u8], n: usize) -> usize {
     if n == 0 {
         return 0;
     }
-    let state = RandomState::with_seeds(0, 0, 0, 0);
-    (state.hash_one(name) % (n as u64)) as usize
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &c in name {
+        h ^= c as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    (h % (n as u64)) as usize
 }
 
 pub fn filter_by_similarity(
@@ -1265,11 +1302,12 @@ pub fn filter_by_similarity(
     name: &[u8],
 ) {
     // C++ gates this whole similarity retain on `config.filter_by_similarity`
-    // (= `similarity_threshold < 1.0`). Short reads (threshold 1.0) DISABLE it:
-    // no match is dropped by similarity and `similarity_score` keeps its default,
-    // so junc_hits never re-weights short-read placements (matching C++, which
-    // also only rewrites the AS tag for long reads). When enabled (long reads),
-    // drop sub-threshold matches and set `similarity_score = x²·(junc_hits+1)`.
+    // (= `similarity_threshold < 1.0`). When enabled, drop sub-threshold matches
+    // and set `similarity_score = x²·(junc_hits+1)`. When disabled, nothing is
+    // dropped; long reads (`score_by_similarity`) are still scored, with x = the
+    // similarity itself, because their AS tag is rewritten from the score. Short
+    // reads keep `similarity_score` at its default, so junc_hits never re-weights
+    // short-read placements (matching C++, which only rewrites AS for long reads).
     if config.filter_by_similarity {
         matches.retain(|_tid, m| {
             let similarity = if m.total_operations > 0.0 {
@@ -1295,6 +1333,24 @@ pub fn filter_by_similarity(
                 false
             }
         });
+    } else if config.score_by_similarity {
+        // Filter off but the score is still needed (long reads rewrite AS from
+        // it): score as if the threshold were 0, so x is the similarity itself,
+        // and drop nothing. Mirrors C++ filter_by_similarity.
+        for m in matches.values_mut() {
+            let similarity = if m.total_operations > 0.0 {
+                m.total_coverage / m.total_operations
+            } else {
+                0.0
+            };
+            let miss_factor = if config.junc_miss_discount < 1.0 && m.junc_misses > 0 {
+                config.junc_miss_discount.powi(m.junc_misses)
+            } else {
+                1.0
+            };
+            m.align.similarity_score =
+                similarity * similarity * ((m.junc_hits + 1) as f64) * miss_factor;
+        }
     }
 
     matches.retain(|_tid, m| {
@@ -1589,11 +1645,11 @@ pub struct ReadEvaluator {
     pub lr_hq: bool,
     pub strict: bool,
     pub use_fasta: bool,
-    pub max_clip: Option<u8>,
-    pub max_junc_ins: Option<u8>,
-    pub max_junc_gap: Option<u8>,
+    pub max_clip: Option<u32>,
+    pub max_junc_ins: Option<u32>,
+    pub max_junc_gap: Option<u32>,
     pub similarity_threshold: Option<f32>,
-    pub max_error_exon: Option<u8>,
+    pub max_error_exon: Option<u32>,
     /// Per-junction-mismatch similarity discount in `(0, 1]`; `None` => 1.0 (off).
     pub junc_miss_discount: Option<f64>,
 }
@@ -1607,8 +1663,11 @@ impl ReadEvaluator {
             default_similarity_threshold,
             default_max_error_exon,
         ) = match (self.lr, self.lr_hq, self.strict) {
-            (_, _, true) => (0, 0, 0, 0.99_f32, 0),
-            (_, true, _) => (5, 10, 10, 0.90_f32, 0),
+            // Strict wins over every preset: every read exon boundary must match
+            // a guide exon boundary exactly, and the similarity filter is off
+            // (1.0 is the "off" sentinel, see the short-read default below).
+            (_, _, true) => (0, 0, 0, 1.0_f32, 0),
+            (_, true, _) => (5, 10, 10, 0.90_f32, 35),
             (true, _, _) => (40, 40, 40, 0.60_f32, 35),
             // Short-read default matches C++ (SIM_THR.value_or(1.0)): threshold
             // 1.0 is a SENTINEL that DISABLES the similarity filter
@@ -1632,6 +1691,8 @@ impl ReadEvaluator {
             similarity_threshold,
             // C++: filter_by_similarity = (similarity_threshold < 1.0).
             filter_by_similarity: similarity_threshold < 1.0,
+            // C++: true in LongReadEvaluator, false in ShortReadEvaluator.
+            score_by_similarity: self.lr || self.lr_hq,
             ignore_small_exons: max_error_exon > 0,
             max_error_exon: max_error_exon as u32,
             print: false,

@@ -4,7 +4,8 @@
 #include <string>
 #include <vector>
 #include <cmath>
-#include <random>
+#include <tuple>
+#include <unordered_set>
 
 #include "types.h"
 #include "bramble.h"
@@ -130,9 +131,15 @@ namespace bramble {
         // Print BEFORE update
         uint32_t* new_cigar = bam_get_cigar(b);
         uint32_t n_cigar = b->core.n_cigar;
+        // genome CIGAR, kept for NM (update_cigar overwrites it); one buffer per thread
+        thread_local std::vector<uint32_t> genome_cigar;
+        genome_cigar.assign(new_cigar, new_cigar + n_cigar);
         int32_t nm = 0;
         update_cigar(b, new_cigar, n_cigar, cigar_mem, cigar, nm);
-        // set_nm_tag(b, nm); should this be updated?
+        // NM for the projected alignment (MD removed); before reverse-complementing
+        set_projected_nm(b, genome_cigar, is_first ? pair->r_align : pair->m_align);
+        // drop aux tags that describe the genome alignment (keep list in bam.cpp)
+        keep_only_known_tags(b);
 
         // Update mapping quality score
         // must have values between 0–255
@@ -213,10 +220,86 @@ namespace bramble {
 #endif
   }
 
-  int32_t get_rand(uint32_t x, uint64_t seed_key) {
-    std::mt19937_64 gen(seed_key);
-    std::uniform_int_distribution<uint32_t> dis(0, x - 1);
-    return dis(gen);
+  // 64-bit FNV-1a: a fixed, fully specified hash, so tie-breaking is the same
+  // on every platform and standard library, and in the Rust version
+  // (bramble-rs evaluate.rs deterministic_index)
+  static uint64_t fnv1a_64(const std::string &s) {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    for (unsigned char c : s) {
+      h ^= c;
+      h *= 0x100000001b3ULL;
+    }
+    return h;
+  }
+
+  // Sort key for tied candidates: transcript names and positions, not tids,
+  // because tid numbering differs between the C++ and Rust versions; then the
+  // input order of the genomic alignments (same in both versions), for ties on
+  // the same transcript and position
+  static std::tuple<std::string, pos_t, bool, std::string, pos_t, read_id_t, read_id_t>
+  tie_key(const BamInfo *info, std::shared_ptr<g2tTree> &g2t) {
+    auto pos = [](const AlignInfo &a) { return a.strand == '+' ? a.fwpos : a.rcpos; };
+    read_id_t r_idx = info->read1 ? info->read1->index : 0;
+    if (!info->is_paired) {
+      return {g2t->getTidName(info->r_tid), pos(info->r_align), false, std::string(), 0,
+              r_idx, 0};
+    }
+    read_id_t m_idx = info->read2 ? info->read2->index : 0;
+    return {g2t->getTidName(info->r_tid), pos(info->r_align), true,
+            g2t->getTidName(info->m_tid), pos(info->m_align), r_idx, m_idx};
+  }
+
+  // Identity of a projected record: its genomic alignment (read end, strand,
+  // reference, position, CIGAR) and its transcript placement
+  static std::string record_key(const std::shared_ptr<ReadOut> &r, tid_t tid,
+                                const AlignInfo &a) {
+    bam1_t* b = r->brec->get_b();
+    uint16_t flag = b->core.flag & (BAM_FREAD1 | BAM_FREAD2 | BAM_FREVERSE);
+    uint32_t n_cigar = b->core.n_cigar;
+    pos_t pos = (a.strand == '+') ? a.fwpos : a.rcpos;
+    std::string k;
+    k.append((const char*)&flag, sizeof flag);
+    k.append((const char*)&b->core.tid, sizeof b->core.tid);
+    k.append((const char*)&b->core.pos, sizeof b->core.pos);
+    k.append((const char*)&n_cigar, sizeof n_cigar);
+    k.append((const char*)bam_get_cigar(b), n_cigar * sizeof(uint32_t));
+    k.append((const char*)&tid, sizeof tid);
+    k.append((const char*)&pos, sizeof pos);
+    k.push_back(a.strand);
+    return k;
+  }
+
+  // Collapse duplicate output units of one read: the same genomic alignment can
+  // be reported once per mate (e.g. three identical read1 alignments with three
+  // different mates), giving the same transcript record several times. Pairs
+  // are kept first, then single records not already kept, each in input order,
+  // so the earliest copy survives; dropped units are deleted. Mirrors Rust
+  // collapse_duplicate_units (bramble-rs groups.rs). Call before NH/HI/primary.
+  static void collapse_duplicates(std::vector<BamInfo*> &pairs) {
+    auto idx = [](const std::shared_ptr<ReadOut> &r) { return r ? r->index : 0; };
+    std::vector<BamInfo*> units(pairs);
+    std::stable_sort(units.begin(), units.end(), [&](BamInfo* a, BamInfo* b) {
+      return std::make_tuple(!a->is_paired, idx(a->read1),
+                             a->is_paired ? idx(a->read2) : 0, a->r_tid)
+           < std::make_tuple(!b->is_paired, idx(b->read1),
+                             b->is_paired ? idx(b->read2) : 0, b->r_tid);
+    });
+
+    std::unordered_set<std::string> kept_records, kept_pairs;
+    pairs.clear();
+    for (BamInfo* u : units) {
+      std::string a = record_key(u->read1, u->r_tid, u->r_align);
+      bool keep;
+      if (u->is_paired) {
+        std::string b = record_key(u->read2, u->m_tid, u->m_align);
+        keep = kept_pairs.insert(std::to_string(a.size()) + ':' + a + b).second;
+        if (keep) { kept_records.insert(a); kept_records.insert(b); }
+      } else {
+        keep = kept_records.insert(a).second;
+      }
+      if (keep) pairs.push_back(u);
+      else delete u;
+    }
   }
 
   void convert_reads(std::vector<CReadAln> &reads,
@@ -241,6 +324,8 @@ namespace bramble {
       std::vector<BamInfo*> filtered_bam_info;
       
       for (auto& [read_name, pairs] : pairs_by_name) {
+        // drop duplicate records (same genomic alignment, same placement)
+        collapse_duplicates(pairs);
 
         // Determine primary/secondary alignment status
         auto best_it = pairs.end();
@@ -282,9 +367,9 @@ namespace bramble {
               best_info->m_align.primary_alignment = true;
             }
           } else {
-            // Tie: pick deterministically among the tied candidates,
-            // seeded from the read name so the choice is stable
-            // regardless of thread scheduling / processing order.
+            // Tie: pick deterministically among the tied candidates, sorted by
+            // transcript name and position, using a fixed hash of the read name,
+            // so the choice is the same on every platform and in the Rust version
             std::vector<decltype(pairs.begin())> tied_its;
             for (auto it = pairs.begin(); it != pairs.end(); ++it) {
               auto &info = (*it);
@@ -297,14 +382,57 @@ namespace bramble {
               }
             }
 
-            uint64_t seed_key = std::hash<std::string>{}(read_name);
-            int32_t rand_idx = get_rand(static_cast<uint32_t>(tied_its.size()), seed_key);
-            auto &secondary = *(tied_its[rand_idx]);
+            std::sort(tied_its.begin(), tied_its.end(), [&](auto a, auto b) {
+              return tie_key(*a, g2t) < tie_key(*b, g2t);
+            });
+            size_t idx = fnv1a_64(read_name) % tied_its.size();
+            auto &secondary = *(tied_its[idx]);
 
             secondary->r_align.primary_alignment = true;
             if (secondary->is_paired) {
               secondary->m_align.primary_alignment = true;
             }
+          }
+        }
+
+        // Every read end gets one primary. If the best unit is a single record,
+        // the other end's best record (any unit) becomes primary on its own; its
+        // partner, if any, stays secondary. Ties: sorted by transcript name,
+        // position and input order, picked by the read-name hash (as Rust
+        // assign_primary_and_hit_indices).
+        {
+          auto end_of = [](const std::shared_ptr<ReadOut> &r) -> int {
+            uint16_t f = r->brec->get_b()->core.flag;
+            if (!(f & BAM_FPAIRED)) return 0;
+            return (f & BAM_FREAD1) ? 1 : ((f & BAM_FREAD2) ? 2 : 0);
+          };
+          struct Rec { AlignInfo* align; tid_t tid; read_id_t index; int end; };
+          std::vector<Rec> recs;
+          std::vector<int> covered;
+          for (auto* info : pairs) {
+            recs.push_back({&info->r_align, info->r_tid, info->read1->index, end_of(info->read1)});
+            if (info->is_paired)
+              recs.push_back({&info->m_align, info->m_tid, info->read2->index, end_of(info->read2)});
+          }
+          for (const auto &r : recs)
+            if (r.align->primary_alignment) covered.push_back(r.end);
+          for (int end : {1, 2}) {
+            if (std::find(covered.begin(), covered.end(), end) != covered.end()) continue;
+            double best = -std::numeric_limits<double>::infinity();
+            std::vector<const Rec*> cands;
+            for (const auto &r : recs) {
+              if (r.end != end) continue;
+              if (r.align->similarity_score > best) { best = r.align->similarity_score; cands.clear(); }
+              if (r.align->similarity_score == best) cands.push_back(&r);
+            }
+            if (cands.empty()) continue;
+            auto key = [&](const Rec* r) {
+              pos_t p = (r->align->strand == '+') ? r->align->fwpos : r->align->rcpos;
+              return std::make_tuple(g2t->getTidName(r->tid), p, r->index);
+            };
+            std::sort(cands.begin(), cands.end(),
+                      [&](const Rec* a, const Rec* b) { return key(a) < key(b); });
+            cands[fnv1a_64(read_name) % cands.size()]->align->primary_alignment = true;
           }
         }
 

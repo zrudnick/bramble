@@ -12,7 +12,7 @@ namespace bramble {
   struct IntervalData {
     uint32_t start;
     uint32_t end;
-    uint8_t idx;
+    uint32_t idx;      // exon number (was 8-bit: wrapped past 255 exons)
     uint32_t pos_start;
 
     bool has_prev;
@@ -27,7 +27,7 @@ namespace bramble {
 
   struct IITData {
     tid_t tid;
-    uint8_t exon_id;
+    uint32_t exon_id;
     uint32_t pos_start;
       // cumulative length on left side, for match position calculation
     bool has_prev;

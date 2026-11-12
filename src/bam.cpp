@@ -3,6 +3,7 @@
 #include <vector>
 #include <algorithm>
 #include <cstdlib>
+#include <cctype>
 
 #include "types.h"
 #include "bramble.h"
@@ -527,13 +528,144 @@ namespace bramble {
     return true;
   }
 
+  // Count the MD mismatches that fall in `keep` (sorted, disjoint query
+  // intervals [start, end), genome orientation), walking the MD tag and the
+  // genome CIGAR together; no allocations (this runs once per output record).
+  // Returns -1 if MD is malformed or does not fit the CIGAR.
+  static int64_t count_md_mismatches(const char* md, const std::vector<uint32_t>& gcigar,
+                                     const std::vector<std::pair<uint32_t, uint32_t>>& keep) {
+    size_t ci = 0;   // current genome CIGAR op
+    uint32_t off = 0;  // aligned bases already used in op ci
+    uint32_t q = 0;    // query position at the start of op ci
+    auto is_aligned = [](int op) {
+      return op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF;
+    };
+    // move to the next unused reference-aligned base; false if none left
+    auto next_aligned = [&]() {
+      while (ci < gcigar.size()) {
+        int op = bam_cigar_op(gcigar[ci]);
+        uint32_t len = bam_cigar_oplen(gcigar[ci]);
+        if (is_aligned(op) && off < len) return true;
+        if (bam_cigar_type(op) & 1) q += len;  // consumes query
+        ci++;
+        off = 0;
+      }
+      return false;
+    };
+
+    int64_t count = 0;
+    size_t kp = 0;
+    for (const char* p = md; *p; ) {
+      if (isdigit((unsigned char)*p)) {
+        uint64_t n = strtoul(p, (char**)&p, 10);
+        while (n > 0) {  // matching bases
+          if (!next_aligned()) return -1;
+          uint32_t take = std::min<uint64_t>(n, bam_cigar_oplen(gcigar[ci]) - off);
+          off += take;
+          n -= take;
+        }
+      } else if (*p == '^') {  // deleted reference bases: no query position
+        p++;
+        while (*p && isalpha((unsigned char)*p)) p++;
+      } else if (isalpha((unsigned char)*p)) {
+        if (!next_aligned()) return -1;
+        uint32_t pos = q + off++;
+        while (kp < keep.size() && keep[kp].second <= pos) kp++;
+        if (kp < keep.size() && keep[kp].first <= pos) count++;
+        p++;
+      } else {
+        return -1;
+      }
+    }
+    return next_aligned() ? -1 : count;  // MD must cover every aligned base
+  }
+
+  // NM for the projected alignment: mismatches of bases still aligned outside
+  // clip rescue (from MD; else genome NM minus genome indels), plus mismatches
+  // in rescued bases, plus every inserted/deleted base of the projected CIGAR.
+  // MD itself is dropped later by keep_only_known_tags. Call after update_cigar
+  // and before reverse_complement_bam; gcigar is the genome CIGAR.
+  void set_projected_nm(bam1_t* b, const std::vector<uint32_t>& gcigar,
+                        const AlignInfo& align) {
+    uint8_t* nm_tag = bam_aux_get(b, "NM");
+    uint8_t* md_tag = bam_aux_get(b, "MD");
+    const char* md = md_tag ? bam_aux2Z(md_tag) : nullptr;
+    if (!nm_tag && !md) return;  // nothing known about mismatches
+    int64_t genome_nm = nm_tag ? bam_aux2i(nm_tag) : 0;
+
+    // aligned (M/=/X) query intervals of the projected CIGAR, outside the
+    // ranges realigned by clip rescue
+    uint32_t* cigar = bam_get_cigar(b);
+    uint32_t n_cigar = b->core.n_cigar;
+    uint32_t qlen = bam_cigar2qlen(n_cigar, cigar);
+    uint32_t lo = std::min(align.rescue_left, qlen);
+    uint32_t hi = qlen - std::min(align.rescue_right, qlen);
+    thread_local std::vector<std::pair<uint32_t, uint32_t>> keep;
+    keep.clear();
+    int64_t new_indels = 0;
+    uint32_t q = 0;
+    for (uint32_t i = 0; i < n_cigar; i++) {
+      int op = bam_cigar_op(cigar[i]);
+      uint32_t len = bam_cigar_oplen(cigar[i]);
+      if (op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF) {
+        uint32_t s = std::max(q, lo), e = std::min(q + len, hi);
+        if (s < e) keep.emplace_back(s, e);
+      }
+      if (op == BAM_CINS || op == BAM_CDEL) new_indels += len;
+      if (bam_cigar_type(op) & 1) q += len;
+    }
+
+    int64_t mismatches = md ? count_md_mismatches(md, gcigar, keep) : -1;
+    if (mismatches < 0) {  // no usable MD
+      if (!nm_tag) return;
+      int64_t genome_indels = 0;
+      for (uint32_t c : gcigar) {
+        int op = bam_cigar_op(c);
+        if (op == BAM_CINS || op == BAM_CDEL) genome_indels += bam_cigar_oplen(c);
+      }
+      mismatches = std::max<int64_t>(0, genome_nm - genome_indels);
+    }
+
+    int32_t nm = (int32_t)(mismatches + align.rescue_mm + new_indels);
+    if (nm_tag) bam_aux_del(b, nm_tag);
+    bam_aux_append(b, "NM", 'i', 4, (uint8_t*)&nm);
+  }
+
+  // Aux tags kept in the output. Everything else describes the genome
+  // alignment (aligner scores, mate info, MD, ...) and is dropped. bramble's
+  // own tags are set or replaced separately. Keep in sync with KEEP_TAGS in
+  // bramble-cli/src/pipeline.rs.
+  static const char* const KEEP_TAGS[] = {
+    "NH", "HI", "NM", "AS",                      // bramble's own
+    "RG",                                        // read group
+    "BC", "QT", "CB", "CR", "CY", "MI", "OX",    // barcodes and UMIs
+    "BZ", "RX", "QX", "UB", "UR", "UY", "BX",
+    "MM", "ML", "MN", "Mm", "Ml",                // base modifications
+  };
+
+  // Remove every aux tag not in KEEP_TAGS
+  void keep_only_known_tags(bam1_t* b) {
+    uint8_t* a = bam_aux_first(b);
+    while (a) {
+      const char* t = bam_aux_tag(a);
+      bool keep = false;
+      for (const char* k : KEEP_TAGS) {
+        if (t[0] == k[0] && t[1] == k[1]) { keep = true; break; }
+      }
+      a = keep ? bam_aux_next(b, a) : bam_aux_remove(b, a);
+    }
+  }
+
   // Set mate information for a read
   void set_mate_info(bam1_t* b, BamInfo* this_pair, bool first_read) {
 
     // Handle unpaired reads
     if (!this_pair->is_paired) {
-      // Clear all paired-end related flags
-      b->core.flag &= ~(BAM_FPAIRED | BAM_FPROPER_PAIR | BAM_FMREVERSE);
+      // An orphan of a paired read stays paired (0x1, read1/read2 kept) with
+      // its mate unmapped (0x8): the standard SAM orphan, as in the Rust
+      // version. Single-end reads have no 0x1 and stay as they are.
+      b->core.flag &= ~(BAM_FPROPER_PAIR | BAM_FMREVERSE);
+      if (b->core.flag & BAM_FPAIRED) b->core.flag |= BAM_FMUNMAP;
       
       // Set mate reference to unmapped
       b->core.mtid = -1;  // -1 indicates unmapped mate
@@ -546,13 +678,15 @@ namespace bramble {
     // Set basic paired flags
     b->core.flag |= BAM_FPAIRED;
     
-    bool read_is_reverse =  (this_pair->r_align.strand == '-');
-    bool mate_is_reverse =  (this_pair->m_align.strand == '-');
-    if (first_read && read_is_reverse) {
-      b->core.flag |= BAM_FMREVERSE;
-    } else if (!first_read && mate_is_reverse) {
-      b->core.flag |= BAM_FMREVERSE;
-    }
+    // Mate-reverse flag = the mate record's output orientation: its genome
+    // orientation, flipped when its transcript is on '-' (reverse_complement_bam).
+    // Clear first: the genome alignment's 0x20 must not carry over.
+    const auto &mate_out = first_read ? this_pair->read2 : this_pair->read1;
+    char mate_strand = first_read ? this_pair->m_align.strand : this_pair->r_align.strand;
+    bool mate_genome_rev = mate_out && mate_out->brec &&
+      (mate_out->brec->get_b()->core.flag & BAM_FREVERSE);
+    b->core.flag &= ~BAM_FMREVERSE;
+    if (mate_genome_rev != (mate_strand == '-')) b->core.flag |= BAM_FMREVERSE;
     
     // Mates map to same transcript
     if (this_pair->same_transcript) {

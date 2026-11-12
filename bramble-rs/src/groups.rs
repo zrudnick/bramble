@@ -6,7 +6,8 @@
 #![allow(clippy::all)]
 use crate::alignment;
 use crate::evaluate::ExonChainMatch;
-use crate::types::{HashMap, HashMapExt, HashSet, RefId, Tid};
+use crate::g2t::G2TTree;
+use crate::types::{HashMap, HashMapExt, HashSet, HashSetExt, RefId, Tid};
 use noodles::sam::alignment::record::cigar::op::Kind as CigarKind;
 
 #[derive(Debug)]
@@ -65,60 +66,153 @@ pub struct OutputEntry {
     pub nh: u32,
 }
 
+/// Collapse duplicate output units of one read. A record is identified by its
+/// genomic alignment (`genome_key` of its record index: read end, strand,
+/// reference, position, CIGAR) and its transcript placement; the same genomic
+/// alignment can be reported once per mate (e.g. three identical read1
+/// alignments with three different mates), giving the same transcript record
+/// several times. Pairs are kept first, then single records not already kept,
+/// each in input order, so the earliest copy survives. Mirrors C++
+/// collapse_duplicates (core.cpp). Call before NH, HI and the primary.
 #[doc(hidden)]
-pub fn assign_hit_indices(entries: &mut [OutputEntry]) {
-    let mut by_read: HashMap<usize, Vec<usize>> = HashMap::new();
-    for (idx, entry) in entries.iter().enumerate() {
-        by_read.entry(entry.record_idx).or_default().push(idx);
+pub fn collapse_duplicate_units<K: std::hash::Hash + Eq + Clone>(
+    groups: &mut Vec<Vec<OutputEntry>>,
+    genome_key: impl Fn(usize) -> K,
+) {
+    let rec_key = |e: &OutputEntry| (genome_key(e.record_idx), e.tid, align_pos(&e.align), e.align.align.strand);
+    let mut units: Vec<Vec<OutputEntry>> = std::mem::take(groups).into_iter().filter(|g| !g.is_empty()).collect();
+    // input order: pairs by (read, mate) record index, then singles by record index
+    units.sort_by_key(|g| (g.len() != 2, g[0].record_idx, g.get(1).map_or(0, |m| m.record_idx), g[0].tid));
+
+    let mut kept_records = HashSet::new();
+    let mut kept_pairs = HashSet::new();
+    for g in units {
+        if g.len() == 2 {
+            let (a, b) = (rec_key(&g[0]), rec_key(&g[1]));
+            if kept_pairs.insert((a.clone(), b.clone())) {
+                kept_records.insert(a);
+                kept_records.insert(b);
+                groups.push(g);
+            }
+        } else if g.iter().all(|e| !kept_records.contains(&rec_key(e))) {
+            for e in &g {
+                kept_records.insert(rec_key(e));
+            }
+            groups.push(g);
+        }
+    }
+}
+
+/// Rank every projected alignment of one read together, as C++ does when it
+/// flushes a read-name group (core.cpp). Each output group is one unit: a mate
+/// pair (read, then mate) or a single unpaired record. HI runs 1..NH across the
+/// whole read, the unit with the highest score (max over its records) is
+/// primary (both mates for a pair), and ties are broken by a hash of the read
+/// name so the choice does not depend on transcript id or processing order.
+/// Tied units are sorted by transcript name and position first, matching C++.
+#[doc(hidden)]
+pub fn assign_primary_and_hit_indices(
+    groups: &mut [Vec<OutputEntry>],
+    name: &[u8],
+    g2t: &G2TTree,
+    read_end: impl Fn(usize) -> u8,
+) {
+    // deterministic unit order, independent of HashMap iteration order
+    groups.sort_by_key(|g| g.first().map(|e| (e.record_idx, e.tid)));
+
+    let mut hit_index: i32 = 0;
+    let mut best_score = f64::NEG_INFINITY;
+    let mut tied: Vec<usize> = Vec::new();
+
+    for (unit, group) in groups.iter_mut().enumerate() {
+        if group.is_empty() {
+            continue;
+        }
+        let mut unit_score = f64::NEG_INFINITY;
+        for entry in group.iter_mut() {
+            hit_index += 1;
+            entry.align.align.hit_index = hit_index;
+            entry.align.align.primary_alignment = false;
+            unit_score = unit_score.max(entry.align.align.similarity_score);
+        }
+        if unit_score > best_score {
+            best_score = unit_score;
+            tied.clear();
+            tied.push(unit);
+        } else if unit_score == best_score {
+            tied.push(unit);
+        }
     }
 
-    for (_record_idx, mut indices) in by_read {
-        indices.sort_by(|&a, &b| {
-            entries[a]
-                .tid
-                .cmp(&entries[b].tid)
-                .then_with(|| entries[a].is_first.cmp(&entries[b].is_first))
-                .then_with(|| entries[a].is_last.cmp(&entries[b].is_last))
-        });
+    if tied.is_empty() {
+        return;
+    }
+    // sort ties by transcript names and positions, not tids: tid numbering
+    // differs between the C++ and Rust versions (C++ core.cpp tie_key)
+    let tie_key = |g: &Vec<OutputEntry>| {
+        let tname = |e: &OutputEntry| g2t.transcript_name(e.tid).unwrap_or("").to_string();
+        // then input order of the genomic alignments (same in C++), for ties on
+        // the same transcript and position
+        let r = &g[0];
+        match g.get(1) {
+            None => (tname(r), align_pos(&r.align), false, String::new(), 0, r.record_idx, 0),
+            Some(m) => (
+                tname(r),
+                align_pos(&r.align),
+                true,
+                tname(m),
+                align_pos(&m.align),
+                r.record_idx,
+                m.record_idx,
+            ),
+        }
+    };
+    tied.sort_by_key(|&u| tie_key(&groups[u]));
+    let best = tied[crate::evaluate::deterministic_index(name, tied.len())];
+    for entry in groups[best].iter_mut() {
+        entry.align.align.primary_alignment = true;
+    }
 
+    // Every read end gets one primary. If the best unit is a single record, the
+    // other end's best record (any unit) becomes primary on its own; its partner,
+    // if any, stays secondary. Ties: sorted by transcript name, position and input
+    // order, picked by the read-name hash (as C++ core.cpp).
+    let covered: Vec<u8> = groups[best].iter().map(|e| read_end(e.record_idx)).collect();
+    let mut ends: Vec<u8> = groups.iter().flatten().map(|e| read_end(e.record_idx)).collect();
+    ends.sort_unstable();
+    ends.dedup();
+    for end in ends {
+        if end == 0 || covered.contains(&end) {
+            continue;
+        }
         let mut best_score = f64::NEG_INFINITY;
-        let mut best_idx: Option<usize> = None;
-
-        for (hit_index, entry_idx) in indices.iter().copied().enumerate() {
-            let entry = &mut entries[entry_idx];
-            entry.align.align.hit_index = (hit_index + 1) as i32;
-            let score = entry.align.align.similarity_score;
-            if score > best_score + 1e-12 {
-                best_score = score;
-                best_idx = Some(entry_idx);
-            } else if (score - best_score).abs() <= 1e-12
-                && let Some(current) = best_idx
-                && entry.tid < entries[current].tid
-            {
-                best_idx = Some(entry_idx);
+        let mut cands: Vec<(usize, usize)> = Vec::new();
+        for (u, g) in groups.iter().enumerate() {
+            for (k, e) in g.iter().enumerate() {
+                if read_end(e.record_idx) != end {
+                    continue;
+                }
+                let score = e.align.align.similarity_score;
+                if score > best_score {
+                    best_score = score;
+                    cands.clear();
+                }
+                if score == best_score {
+                    cands.push((u, k));
+                }
             }
         }
-
-        let best_idx = best_idx.unwrap_or(indices[0]);
-        for entry_idx in indices.iter().copied() {
-            entries[entry_idx].align.align.primary_alignment = entry_idx == best_idx;
+        if cands.is_empty() {
+            continue;
         }
-    }
-
-    // C++ marks BOTH mates in the best pair as primary. Propagate primary
-    // status: if a paired entry is primary, find its mate (same tid, opposite
-    // is_first/is_last) and mark it primary too.
-    let primary_tids: Vec<(Tid, bool)> = entries
-        .iter()
-        .filter(|e| e.align.align.primary_alignment && e.mate.is_some())
-        .map(|e| (e.tid, e.is_first))
-        .collect();
-    for (tid, is_first) in primary_tids {
-        for entry in entries.iter_mut() {
-            if entry.mate.is_some() && entry.tid == tid && entry.is_first != is_first {
-                entry.align.align.primary_alignment = true;
-            }
-        }
+        let rec_key = |&(u, k): &(usize, usize)| {
+            let e = &groups[u][k];
+            let tname = g2t.transcript_name(e.tid).unwrap_or("").to_string();
+            (tname, align_pos(&e.align), e.record_idx)
+        };
+        cands.sort_by_key(rec_key);
+        let (u, k) = cands[crate::evaluate::deterministic_index(name, cands.len())];
+        groups[u][k].align.align.primary_alignment = true;
     }
 }
 
@@ -177,8 +271,11 @@ pub fn find_mate_pairs(reads: &[ReadEval]) -> Vec<(usize, usize)> {
                 if m == idx || paired[m] {
                     continue;
                 }
+                // opposite read ends only: read1 pairs with read2
+                let end = |r: &ReadEval| r.flags & (FLAG_READ1 | FLAG_READ2);
                 if let Some((_, m_ms)) = eligible(&reads[m])
                     && m_ms == rs
+                    && end(&reads[m]) != end(read)
                 {
                     pairs.push((idx, m));
                     paired[idx] = true;
@@ -218,6 +315,14 @@ pub fn assign_pair_order(i: usize, j: usize, reads: &[ReadEval]) -> (usize, usiz
     if i <= j { (i, j) } else { (j, i) }
 }
 
+/// Orientation of a record in the output: its genome orientation, flipped when
+/// the transcript is on '-' (the writer reverse-complements it). This, not
+/// `align.is_reverse` (transcript strand vs read strand), is what the mate's
+/// 0x20 flag must report.
+fn output_reverse(eval: &ReadEval, m: &ExonChainMatch) -> bool {
+    (eval.flags & FLAG_REVERSE != 0) ^ (m.align.strand == '-')
+}
+
 #[doc(hidden)]
 pub fn build_paired_groups(read: &ReadEval, mate: &ReadEval) -> Vec<Vec<OutputEntry>> {
     let read_transcripts: HashSet<Tid> = read.matches.keys().copied().collect();
@@ -248,12 +353,12 @@ pub fn build_paired_groups(read: &ReadEval, mate: &ReadEval) -> Vec<Vec<OutputEn
             let mate_info_for_read = MateInfo {
                 tid,
                 pos: align_pos(mate_match),
-                is_reverse: mate_match.align.is_reverse,
+                is_reverse: output_reverse(mate, mate_match),
             };
             let mate_info_for_mate = MateInfo {
                 tid,
                 pos: align_pos(read_match),
-                is_reverse: read_match.align.is_reverse,
+                is_reverse: output_reverse(read, read_match),
             };
 
             groups.push(vec![
@@ -299,12 +404,12 @@ pub fn build_paired_groups(read: &ReadEval, mate: &ReadEval) -> Vec<Vec<OutputEn
         let mate_info_for_read = MateInfo {
             tid: m_tid,
             pos: align_pos(mate_match),
-            is_reverse: mate_match.align.is_reverse,
+            is_reverse: output_reverse(mate, mate_match),
         };
         let mate_info_for_mate = MateInfo {
             tid: r_tid,
             pos: align_pos(read_match),
-            is_reverse: read_match.align.is_reverse,
+            is_reverse: output_reverse(read, read_match),
         };
 
         groups.push(vec![

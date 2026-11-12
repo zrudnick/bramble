@@ -10,7 +10,7 @@ use std::sync::Arc;
 pub struct IntervalData {
     pub start: u32,
     pub end: u32,
-    pub idx: u8,
+    pub idx: u32, // exon number (was u8: wrapped past 255 exons)
     pub pos_start: u32,
     pub seq: Arc<[u8]>,
 
@@ -30,7 +30,7 @@ pub struct GuideExon {
     pub end: u32,
     pub pos: u32,
     pub pos_start: u32,
-    pub exon_id: u8,
+    pub exon_id: u32,
     pub seq: Arc<[u8]>,
     pub left_ins: i32,
     pub right_ins: i32,
@@ -50,7 +50,7 @@ pub struct GuideExon {
 #[derive(Debug, Clone, Default)]
 pub struct IITData {
     pub tid: Tid,
-    pub exon_id: u8,
+    pub exon_id: u32,
     pub pos_start: u32,
     pub has_prev: bool,
     pub has_next: bool,
@@ -64,7 +64,7 @@ pub struct IITData {
 pub struct IntervalTree {
     intervals: Vec<Interval<IITData>>,
     tree: Option<BasicCOITree<IITData, u32>>,
-    seqs: HashMap<(Tid, u8), Arc<[u8]>>,
+    seqs: HashMap<(Tid, u32), Arc<[u8]>>,
 }
 
 impl IntervalTree {
@@ -168,7 +168,18 @@ impl IntervalTree {
 
         let q_last = qend.saturating_sub(1) as i32;
 
+        // A read exon overlapping two exons of one transcript contains that
+        // transcript's intron: the read cannot come from it. Such transcripts get
+        // no hit, so the caller eliminates them (as C++ findOverlapping).
+        let mut n_hits: HashMap<Tid, u32> = HashMap::new();
         tree.query(qstart as i32, q_last, |node| {
+            *n_hits.entry(node.metadata.tid).or_insert(0) += 1;
+        });
+
+        tree.query(qstart as i32, q_last, |node| {
+            if n_hits.get(&node.metadata.tid).copied().unwrap_or(0) > 1 {
+                return;
+            }
             let s = node.first.max(0) as u32;
             let e_excl = (node.last + 1).max(0) as u32;
 
@@ -255,10 +266,13 @@ impl IntervalTree {
                 } else {
                     exon.pos = data.pos_start;
                     exon.right_ins = (qend - e_excl) as i32;
-                    // NOTE: Match C++ behavior (g2t.cpp) which effectively
-                    // treats this condition as always true due to `|| MIDDLE_EXON`.
-                    // That means `max_junc_ins` is enforced for all statuses here.
-                    if (exon.right_ins as u32) > config.max_junc_ins {
+                    // Right end is a junction for first/middle exons; for the
+                    // read's last/only exon it is the read's own end (soft clip)
+                    if matches!(status, ExonStatus::FirstExon | ExonStatus::MiddleExon) {
+                        if (exon.right_ins as u32) > config.max_junc_ins {
+                            rejected = true;
+                        }
+                    } else if (exon.right_ins as u32) > config.max_clip {
                         rejected = true;
                     }
                 }
@@ -467,7 +481,7 @@ pub fn build_g2t(
             intervals.push(IntervalData {
                 start: exon.start,
                 end: exon.end,
-                idx: idx as u8,
+                idx: idx as u32,
                 pos_start,
                 seq,
                 has_prev: false,

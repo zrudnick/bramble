@@ -1,4 +1,5 @@
 
+#include <unordered_map>
 #include <numeric>
 #include <algorithm>
 #include <iostream>
@@ -110,6 +111,12 @@ namespace bramble {
     iit->overlap(qstart, qend, hits);
     if (hits.empty()) return false;
 
+    // A read exon overlapping two exons of one transcript contains that
+    // transcript's intron: the read cannot come from it. Such transcripts get
+    // no hit here, so the caller eliminates them (as Rust find_overlapping).
+    std::unordered_map<tid_t, int> n_hits;
+    for (size_t idx : hits) n_hits[iit->data(idx).tid]++;
+
     uint32_t pos;
     uint32_t left_gap;
     uint32_t left_ins;
@@ -142,6 +149,7 @@ namespace bramble {
     // }
 
     for (size_t idx : hits) {
+      if (n_hits[iit->data(idx).tid] > 1) continue;
       uint32_t s = iit->start(idx);
       uint32_t e = iit->end(idx);
 
@@ -201,7 +209,7 @@ namespace bramble {
           pos = data.pos_start;
           // Right clip: query extends past interval
           right_ins = qend - e;
-          if (status == FIRST_EXON || MIDDLE_EXON) {
+          if (status == FIRST_EXON || status == MIDDLE_EXON) {
             if (right_ins > config.max_junc_ins) continue;
           } else {
             if (right_ins > config.max_clip) continue;

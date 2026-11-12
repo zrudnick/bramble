@@ -128,7 +128,12 @@ namespace bramble {
     if (!prev_guide) return true; // no prior guide exon to compare against
 
     const auto &seg1 = *prev_guide;
-    uint8_t gap = seg2.gexon.exon_id - seg1.gexon.exon_id;
+    // signed: a step back to an earlier guide exon is never consistent
+    int64_t gap = (int64_t)seg2.gexon.exon_id - (int64_t)seg1.gexon.exon_id;
+    if (gap < 0) {
+      td.elim = true;
+      return false;
+    }
 
     // short reads and hq long reads: require strict continuity
     // todo: make check for config.ignore_small_exons && is_small_exon
@@ -311,6 +316,24 @@ namespace bramble {
     result.max = ez.max;  // use max due to EXTZ_ONLY
     result.cigar_array = ez.cigar;
     result.n_cigar = ez.n_cigar;
+
+    // count mismatches for NM: the extension starts at the start of both
+    // sequences; an N on either side counts as a mismatch, as in SAM NM
+    result.mismatches = 0;
+    int ti = 0, qi = 0;
+    for (int k = 0; k < ez.n_cigar; ++k) {
+      int op = ez.cigar[k] & 0xf, len = ez.cigar[k] >> 4;
+      if (op == 0) {
+        for (int x = 0; x < len && ti + x < tl && qi + x < ql; ++x) {
+          if (ts[ti + x] != qs[qi + x] || ts[ti + x] == 4) result.mismatches++;
+        }
+        ti += len; qi += len;
+      } else if (op == 1) {
+        qi += len;
+      } else if (op == 2) {
+        ti += len;
+      }
+    }
     
     free(ts); free(qs);
     return result;
@@ -420,6 +443,8 @@ namespace bramble {
     seg.is_small_exon = (q_len <= small_exon);
     seg.cigar         = Cigar();
     seg.score         = result.max;  // use max, not score, for extension alignment
+    seg.rescue_qlen   = q_len;
+    seg.rescue_mm     = result.mismatches;
 
     GuideExon dummy  = {};
     dummy.start      = gexon.start - ref_consumed;
@@ -571,6 +596,8 @@ namespace bramble {
     seg.is_small_exon = (q_len <= small_exon);
     seg.cigar        = Cigar();
     seg.score        = result.max;  // use max, not score, for extension alignment
+    seg.rescue_qlen  = q_len;
+    seg.rescue_mm    = result.mismatches;
 
     GuideExon dummy  = {};
     dummy.start      = gexon.end;
@@ -665,6 +692,9 @@ namespace bramble {
     match.align.strand     = strand;
     match.align.cigar      = Cigar();
     match.align.similarity_score = 0;
+    match.align.rescue_left  = 0;
+    match.align.rescue_right = 0;
+    match.align.rescue_mm    = 0;
     match.total_coverage   = 0;
     match.total_operations = 0;
     match.ref_consumed     = 0;
@@ -838,6 +868,9 @@ namespace bramble {
     }
     if (config.print) printf("Added clip cigar to match cigar\n");
     match.align.clip_score += seg.score;
+    if (seg.status == LEFTC_EXON) match.align.rescue_left = seg.rescue_qlen;
+    else match.align.rescue_right = seg.rescue_qlen;
+    match.align.rescue_mm += seg.rescue_mm;
   }
 
   void 
@@ -854,7 +887,7 @@ namespace bramble {
         if (similarity > config.similarity_threshold) {
           double x = ((similarity - config.similarity_threshold)
             / (1.0 - config.similarity_threshold));
-          match.align.similarity_score = (x * x * static_cast<double>(match.junc_hits + 1)); 
+          match.align.similarity_score = (x * x * static_cast<double>(match.junc_hits + 1));
           ++it;
         } else {
           it = matches.erase(it);
@@ -862,6 +895,17 @@ namespace bramble {
       }
 
       if (matches.empty()) return;
+
+    } else if (config.score_by_similarity) {
+      // Filter off but the score is still needed (long reads rewrite AS from it):
+      // score as if the threshold were 0, so x is the similarity itself, and drop nothing
+      for (auto &match : matches) {
+        double similarity = (match.total_operations > 0)
+          ? (match.total_coverage / match.total_operations)
+          : 0.0;
+        match.align.similarity_score = (similarity * similarity
+          * static_cast<double>(match.junc_hits + 1));
+      }
     }
 
     if (BRAMBLE_DEBUG) {
@@ -1164,11 +1208,12 @@ namespace bramble {
       max_junc_gap,                   // max junction gap
       ignore_small_exons,            
       max_error_exon,                
-      similarity_threshold,                         
-      filter_by_similarity,          
+      similarity_threshold,
+      filter_by_similarity,
+      false,                          // short reads keep the genome AS: no scoring
       false,                          // print debug statements?
       ""
-    }; 
+    };
 
     auto matches = evaluate_exon_chains(read, g2t, config, seq, seq_len);
     return matches;
@@ -1180,26 +1225,28 @@ namespace bramble {
                               uint8_t *seq,
                               int seq_len) {
     uint32_t max_clip, max_junc_ins, max_junc_gap, max_error_exon;
-    float similarity_threshold;                          
-    if (LR) {
+    float similarity_threshold;
+    // strict wins over the long-read presets: every read exon boundary must
+    // match a guide exon boundary exactly, and the similarity filter is off
+    if (STRICT) {
+      max_clip = MAX_CLIP.value_or(0);
+      max_junc_ins = MAX_JUNC_INS.value_or(0);
+      max_junc_gap = MAX_JUNC_GAP.value_or(0);
+      similarity_threshold = SIM_THR.value_or(1.0);
+      max_error_exon = MAX_ERROR_EXON.value_or(0);
+    } else if (LR) {
       max_clip = MAX_CLIP.value_or(40);
       max_junc_ins = MAX_JUNC_INS.value_or(40);
       max_junc_gap = MAX_JUNC_GAP.value_or(40);
       similarity_threshold = SIM_THR.value_or(0.60);
       max_error_exon = MAX_ERROR_EXON.value_or(35);
-    } else if (LR_HQ) {
+    } else {  // LR_HQ: this evaluator only runs with --lr or --lr-hq
       max_clip = MAX_CLIP.value_or(5);
       max_junc_ins = MAX_JUNC_INS.value_or(10);
       max_junc_gap = MAX_JUNC_GAP.value_or(10);
       similarity_threshold = SIM_THR.value_or(0.90);
       max_error_exon = MAX_ERROR_EXON.value_or(35);
-    } else if (STRICT) {
-      max_clip = MAX_CLIP.value_or(0);
-      max_junc_ins = MAX_JUNC_INS.value_or(0);
-      max_junc_gap = MAX_JUNC_GAP.value_or(0);
-      similarity_threshold = SIM_THR.value_or(1.0);
-      max_error_exon = MAX_ERROR_EXON.value_or(35);
-    }                         
+    }
 
     bool ignore_small_exons = (max_error_exon > 0);
     bool filter_by_similarity = (similarity_threshold < 1.0);
@@ -1211,10 +1258,11 @@ namespace bramble {
       ignore_small_exons,             
       max_error_exon,             
       similarity_threshold,
-      filter_by_similarity,         
+      filter_by_similarity,
+      true,                           // long reads: AS is rewritten from similarity_score
       false,                          // print debug statements
       ""
-    };   
+    };
 
     auto matches = evaluate_exon_chains(read, g2t, config, seq, seq_len); 
     return matches;

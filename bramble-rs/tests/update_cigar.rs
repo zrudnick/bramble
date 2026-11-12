@@ -141,3 +141,120 @@ fn update_cigar_clip_override_converts_match_to_softclip() {
         vec![(CigarKind::SoftClip, 2), (CigarKind::Match, 8)],
     );
 }
+
+#[test]
+fn update_cigar_insertion_in_clipped_overhang_joins_clip() {
+    // Read 181M1I17M whose transcript ends after 172 bases: the insertion falls
+    // inside the clipped overhang, so the whole overhang is one soft clip
+    // (172M27S, as C++), not the invalid 172M9S1I17S.
+    let real = vec![
+        SamCigarOp::new(CigarKind::Match, 181),
+        SamCigarOp::new(CigarKind::Insertion, 1),
+        SamCigarOp::new(CigarKind::Match, 17),
+    ];
+    let ideal = build_ideal(&[(172, CigarOp::Match), (26, CigarOp::SoftClip)]);
+
+    let (cigar, nm) = update_cigar_for_test(real, ideal);
+    assert_eq!(nm, 0);
+    assert_eq!(
+        cigar_kinds(&cigar),
+        vec![(CigarKind::Match, 172), (CigarKind::SoftClip, 27)]
+    );
+}
+
+fn ops(v: &[(CigarKind, usize)]) -> Vec<SamCigarOp> {
+    v.iter().map(|&(k, l)| SamCigarOp::new(k, l)).collect()
+}
+
+use CigarKind::{Deletion as D, Insertion as I, Match as M, SoftClip as S};
+use bramble_rs::cigar::projected_nm;
+
+#[test]
+fn projected_nm_unchanged_alignment_keeps_mismatches() {
+    let g = ops(&[(M, 150)]);
+    assert_eq!(projected_nm(&g, &g, Some(1), Some(b"16C133"), 0, 0, 0), Some(1));
+}
+
+#[test]
+fn projected_nm_insertion_absorbed_into_clip_is_not_an_edit() {
+    // the CIGAR-bug read: 181M1I17M -> 172M27S
+    let g = ops(&[(M, 181), (I, 1), (M, 17)]);
+    let p = ops(&[(M, 172), (S, 27)]);
+    assert_eq!(projected_nm(&g, &p, Some(1), Some(b"198"), 0, 0, 0), Some(0));
+}
+
+#[test]
+fn projected_nm_mismatch_in_new_clip_dropped_with_md_kept_without() {
+    let g = ops(&[(M, 100)]);
+    let p = ops(&[(M, 90), (S, 10)]);
+    // MD places the mismatch at position 95, inside the new clip
+    assert_eq!(projected_nm(&g, &p, Some(1), Some(b"95A4"), 0, 0, 0), Some(0));
+    // without MD the genome mismatch count is all we have
+    assert_eq!(projected_nm(&g, &p, Some(1), None, 0, 0, 0), Some(1));
+}
+
+#[test]
+fn projected_nm_counts_added_indels_and_md_deletions() {
+    let g = ops(&[(M, 100)]);
+    let p = ops(&[(M, 50), (D, 2), (M, 50)]);
+    assert_eq!(projected_nm(&g, &p, Some(0), Some(b"100"), 0, 0, 0), Some(2));
+    // genome deletion with a mismatch: MD 20A29^GG50 -> 1 mismatch + 2 deleted
+    let g2 = ops(&[(M, 50), (D, 2), (M, 50)]);
+    assert_eq!(projected_nm(&g2, &g2, Some(3), Some(b"20A29^GG50"), 0, 0, 0), Some(3));
+}
+
+#[test]
+fn projected_nm_rescued_bases_use_rescue_mismatches() {
+    // left 10 soft-clipped bases rescued as matches with 2 mismatches
+    let g = ops(&[(S, 10), (M, 90)]);
+    let p = ops(&[(M, 100)]);
+    assert_eq!(projected_nm(&g, &p, Some(0), Some(b"90"), 10, 0, 2), Some(2));
+}
+
+#[test]
+fn projected_nm_none_without_nm_or_md() {
+    let g = ops(&[(M, 100)]);
+    assert_eq!(projected_nm(&g, &g, None, None, 0, 0, 0), None);
+}
+
+#[test]
+fn update_cigar_left_rescue_unrescued_bases_come_first() {
+    // 22 soft-clipped bases, the leftward rescue reached the 16 next to the exon:
+    // the 6 it did not reach stay clipped at the start (6S116M, as C++), not
+    // between the rescue and the exon (invalid 16M6S100M)
+    let real = vec![
+        SamCigarOp::new(CigarKind::SoftClip, 22),
+        SamCigarOp::new(CigarKind::Match, 100),
+    ];
+    let ideal = build_ideal(&[
+        (6, CigarOp::ClipOverride),
+        (16, CigarOp::MatchOverride),
+        (100, CigarOp::Match),
+    ]);
+    let (cigar, _) = update_cigar_for_test(real, ideal);
+    assert_eq!(
+        cigar_kinds(&cigar),
+        vec![(CigarKind::SoftClip, 6), (CigarKind::Match, 116)]
+    );
+}
+
+#[test]
+fn update_cigar_left_rescue_after_hard_clip() {
+    // leading hard clip + soft clip: every soft-clipped base is matched against
+    // the rescue ops (the padding loop used to stop front_hard bases early)
+    let real = vec![
+        SamCigarOp::new(CigarKind::HardClip, 5),
+        SamCigarOp::new(CigarKind::SoftClip, 10),
+        SamCigarOp::new(CigarKind::Match, 90),
+    ];
+    let ideal = build_ideal(&[
+        (4, CigarOp::ClipOverride),
+        (6, CigarOp::MatchOverride),
+        (90, CigarOp::Match),
+    ]);
+    let (cigar, _) = update_cigar_for_test(real, ideal);
+    assert_eq!(
+        cigar_kinds(&cigar),
+        vec![(CigarKind::HardClip, 5), (CigarKind::SoftClip, 4), (CigarKind::Match, 96)]
+    );
+}

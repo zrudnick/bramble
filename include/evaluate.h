@@ -133,7 +133,7 @@ namespace bramble {
     uint32_t end;
     pos_t    pos;
     uint32_t pos_start;
-    uint8_t  exon_id;
+    uint32_t exon_id;
     int32_t  left_ins;
     int32_t  right_ins;
     int32_t  left_gap;
@@ -160,9 +160,18 @@ namespace bramble {
     double similarity_score;
     int32_t hit_index;
 
+    // clip rescue, for NM: query bases realigned at each end (genome
+    // orientation) and the mismatches in those realignments
+    uint32_t rescue_left;
+    uint32_t rescue_right;
+    uint32_t rescue_mm;
+
     AlignInfo()
       : primary_alignment(false),
-        clip_score(0) {}
+        clip_score(0),
+        rescue_left(0),
+        rescue_right(0),
+        rescue_mm(0) {}
   };
 
   struct ExonChainMatch {
@@ -204,6 +213,8 @@ namespace bramble {
     bool is_small_exon;
     Cigar cigar;
     int score;
+    uint32_t rescue_qlen = 0;  // clip rescue: query bases realigned
+    uint32_t rescue_mm = 0;    // clip rescue: mismatches in the realignment
   };
 
   struct TidData {
@@ -280,6 +291,7 @@ namespace bramble {
     uint32_t max_error_exon;       // size of small exon
     float similarity_threshold;     // min similarity score
     bool filter_by_similarity;      // should we filter by similarity? (yes for messy reads)
+    bool score_by_similarity;       // set similarity_score even with the filter off? (long reads)
     bool print;
     std::string name;
   };
@@ -289,6 +301,7 @@ namespace bramble {
     int n_cigar;                // number of CIGAR ops
     int score;
     int max;
+    uint32_t mismatches;        // mismatched bases in M ops (N counts as mismatch)
   };
 
   class ReadEvaluator {

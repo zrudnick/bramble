@@ -10,7 +10,7 @@ use bramble_rs::evaluate::{EvalContext, ExonChainMatch, ReadAln, ReadEvaluator};
 use bramble_rs::g2t::G2TTree;
 use bramble_rs::groups::{
     FLAG_MATE_REVERSE, FLAG_MATE_UNMAPPED, FLAG_PAIRED, FLAG_PROPER_PAIR, FLAG_READ1, FLAG_READ2,
-    FLAG_REVERSE, FLAG_SECONDARY, FLAG_UNMAPPED, OutputEntry, ReadEval, assign_hit_indices,
+    FLAG_REVERSE, FLAG_SECONDARY, FLAG_UNMAPPED, OutputEntry, ReadEval, assign_primary_and_hit_indices, collapse_duplicate_units,
     assign_pair_order, build_paired_groups, build_unpaired_groups, compute_template_length,
     find_mate_pairs,
 };
@@ -30,7 +30,17 @@ const BATCH_SIZE: usize = 64;
 
 /// Tags to strip from output records (they are invalid in projected coordinates
 /// or will be replaced with bramble-computed values).
-const SKIP_TAGS: &[[u8; 2]] = &[*b"NH", *b"HI", *b"AS", *b"CG", *b"XS", *b"SA"];
+/// Input aux tags passed through to the output. Everything else describes the
+/// genome alignment (aligner scores, mate info, MD, ...) and is dropped; bramble's
+/// own tags (NH, HI, NM, AS) are written after filtering. No XS: in transcript
+/// coordinates every alignment is on the transcript's strand, so it says nothing. Keep in sync with
+/// KEEP_TAGS in src/bam.cpp (which also lists the C++ version's own tags).
+const KEEP_TAGS: &[[u8; 2]] = &[
+    *b"RG", // read group
+    *b"BC", *b"QT", *b"CB", *b"CR", *b"CY", *b"MI", *b"OX", // barcodes and UMIs
+    *b"BZ", *b"RX", *b"QX", *b"UB", *b"UR", *b"UY", *b"BX",
+    *b"MM", *b"ML", *b"MN", *b"Mm", *b"Ml", // base modifications
+];
 
 #[derive(Debug, Default)]
 pub struct Stats {
@@ -471,31 +481,31 @@ fn process_group_records(
         output_groups.extend(build_unpaired_groups(read));
     }
 
+    // Drop duplicate records (same genomic alignment, same transcript placement)
+    collapse_duplicate_units(&mut output_groups, |idx| {
+        let r = &group[idx].record;
+        let flags = r.flags() & (FLAG_READ1 | FLAG_READ2 | FLAG_REVERSE);
+        let cigar: Vec<u32> = r.raw_cigar().to_vec();
+        (flags, r.tid(), r.pos(), cigar)
+    });
+
     // Count total output records (both read1 and read2 for paired), matching
     // C++ total_matches which increments once per r_align and once per m_align.
     let new_nh: u32 = output_groups.iter().map(|g| g.len() as u32).sum();
-    let mut entries: Vec<OutputEntry> = output_groups.into_iter().flatten().collect();
-    entries.sort_by(|a, b| {
-        (
-            a.record_idx,
-            a.tid,
-            a.is_first,
-            a.is_last,
-            a.align.align.hit_index,
-        )
-            .cmp(&(
-                b.record_idx,
-                b.tid,
-                b.is_first,
-                b.is_last,
-                b.align.align.hit_index,
-            ))
+    // primary + HI over the whole read, before flattening loses the pair units
+    assign_primary_and_hit_indices(&mut output_groups, group[0].record.qname(), g2t, |idx| {
+        let f = group[idx].record.flags();
+        if f & FLAG_PAIRED == 0 { 0 } else if f & FLAG_READ1 != 0 { 1 } else if f & FLAG_READ2 != 0 { 2 } else { 0 }
     });
+    // Output in unit order (as sorted above), each pair as read then mate, so
+    // mates are adjacent: salmon pairs adjacent records (C++ writes the same way)
+    let entries: Vec<OutputEntry> = output_groups.into_iter().flatten().collect();
 
-    assign_hit_indices(&mut entries);
+    // --lr and --lr-hq are both long reads (C++ LONG_READS = LR || LR_HQ)
+    let long_reads = evaluator.lr || evaluator.lr_hq;
     for entry in entries {
         let nh = new_nh;
-        let mapq = get_mapq(nh, evaluator.lr);
+        let mapq = get_mapq(nh, long_reads);
         let rec = &group[entry.record_idx];
         let out = build_projected_record(
             &rec.record,
@@ -503,7 +513,7 @@ fn process_group_records(
             &entry,
             nh,
             mapq,
-            evaluator.lr,
+            long_reads,
         )?;
         output.push(out);
     }
@@ -660,7 +670,8 @@ fn build_projected_record(
     };
 
     // Compute CIGAR
-    let (mut cigar_ops, _nm) = update_cigar_hts(record, entry.align.align.cigar.as_ref().unwrap())?;
+    // projected CIGAR and its NM (computed while the CIGAR is in genome orientation)
+    let (mut cigar_ops, nm) = update_cigar_hts(record, &entry.align.align)?;
     if reverse_action {
         cigar_ops.0.reverse();
     }
@@ -736,14 +747,16 @@ fn build_projected_record(
     // Extract AS from the *original* record before we modify aux on the clone.
     let gn_as = extract_alignment_score(record).unwrap_or(0) as f64;
 
-    // Single-pass filter: remove SKIP_TAGS, preserve everything else.
+    // Single-pass filter: keep only KEEP_TAGS.
     filter_aux_tags(&mut out);
 
     // Append our projected tags.  filter_aux_tags guarantees none of these
     // exist, so push_aux_unchecked is safe (skips the duplicate scan).
     out.push_aux_unchecked(b"NH", Aux::I32(nh as i32))?;
     out.push_aux_unchecked(b"HI", Aux::I32(entry.align.align.hit_index))?;
-    out.push_aux_unchecked(b"XS", Aux::Char(entry.align.align.strand as u8))?;
+    if let Some(nm) = nm {
+        out.push_aux_unchecked(b"NM", Aux::I32(nm))?;
+    }
     // Projected alignment score, matching C++ exactly. C++ (core.cpp) only calls
     // set_as_tag — `(genome_AS + clip_score) * similarity_score` — for LONG reads;
     // for SHORT reads it leaves the original genome (STAR) AS untouched. So short
@@ -763,9 +776,9 @@ fn build_projected_record(
     Ok(out)
 }
 
-/// Single-pass aux tag filter: iterate raw aux bytes once, copy everything
-/// except tags in `SKIP_TAGS`, then truncate the record's aux block and write
-/// the filtered bytes back.  O(n) total instead of O(|SKIP_TAGS| * n).
+/// Single-pass aux tag filter: iterate raw aux bytes once, copy only the
+/// tags in `KEEP_TAGS`, then truncate the record's aux block and write the
+/// filtered bytes back.  O(n) total instead of one scan per tag.
 fn filter_aux_tags(out: &mut hts_bam::Record) {
     let aux_start = out.inner.core.l_qname as usize
         + out.cigar_len() * std::mem::size_of::<u32>()
@@ -823,7 +836,7 @@ fn filter_aux_tags(out: &mut hts_bam::Record) {
             break;
         }
 
-        let should_skip = SKIP_TAGS.contains(&tag);
+        let should_skip = !KEEP_TAGS.contains(&tag);
         if !should_skip {
             kept.extend_from_slice(&aux_bytes[pos..pos + entry_len]);
         }
@@ -896,10 +909,25 @@ fn hts_cigar_to_sam_op(op: &hts_bam::record::Cigar) -> SamCigarOp {
 
 fn update_cigar_hts(
     record: &hts_bam::Record,
-    ideal: &bramble_rs::evaluate::Cigar,
-) -> Result<(CigarString, i32)> {
+    align: &bramble_rs::evaluate::AlignInfo,
+) -> Result<(CigarString, Option<i32>)> {
     let real_ops: Vec<SamCigarOp> = record.cigar().iter().map(hts_cigar_to_sam_op).collect();
-    let (sam_cigar, nm) = bramble_rs::cigar::update_cigar_ops(&real_ops, ideal);
+    let (sam_cigar, _) = bramble_rs::cigar::update_cigar_ops(&real_ops, align.cigar.as_ref().unwrap());
+    // NM from the genome and projected CIGARs already at hand (no extra copies)
+    let genome_nm = hts_aux_as_int(record.aux(b"NM").ok());
+    let md = match record.aux(b"MD") {
+        Ok(Aux::String(s)) => Some(s.as_bytes()),
+        _ => None,
+    };
+    let nm = bramble_rs::cigar::projected_nm(
+        &real_ops,
+        sam_cigar.as_ref(),
+        genome_nm,
+        md,
+        align.rescue_left,
+        align.rescue_right,
+        align.rescue_mm,
+    );
     // Convert SamCigar to htslib CigarString
     let hts_ops: Vec<hts_bam::record::Cigar> = sam_cigar
         .as_ref()

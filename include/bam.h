@@ -60,6 +60,9 @@ namespace bramble {
 
   // not yet implemented; nm retained from aligner
   void set_nm_tag(bam1_t* b, int32_t nm_i);
+  void set_projected_nm(bam1_t* b, const std::vector<uint32_t>& gcigar,
+                        const AlignInfo& align);
+  void keep_only_known_tags(bam1_t* b);
 
   void set_hi_tag(bam1_t* b, int32_t hi_i);
 

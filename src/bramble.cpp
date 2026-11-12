@@ -170,7 +170,7 @@ std::shared_ptr<g2tTree> build_g2t_tree(GVec<GRefData> refguides,
         IntervalData interval;
         interval.start = g_start;
         interval.end = g_end;
-        interval.idx = (uint8_t)idx;
+        interval.idx = (uint32_t)idx;
         interval.pos_start = pos_start;
         intervals.push_back(interval);
         
@@ -274,11 +274,15 @@ void add_pair_if_new(std::vector<CReadAln> &reads,
 
 void process_pairs(std::vector<CReadAln> &reads, 
                   read_id_t id, GSamRecord *brec, 
-                  unordered_map<std::string, read_id_t> &hashread) {
+                  unordered_map<std::string, std::vector<read_id_t>> &hashread) {
 
-  // Only process pairs on same chromosome/contig
+  // Only process pairs on same chromosome/contig, with a mapped mate: an
+  // unmapped mate is placed at the read's own position, which would pair the
+  // read's alignments with each other
   if (brec->refId() != brec->mate_refId())
     return;
+  uint16_t flag = brec->get_b()->core.flag;
+  if (flag & BAM_FMUNMAP) return;
 
   int32_t read_start = reads[id].start;
   int32_t mate_start = brec->mate_start();
@@ -300,22 +304,37 @@ void process_pairs(std::vector<CReadAln> &reads,
   // Fix: look up our mate first (it may already be recorded, in either order);
   // if found, pair and consume it; otherwise record ourselves so our mate can
   // pair with us when it is processed. This removes the order dependence while
-  // keeping the name+position keying and single-pairing (erase-on-match).
-  std::string mate_key = create_read_id(reads[id].brec->name(), mate_start);
+  // keeping single-pairing (erase-on-match).
+  //
+  // Keys hold BOTH positions (own start, mate start), and a mate must point
+  // back at us. With only the own start, two alignments of the same read end
+  // at one position overwrote each other in the map, mis-pairing their mates
+  // and leaving the leftovers as single reads (as Rust find_mate_pairs:
+  // mates must reference each other's start). Several identical waiting
+  // alignments are paired first-in, first-out.
+  // read end in the key too: only read1 pairs with read2
+  std::string name = brec->name();
+  int end = (flag & BAM_FREAD1) ? 1 : ((flag & BAM_FREAD2) ? 2 : 0);
+  int mate_end = (end == 1) ? 2 : ((end == 2) ? 1 : 0);
+  std::string mate_key = create_read_id(name.c_str(), mate_start) + '-' +
+    std::to_string(read_start) + '-' + std::to_string(mate_end);
   auto it = hashread.find(mate_key);
-  if (it != hashread.end()) {
-    add_pair_if_new(reads, id, it->second);
-    add_pair_if_new(reads, it->second, id);
-    hashread.erase(it);
+  if (it != hashread.end() && !it->second.empty()) {
+    read_id_t mate_id = it->second.front();
+    it->second.erase(it->second.begin());
+    if (it->second.empty()) hashread.erase(it);
+    add_pair_if_new(reads, id, mate_id);
+    add_pair_if_new(reads, mate_id, id);
   } else {
-    std::string key = create_read_id(brec->name(), read_start);
-    hashread[key] = id;
+    std::string key = create_read_id(name.c_str(), read_start) + '-' +
+      std::to_string(mate_start) + '-' + std::to_string(end);
+    hashread[key].push_back(id);
   }
 }
 
 void process_read_in(std::vector<CReadAln> &reads, read_id_t id,
                     std::shared_ptr<GSamRecord> brec, char strand, 
-                    refid_t refid, unordered_map<std::string, read_id_t> &hashread) {
+                    refid_t refid, unordered_map<std::string, std::vector<read_id_t>> &hashread) {
   CReadAln read;
   read.strand = strand;
   read.refid = refid;
@@ -357,7 +376,7 @@ void process_reads(std::shared_ptr<g2tTree> g2t, BamIO *io,
   bool more_alignments = true;
 
   std::shared_ptr<GSamRecord> brec = nullptr;
-  unordered_map<std::string, read_id_t> hashread;
+  unordered_map<std::string, std::vector<read_id_t>> hashread;
 
   hashread.clear();
   bundle->reads.clear();
@@ -459,10 +478,12 @@ int main(int argc, char *argv[]) {
   std::string in_fasta;
   app.add_option("in.bam", in_bam, "input bam file")->required();
   app.add_flag("-q,--quiet", QUIET, "turn off verbose mode (log processing details)");
-  app.add_flag("--fr", FR_STRAND, "assume stranded library (first-strand, read2 sense)");
-  app.add_flag("--rf", RF_STRAND, "assume stranded library (second-strand, read1 sense)");
-  app.add_flag("--lr", LR, "alignments are from long reads");
-  app.add_flag("--lr-hq", LR_HQ, "alignments are from high-quality long reads");
+  auto *fr_flag = app.add_flag("--fr", FR_STRAND, "assume stranded library (first-strand, read2 sense)");
+  app.add_flag("--rf", RF_STRAND, "assume stranded library (second-strand, read1 sense)")
+      ->excludes(fr_flag);
+  auto *lr_flag = app.add_flag("--lr", LR, "alignments are from long reads");
+  app.add_flag("--lr-hq", LR_HQ, "alignments are from high-quality long reads")
+      ->excludes(lr_flag);
   app.add_flag("--strict", STRICT, "force strict boundary adherence");
   app.add_option("--max-soft-clip", MAX_CLIP, "maximum added soft clip (overrides preset)");
   app.add_option("--max-junction-insertion", MAX_JUNC_INS, 
@@ -559,15 +580,10 @@ int main(int argc, char *argv[]) {
   sam_hdr_t* hdr = sam_hdr_dup(hdr_reader.header());
   sam_hdr_add_pg(hdr, "bramble", "VN", VERSION, "CL", pg_args.c_str(), (char*)NULL);
   const char* hdr_str = sam_hdr_str(hdr);
-  for (const char* ls = hdr_str; *ls; ) {
-    const char* le = strchr(ls, '\n');
-    if (!le) le = ls + strlen(ls);
-    if (strncmp(ls, "@HD", 3) == 0) {
-      fwrite(ls, 1, le - ls + 1, header_file);
-    }
-    if (*le == '\0') break;
-    ls = le + 1;
-  }
+  // Not the input's @HD: output records are grouped by read name, but with
+  // several threads not in the input's order (and never coordinate-sorted;
+  // oarfish rejects SO:coordinate). Same line as the Rust version.
+  fprintf(header_file, "@HD\tVN:1.6\tSO:unsorted\tGO:query\n");
 
   // Process each transcript for guide loading and header generation
   int last_refid = -1;

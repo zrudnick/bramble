@@ -31,9 +31,12 @@ pub fn build_hts_header(
     let mut header = Header::new();
 
     // HD record
+    // Records are grouped by read name, not sorted (and never by coordinate;
+    // oarfish rejects SO:coordinate). Same line as the C++ version.
     let mut hd = HeaderRecord::new(b"HD");
-    hd.push_tag(b"VN", "1.0");
-    hd.push_tag(b"SO", "coordinate");
+    hd.push_tag(b"VN", "1.6");
+    hd.push_tag(b"SO", "unsorted");
+    hd.push_tag(b"GO", "query");
     header.push_record(&hd);
 
     // SQ records from transcripts
@@ -48,16 +51,23 @@ pub fn build_hts_header(
         header.push_record(&sq);
     }
 
-    // Retain all PG records from input BAM header
+    // Retain the PG and RG records from the input BAM header (RG: the read
+    // group tags passed through on records must stay declared), as C++ does
     let header_view = input_header.to_hashmap();
-    if let Some(pg_records) = header_view.get("PG") {
-        for pg in pg_records {
-            let mut rec = HeaderRecord::new(b"PG");
-            for (key, val) in pg {
-                rec.push_tag(key.as_bytes(), val);
+    for kind in ["PG", "RG"] {
+        if let Some(records) = header_view.get(kind) {
+            for r in records {
+                let mut rec = HeaderRecord::new(kind.as_bytes());
+                for (key, val) in r {
+                    rec.push_tag(key.as_bytes(), val);
+                }
+                header.push_record(&rec);
             }
-            header.push_record(&rec);
         }
+    }
+    // CO lines have no tags; copy them verbatim
+    for co in input_header.comments() {
+        header.push_comment(co.as_bytes());
     }
 
     // Add Bramble PG tag
