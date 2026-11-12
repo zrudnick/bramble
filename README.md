@@ -10,7 +10,7 @@ If you use bramble in your work, please cite:
 Zoe Rudnick, Ales Varabyou, Rob Patro, Mihaela Pertea. *Bramble: projection of spliced genomic alignments into transcriptomic space for improved transcript quantification.* bioRxiv (2026). [doi:10.64898/2026.09.09.750464](https://www.biorxiv.org/content/10.64898/2026.09.09.750464v1)
 
 ## Getting Help
-Run `bramble --help` to see all available options.
+Visit the [bramble website](https://zrudnick.github.io/bramble/) to see all available options.
 For issues or questions, please open an issue!
 
 You may also contact us for questions or suggestions at zrudnic1@jh.edu.
