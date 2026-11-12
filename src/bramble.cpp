@@ -45,8 +45,8 @@ bool BRAMBLE_DEBUG = false;
 bool LONG_READS = false;  // BAM file contains long reads
 bool LR = false;          // lr preset
 bool LR_HQ = false;       // lr-hq preset
-bool FR_STRAND = false;   // Read 2 is on sense strand, --fr
-bool RF_STRAND = false;   // Read 1 is on sense strand, --fr
+bool FR_STRAND = false;   // Read 1 is on sense strand, --fr
+bool RF_STRAND = false;   // Read 2 is on sense strand, --rf
 bool USE_FASTA = false;   // Use FASTA for reducing soft clips
 bool SOFT_CLIPS = true;   // Add soft clips
 bool STRICT = false;      // Use for strict boundary adherence
@@ -216,7 +216,9 @@ std::shared_ptr<g2tTree> build_g2t_tree(GVec<GRefData> refguides,
 char get_strand(GSamRecord* brec) {
   char strand = brec->spliceStrand(); // tagged strand gets priority
 
-  // Set strand if stranded library
+  // Set strand if stranded library (same convention as StringTie/HISAT2):
+  // --rf = fr-firststrand (dUTP): read 1 antisense, read 2 sense
+  // --fr = fr-secondstrand: read 1 sense, read 2 antisense
   if ((strand == '.') && (FR_STRAND || RF_STRAND)) {
 
     bool is_paired = (brec->isPaired());
@@ -227,20 +229,20 @@ char get_strand(GSamRecord* brec) {
       int pair_order = brec->pairOrder();
       if (pair_order == 1) { // first read in pair
         if ((RF_STRAND && is_rev) || (FR_STRAND && !is_rev))
-          strand = '-';
-        else strand = '+';
-      } else { // second read in pair
-        if ((RF_STRAND && is_rev) || (FR_STRAND && !is_rev))
           strand = '+';
         else strand = '-';
+      } else { // second read in pair
+        if ((RF_STRAND && is_rev) || (FR_STRAND && !is_rev))
+          strand = '-';
+        else strand = '+';
       }
     } 
     
     else { // read isn't paired
 
       if ((RF_STRAND && is_rev) || (FR_STRAND && !is_rev))
-        strand = '-';
-      else strand = '+';
+        strand = '+';
+      else strand = '-';
     }
   }
   return strand;
@@ -478,8 +480,8 @@ int main(int argc, char *argv[]) {
   std::string in_fasta;
   app.add_option("in.bam", in_bam, "input bam file")->required();
   app.add_flag("-q,--quiet", QUIET, "turn off verbose mode (log processing details)");
-  auto *fr_flag = app.add_flag("--fr", FR_STRAND, "assume stranded library (first-strand, read2 sense)");
-  app.add_flag("--rf", RF_STRAND, "assume stranded library (second-strand, read1 sense)")
+  auto *fr_flag = app.add_flag("--fr", FR_STRAND, "assume stranded library, fr-secondstrand (read1 sense)");
+  app.add_flag("--rf", RF_STRAND, "assume stranded library, fr-firststrand, e.g. dUTP (read2 sense)")
       ->excludes(fr_flag);
   auto *lr_flag = app.add_flag("--lr", LR, "alignments are from long reads");
   app.add_flag("--lr-hq", LR_HQ, "alignments are from high-quality long reads")

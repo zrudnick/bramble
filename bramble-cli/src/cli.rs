@@ -76,11 +76,11 @@ pub struct Args {
     #[arg(short = 'S', long = "genome", value_name = "FASTA")]
     pub genome_fasta: Option<PathBuf>,
 
-    /// Assume stranded library, first-strand protocol (read2 is sense)
+    /// Assume stranded library, fr-secondstrand (read1 sense)
     #[arg(long, conflicts_with = "rf")]
     pub fr: bool,
 
-    /// Assume stranded library, second-strand protocol (read1 is sense)
+    /// Assume stranded library, fr-firststrand, e.g. dUTP (read2 sense)
     #[arg(long, conflicts_with = "fr")]
     pub rf: bool,
 }
