@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — long-read options</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="nav.js" defer></script>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="index.html">bramble 🌿🫐</a>
+  <nav>
+    <button id="menu-button" aria-controls="sidebar" aria-expanded="false">Menu</button>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<div class="layout">
+<nav id="sidebar" aria-label="Documentation">
+  <noscript><a href="index.html">Introduction</a></noscript>
+</nav>
+
+<main>
+  <h1>Long-read options</h1>
+  <p class="subtitle">Tolerating long-read errors, and scoring the candidate transcripts.</p>
+
+  <p>
+    With <code>--lr</code> or <code>--lr-hq</code>, bramble changes how it treats reads in a few ways:
+  </p>
+  <ul>
+    <li>It tries transcripts on both strands, whatever the aligner's strand tags say, and
+      ignores <a href="cli-strandedness.html"><code>--fr</code>/<code>--rf</code></a>.</li>
+    <li>A read may skip one short exon of a transcript (see <code>--max-error-exon</code> below).</li>
+    <li>Each candidate transcript gets a similarity score, used to filter candidates, choose
+      the primary alignment, and set <code>AS</code>.</li>
+    <li>Soft-clipped read ends can be <a href="cli-clip-rescue.html">rescued</a> with <code>-S</code>.</li>
+  </ul>
+
+  <div class="option" id="max-error-exon">
+    <h3><code>--max-error-exon &lt;UINT&gt;</code></h3>
+    <p class="meta">default: 0 short reads, 35 <code>--lr-hq</code>, 35 <code>--lr</code>, 0 <code>--strict</code></p>
+    <p>
+      Long reads can have long insertions and deletions, which make an aligner miss a short
+      exon or report one that isn't there. This option tolerates both, up to the given length.
+      A read exon of at most this many bases, in the middle of the read, that matches no exon
+      of the transcript is treated as an insertion. And with long reads, a transcript exon of
+      at most this many bases that the read skips, between two of its exons, is treated as a
+      deletion; only one exon may be skipped between two read exons. 0 turns both off.
+    </p>
+  </div>
+
+  <div class="option" id="similarity-threshold">
+    <h3><code>--similarity-threshold &lt;FLOAT&gt;</code></h3>
+    <p class="meta">default: off for short reads, 0.90 <code>--lr-hq</code>, 0.60 <code>--lr</code>, off for <code>--strict</code></p>
+    <p>
+      After a read is projected onto a candidate transcript, bramble measures the projected
+      alignment's similarity to the transcript: the fraction of its bases that line up with
+      the transcript, where bases it had to soft clip, insert or delete at exon boundaries
+      count against it (runs of consecutive insertions or deletions count extra). Candidates
+      with similarity at or below the threshold are dropped. A value of 1.0 turns the filter off.
+    </p>
+  </div>
+
+  <h2 id="scoring">How long reads are scored</h2>
+  <p>
+    Each remaining candidate gets a score of <em>x</em>² &times; (<em>b</em> + 1), where
+    <em>b</em> is the number of the read's exon boundaries that fall exactly on annotated
+    boundaries, and <em>x</em> is how far the similarity is above the threshold, rescaled to
+    0&ndash;1 (when the filter is off, <em>x</em> is the similarity itself). The highest-scoring
+    candidate becomes the <a href="output-bam.html#primary">primary alignment</a>, and the
+    <code>AS</code> tag is the aligner's <code>AS</code>, plus the score of any rescued clip,
+    multiplied by this score. Short reads keep the aligner's <code>AS</code> unchanged.
+  </p>
+  <div id="pager"></div>
+</main>
+</div>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>

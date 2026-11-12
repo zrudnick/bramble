@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — threads and other options</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="nav.js" defer></script>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="index.html">bramble 🌿🫐</a>
+  <nav>
+    <button id="menu-button" aria-controls="sidebar" aria-expanded="false">Menu</button>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<div class="layout">
+<nav id="sidebar" aria-label="Documentation">
+  <noscript><a href="index.html">Introduction</a></noscript>
+</nav>
+
+<main>
+  <h1>Threads and other options</h1>
+
+  <div class="option" id="threads">
+    <h3><code>-p, --threads &lt;int&gt;</code></h3>
+    <p class="meta">default: 1</p>
+    <p>
+      The number of threads to use. Each read's records are always written together and in the
+      same order, but with more than one thread the C++ version may write reads in a different
+      order from run to run. The Rust version keeps the input order unless you ask for
+      <code>--unordered</code>.
+    </p>
+  </div>
+
+  <div class="option" id="quiet">
+    <h3><code>-q, --quiet</code></h3>
+    <p>Turns off the progress messages bramble prints while it runs.</p>
+  </div>
+
+  <div class="option" id="version">
+    <h3><code>-V, --version</code></h3>
+    <p>Prints the version and exits.</p>
+  </div>
+
+  <div class="option" id="help">
+    <h3><code>-h, --help</code></h3>
+    <p>Prints the list of options and exits.</p>
+  </div>
+
+  <h2 id="rust-only">Rust-only options</h2>
+  <p>These options are available only in <code>bramble-rs</code>, not in the C++ <code>bramble</code>.</p>
+
+  <div class="option" id="unordered">
+    <h3><code>--unordered</code></h3>
+    <p>
+      Each thread writes its output as soon as it's ready, instead of in input order. This is
+      faster with <code>-p</code> greater than 1, but the order of reads in the output changes
+      from run to run. The alignments of a read stay together.
+    </p>
+  </div>
+
+  <div class="option" id="unordered-flush-records">
+    <h3><code>--unordered-flush-records &lt;int&gt;</code></h3>
+    <p class="meta">default: 1024</p>
+    <p>With <code>--unordered</code>, the number of records each thread collects before writing them.</p>
+  </div>
+  <div id="pager"></div>
+</main>
+</div>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>

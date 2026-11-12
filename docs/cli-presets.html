@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — read-type presets</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="nav.js" defer></script>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="index.html">bramble 🌿🫐</a>
+  <nav>
+    <button id="menu-button" aria-controls="sidebar" aria-expanded="false">Menu</button>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<div class="layout">
+<nav id="sidebar" aria-label="Documentation">
+  <noscript><a href="index.html">Introduction</a></noscript>
+</nav>
+
+<main>
+  <h1>Read-type presets</h1>
+  <p class="subtitle">Choose the preset that matches your sequencing technology.</p>
+
+  <p>
+    Aligners don't always put exon boundaries exactly where the annotation has them,
+    especially for long reads, where a sequencing error near a splice junction can shift the
+    alignment by a few bases. A preset sets how much of this bramble tolerates, and turns on
+    the long-read behaviour for long reads. Short reads are the default; add
+    <code>--lr-hq</code> or <code>--lr</code> for long reads, and <code>--strict</code> to any of
+    them to require exact boundaries.
+  </p>
+
+  <table>
+    <tr><th>Option</th><th>short reads (default)</th><th><code>--lr-hq</code></th><th><code>--lr</code></th><th><code>--strict</code></th></tr>
+    <tr><td><a href="cli-boundaries.html#max-soft-clip"><code>--max-soft-clip</code></a></td><td>5</td><td>5</td><td>40</td><td>0</td></tr>
+    <tr><td><a href="cli-boundaries.html#max-junction-insertion"><code>--max-junction-insertion</code></a></td><td>0</td><td>10</td><td>40</td><td>0</td></tr>
+    <tr><td><a href="cli-boundaries.html#max-junction-deletion"><code>--max-junction-deletion</code></a></td><td>0</td><td>10</td><td>40</td><td>0</td></tr>
+    <tr><td><a href="cli-long-reads.html#max-error-exon"><code>--max-error-exon</code></a></td><td>0</td><td>35</td><td>35</td><td>0</td></tr>
+    <tr><td><a href="cli-long-reads.html#similarity-threshold"><code>--similarity-threshold</code></a></td><td>off</td><td>0.90</td><td>0.60</td><td>off</td></tr>
+  </table>
+
+  <div class="note">
+    <p>Any of these options that you set yourself overrides the preset, for example
+    <code>--lr --max-soft-clip 100</code>.</p>
+  </div>
+
+  <div class="option" id="short">
+    <h3>Short reads (default)</h3>
+    <p>
+      For Illumina and other short reads. Read exon boundaries at splice junctions must match
+      the annotation exactly, and the read's exons must match consecutive exons of the
+      transcript. Up to 5 bases at either end of the read may extend past the transcript's
+      exon and are soft clipped. There is no similarity filter, so every compatible
+      transcript is reported. The <a href="cli-strandedness.html">strandedness</a> options
+      apply only in this mode.
+    </p>
+  </div>
+
+  <div class="option" id="lr-hq">
+    <h3><code>--lr-hq</code></h3>
+    <p>
+      For high-accuracy long reads, such as PacBio HiFi. Each read exon boundary at a splice
+      junction may be up to 10 bases off the annotated boundary, a short read exon or skipped
+      transcript exon of up to 35 bases is tolerated as a sequencing error, and transcripts
+      are kept when the projected alignment's similarity is above 0.90. It also turns on the
+      long-read behaviour: both transcript strands are tried, alignments are scored by
+      similarity, which sets the primary alignment and the <code>AS</code> tag, and soft-clipped
+      ends can be rescued with <code>-S</code>. The
+      <a href="cli-long-reads.html">long-read options</a> page explains these.
+    </p>
+  </div>
+
+  <div class="option" id="lr">
+    <h3><code>--lr</code></h3>
+    <p>
+      For noisier long reads, such as Oxford Nanopore. It has the same long-read behaviour as
+      <code>--lr-hq</code> with wider tolerances: boundaries may be up to 40 bases off, up to
+      40 bases may be soft clipped at the read ends, and the similarity threshold is 0.60.
+      <code>--lr</code> and <code>--lr-hq</code> can't be used together.
+    </p>
+  </div>
+
+  <div class="option" id="strict">
+    <h3><code>--strict</code></h3>
+    <p>
+      Requires every read exon boundary to match an annotated exon boundary exactly: all
+      tolerances are 0, nothing may extend past the transcript's exons, short exon errors
+      are not tolerated, and the similarity filter is off (with exact boundaries, every
+      remaining transcript is a perfect structural match). <code>--strict</code> wins over the
+      values of <code>--lr</code> and <code>--lr-hq</code>, but keeps their long-read behaviour,
+      so <code>--lr --strict</code> still tries both strands, scores alignments, and rescues
+      clips with <code>-S</code>. Options you set yourself still override it.
+    </p>
+  </div>
+  <div id="pager"></div>
+</main>
+</div>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — required arguments</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="nav.js" defer></script>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="index.html">bramble 🌿🫐</a>
+  <nav>
+    <button id="menu-button" aria-controls="sidebar" aria-expanded="false">Menu</button>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<div class="layout">
+<nav id="sidebar" aria-label="Documentation">
+  <noscript><a href="index.html">Introduction</a></noscript>
+</nav>
+
+<main>
+  <h1>Required arguments</h1>
+  <p class="subtitle">Every run needs an input BAM, an annotation, and an output path.</p>
+
+  <pre><code>bramble &lt;in.bam&gt; -G &lt;annotation.gtf&gt; -o &lt;out.bam&gt; [options]</code></pre>
+  <p>
+    The options are explained on the pages of this section:
+    <a href="cli-presets.html">read-type presets</a>,
+    <a href="cli-boundaries.html">boundary tolerances</a>,
+    <a href="cli-long-reads.html">long-read options</a>,
+    <a href="cli-clip-rescue.html">clip rescue</a>,
+    <a href="cli-strandedness.html">strandedness</a>, and
+    <a href="cli-other.html">threads and other options</a>.
+  </p>
+
+  <div class="option" id="input">
+    <h3><code>&lt;in.bam&gt;</code></h3>
+    <p class="meta">positional, required</p>
+    <p>
+      The reads aligned to the genome, in BAM format, from any spliced aligner. All records
+      of a read must be next to each other (see <a href="quick-start.html">Quick start</a>):
+      bramble projects every mapped record of a read, including secondary alignments, and
+      then decides together which of the read's projections become primary and how they
+      pair up. Unmapped records are skipped.
+    </p>
+  </div>
+
+  <div class="option" id="guide">
+    <h3><code>-G, --guide &lt;file&gt;</code></h3>
+    <p class="meta">required</p>
+    <p>
+      The reference annotation, in GTF or GFF3 format. Its transcripts are the targets
+      reads are projected onto: each one becomes a reference sequence of the output BAM,
+      named by its transcript ID, with the length of its spliced exons. The chromosome
+      names in the annotation must match those in the BAM. Use the same annotation to
+      build the transcript sequences for your quantifier, so the names match.
+    </p>
+  </div>
+
+  <div class="option" id="out">
+    <h3><code>-o, --out &lt;file&gt;</code></h3>
+    <p class="meta">required</p>
+    <p>
+      Where to write the projected alignments, as a BAM file. The
+      <a href="output-bam.html">Output</a> section describes what it contains.
+    </p>
+  </div>
+  <div id="pager"></div>
+</main>
+</div>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>

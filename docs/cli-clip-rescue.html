@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — clip rescue</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="nav.js" defer></script>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="index.html">bramble 🌿🫐</a>
+  <nav>
+    <button id="menu-button" aria-controls="sidebar" aria-expanded="false">Menu</button>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<div class="layout">
+<nav id="sidebar" aria-label="Documentation">
+  <noscript><a href="index.html">Introduction</a></noscript>
+</nav>
+
+<main>
+  <h1>Clip rescue</h1>
+  <p class="subtitle">Recovering soft-clipped read ends of long reads.</p>
+
+  <div class="option" id="genome">
+    <h3><code>-S, --genome &lt;file&gt;</code></h3>
+    <p class="meta">long reads only (<code>--lr</code> or <code>--lr-hq</code>); FASTA</p>
+    <p>
+      The genome sequence the reads were aligned to, in FASTA format. Long-read aligners often
+      soft clip the first or last bases of a read when they belong to a short exon the aligner
+      couldn't place. With <code>-S</code>, bramble takes each soft-clipped end of at least 5
+      bases and, if the aligned part of the read reaches that end of its exon, aligns the clipped
+      bases to the transcript's sequence just beyond it, that is, to the neighbouring exons of
+      that transcript. If the alignment scores well enough, the
+      rescued bases become part of the projected alignment instead of a soft clip, and their
+      score is added to <code>AS</code>; otherwise the clip stays. Without <code>-S</code>, long
+      reads are projected the same way but soft clips are kept as they are. With short reads,
+      <code>-S</code> has no effect. If the FASTA has no <code>.fai</code> index, bramble builds one.
+    </p>
+  </div>
+  <div id="pager"></div>
+</main>
+</div>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>

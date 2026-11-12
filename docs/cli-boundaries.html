@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — boundary tolerances</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="nav.js" defer></script>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="index.html">bramble 🌿🫐</a>
+  <nav>
+    <button id="menu-button" aria-controls="sidebar" aria-expanded="false">Menu</button>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<div class="layout">
+<nav id="sidebar" aria-label="Documentation">
+  <noscript><a href="index.html">Introduction</a></noscript>
+</nav>
+
+<main>
+  <h1>Boundary tolerances</h1>
+  <p class="subtitle">How far a read exon's boundaries may be from the annotated ones.</p>
+
+  <p>
+    Each read exon has two boundaries. Where a read exon meets a splice junction, its
+    boundary should fall on the annotated exon boundary; at the two outer ends of the read,
+    the read may start or end anywhere inside an exon, but shouldn't reach past it. These
+    three options set how many bases a boundary may be off before the transcript is rejected.
+    Each takes a number of bases (0 = exact), and the defaults depend on the
+    <a href="cli-presets.html">preset</a>.
+  </p>
+
+  <pre><code>annotation   ==========-------------==========
+read exon    ============                       junction insertion (2 bases into the intron)
+read exon    ========                           junction deletion (2 bases short)
+read start            ===========               soft clip at the read's outer end</code></pre>
+
+  <div class="option" id="max-junction-insertion">
+    <h3><code>--max-junction-insertion &lt;UINT&gt;</code></h3>
+    <p class="meta">default: 0 short reads, 10 <code>--lr-hq</code>, 40 <code>--lr</code>, 0 <code>--strict</code></p>
+    <p>
+      At a splice junction, how many bases a read exon may extend past the annotated exon
+      boundary, into the intron. Those bases are not part of the transcript, so they become an
+      insertion (<code>I</code>) in the transcript CIGAR.
+    </p>
+  </div>
+
+  <div class="option" id="max-junction-deletion">
+    <h3><code>--max-junction-deletion &lt;UINT&gt;</code></h3>
+    <p class="meta">default: 0 short reads, 10 <code>--lr-hq</code>, 40 <code>--lr</code>, 0 <code>--strict</code></p>
+    <p>
+      At a splice junction, how many bases a read exon may stop short of the annotated exon
+      boundary. The transcript bases the read skips become a deletion (<code>D</code>) in the
+      transcript CIGAR.
+    </p>
+  </div>
+
+  <div class="option" id="max-soft-clip">
+    <h3><code>--max-soft-clip &lt;UINT&gt;</code></h3>
+    <p class="meta">default: 5 short reads, 5 <code>--lr-hq</code>, 40 <code>--lr</code>, 0 <code>--strict</code></p>
+    <p>
+      At the two outer ends of the read (the start of its first exon and the end of its last),
+      how many bases may extend past the transcript exon the read lands on. Those bases are
+      soft clipped (<code>S</code>). This limits only the clipping bramble adds: soft clips
+      already in the genome alignment are kept, and for long reads they can be
+      <a href="cli-clip-rescue.html">rescued</a> with <code>-S</code>.
+    </p>
+  </div>
+  <div id="pager"></div>
+</main>
+</div>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>

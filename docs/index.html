@@ -3,22 +3,26 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>bramble — docs</title>
+<title>bramble — introduction</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
+<script src="nav.js" defer></script>
 </head>
 <body>
 <div class="topbar">
-  <span class="brand">bramble 🌿🫐</span>
+  <a class="brand" href="index.html">bramble 🌿🫐</a>
   <nav>
-    <a href="index.html" class="active">Overview</a>
-    <a href="installation.html">Installation</a>
-    <a href="usage.html">Usage</a>
+    <button id="menu-button" aria-controls="sidebar" aria-expanded="false">Menu</button>
     <a href="https://github.com/zrudnick/bramble">GitHub</a>
   </nav>
 </div>
+
+<div class="layout">
+<nav id="sidebar" aria-label="Documentation">
+  <noscript><a href="index.html">Introduction</a></noscript>
+</nav>
 
 <main>
   <h1>bramble</h1>
@@ -31,31 +35,51 @@
   </div>
 
   <p>
-    bramble works with any alignment method and any quantification method that can use
-    alignments as input, with several modes optimized for different short- and long-read
-    sequencing technologies. It's available as a standalone executable in either C++ 
-    or Rust, as a library in Rust, or directly in <a href="https://github.com/COMBINE-lab/salmon">salmon</a> 
-    or <a href="https://github.com/COMBINE-lab/oarfish">oarfish</a>.
+    bramble takes reads aligned to a genome, together with a reference annotation, and
+    rewrites each alignment in transcript coordinates, once for every annotated transcript
+    the alignment is compatible with. The result is a transcriptome BAM that
+    alignment-based quantifiers such as <a href="https://github.com/COMBINE-lab/salmon">salmon</a>
+    and <a href="https://github.com/COMBINE-lab/oarfish">oarfish</a> read directly.
+  </p>
+  <p>
+    This means you can align your reads once, to the genome, with any spliced aligner
+    (for example HISAT2 or STAR for short reads, or minimap2 for long reads), and use the
+    same alignments both for genome-based analyses and for transcript quantification.
+    bramble has presets for short reads and for long reads of different accuracies.
   </p>
 
-  <h2>Get started</h2>
-  <div class="card-grid">
-    <div class="card">
-      <h3>Installation</h3>
-      <p>Build from source with meson, or install the Rust CLI via cargo.</p>
-      <p><a href="installation.html">Read the install guide &rarr;</a></p>
-    </div>
-    <div class="card">
-      <h3>Usage</h3>
-      <p>Quick start commands and the full CLI option reference.</p>
-      <p><a href="usage.html">Read the usage guide &rarr;</a></p>
-    </div>
-    <div class="card">
-      <h3>Rust library</h3>
-      <p>bramble-rs is the I/O-free core library used by the CLI, salmon, and oarfish.</p>
-      <p><a href="https://github.com/zrudnick/bramble/blob/main/bramble-rs/README.md">bramble-rs README &rarr;</a></p>
-    </div>
-  </div>
+  <h2>How it works</h2>
+  <p>
+    For each alignment, bramble finds the annotated exons that its aligned blocks
+    (the <em>read exons</em>) overlap. A transcript is compatible when the read exons line
+    up with consecutive exons of that transcript and every exon boundary matches the
+    annotation, within tolerances that depend on the read type. For every compatible
+    transcript, bramble writes one record, with its position and CIGAR string in
+    transcript coordinates. The two mates of a read pair are placed together on a
+    transcript they share.
+  </p>
+  <p>
+    Long reads need more tolerance than short reads, because sequencing errors near a
+    splice junction often shift where the aligner puts the exon boundary. The
+    <a href="cli-presets.html">read-type presets</a> set these tolerances for you.
+  </p>
+
+  <h2>Versions</h2>
+  <p>
+    bramble is available as a C++ executable (<code>bramble</code>) and a Rust executable
+    (<code>bramble-rs</code>). Both take the same options and produce the same alignments;
+    the Rust version has a few <a href="cli-other.html#rust-only">extra options</a>. The
+    Rust library at the core of the Rust version, <code>bramble-rs</code>, can be built into
+    other programs, and bramble is also available directly inside salmon and oarfish.
+  </p>
+
+  <h2>Where to go next</h2>
+  <ul>
+    <li><a href="installation.html">Installation</a>: build the C++ version or install the Rust version.</li>
+    <li><a href="quick-start.html">Quick start</a>: from a genome BAM to transcript quantities.</li>
+    <li><a href="cli-presets.html">Read-type presets</a>: which settings to use for your data.</li>
+    <li><a href="output-bam.html">Output</a>: what bramble writes.</li>
+  </ul>
 
   <h2>Getting help</h2>
   <p>
@@ -63,7 +87,9 @@
     questions, please <a href="https://github.com/zrudnick/bramble/issues">open an issue</a>
     on GitHub, or reach out at <a href="mailto:zrudnic1@jh.edu">zrudnic1@jh.edu</a>.
   </p>
+  <div id="pager"></div>
 </main>
+</div>
 
 <footer>
   bramble is free, open source software released under an

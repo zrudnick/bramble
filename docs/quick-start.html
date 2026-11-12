@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — quick start</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="nav.js" defer></script>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="index.html">bramble 🌿🫐</a>
+  <nav>
+    <button id="menu-button" aria-controls="sidebar" aria-expanded="false">Menu</button>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<div class="layout">
+<nav id="sidebar" aria-label="Documentation">
+  <noscript><a href="index.html">Introduction</a></noscript>
+</nav>
+
+<main>
+  <h1>Quick start</h1>
+  <p class="subtitle">From reads aligned to the genome to transcript quantities, in three steps.</p>
+
+  <h2>1. Group each read's alignments together</h2>
+  <p>
+    bramble processes all alignments of a read at once, so every record of a read must be
+    next to the others in the input. A coordinate-sorted BAM needs to be collated first:
+  </p>
+  <pre><code>samtools collate -o genome.collated.bam genome.bam</code></pre>
+  <p>
+    A BAM sorted by read name (<code>samtools sort -n</code>) works too, and so does aligner
+    output that was never sorted, which normally already keeps each read's records together.
+  </p>
+
+  <h2>2. Run bramble</h2>
+  <p>Pick the command for your sequencing technology (the <a href="cli-presets.html">presets</a> page explains the difference):</p>
+  <pre><code># short reads (Illumina)
+bramble genome.collated.bam -G annotation.gtf -o transcriptome.bam -p 8
+
+# PacBio long reads
+bramble genome.collated.bam -G annotation.gtf -S genome.fa -o transcriptome.bam --lr-hq -p 8
+
+# Oxford Nanopore long reads
+bramble genome.collated.bam -G annotation.gtf -S genome.fa -o transcriptome.bam --lr -p 8</code></pre>
+  <p>
+    <code>-G</code> is the annotation the reads are projected onto, <code>-o</code> the output
+    BAM, and <code>-p</code> the number of threads. For long reads, <code>-S</code> gives the
+    genome sequence, which bramble uses to <a href="cli-clip-rescue.html">rescue soft-clipped read ends</a>.
+    If your short reads come from a stranded library, also add
+    <a href="cli-strandedness.html"><code>--rf</code> or <code>--fr</code></a>.
+    The Rust version takes the same arguments: replace <code>bramble</code> with <code>bramble-rs</code>.
+  </p>
+
+  <h2>3. Quantify</h2>
+  <p>Give the transcriptome BAM to an alignment-based quantifier, as it is:</p>
+  <pre><code># salmon (alignment mode)
+salmon quant -t transcripts.fa -l A -a transcriptome.bam -o salmon_out -p 8
+
+# oarfish (long reads)
+oarfish -a transcriptome.bam -o oarfish_out -j 8 --filter-group no-filters --model-coverage</code></pre>
+  <p>
+    For oarfish, use <code>--filter-group no-filters</code>: bramble has already decided which
+    transcripts each read fits, so oarfish's alignment filters are not needed.
+    <code>--model-coverage</code> turns on oarfish's model of read coverage along each transcript.
+  </p>
+  <p>
+    The output's reference sequences are the transcripts of the annotation, named by their
+    <code>transcript_id</code>. If your quantifier needs transcript sequences, build them from
+    the same annotation so the names match, for example with
+    <code>gffread -w transcripts.fa -g genome.fa annotation.gtf</code>.
+  </p>
+
+  <div class="note warn">
+    <p><strong>Don't sort the output.</strong> bramble writes the two mates of a read pair
+    next to each other, which is what salmon expects. Sorting by read name
+    (<code>samtools sort -n</code>) separates the mates, and oarfish does not accept
+    coordinate-sorted input.</p>
+  </div>
+  <div id="pager"></div>
+</main>
+</div>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>

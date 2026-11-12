@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — strandedness</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="nav.js" defer></script>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="index.html">bramble 🌿🫐</a>
+  <nav>
+    <button id="menu-button" aria-controls="sidebar" aria-expanded="false">Menu</button>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<div class="layout">
+<nav id="sidebar" aria-label="Documentation">
+  <noscript><a href="index.html">Introduction</a></noscript>
+</nav>
+
+<main>
+  <h1>Strandedness</h1>
+  <p class="subtitle">Telling bramble which strand short reads come from.</p>
+
+  <p>
+    By default, bramble checks a short read against transcripts on both strands. If the reads
+    come from a stranded library, you can tell bramble which strand each read is on, so it
+    only considers transcripts on that strand. The flags mean the same as in StringTie and
+    HISAT2:
+  </p>
+
+  <table>
+    <tr><th>Library</th><th>bramble</th><th>HISAT2 <code>--rna-strandness</code></th><th>StringTie</th><th>salmon library type</th></tr>
+    <tr><td>fr-firststrand, e.g. dUTP</td><td><code>--rf</code></td><td><code>RF</code> (single-end <code>R</code>)</td><td><code>--rf</code></td><td><code>ISR</code> (single-end <code>SR</code>)</td></tr>
+    <tr><td>fr-secondstrand</td><td><code>--fr</code></td><td><code>FR</code> (single-end <code>F</code>)</td><td><code>--fr</code></td><td><code>ISF</code> (single-end <code>SF</code>)</td></tr>
+    <tr><td>unstranded</td><td>neither</td><td>default</td><td>default</td><td><code>IU</code> (single-end <code>U</code>)</td></tr>
+  </table>
+
+  <div class="option" id="rf">
+    <h3><code>--rf</code></h3>
+    <p>
+      The library is fr-firststrand, as in dUTP protocols: read 1 (or a single-end read) is
+      the reverse complement of the transcript, and read 2 has the transcript's sequence.
+    </p>
+  </div>
+
+  <div class="option" id="fr">
+    <h3><code>--fr</code></h3>
+    <p>
+      The library is fr-secondstrand: read 1 (or a single-end read) has the transcript's
+      sequence, and read 2 is its reverse complement.
+    </p>
+  </div>
+
+  <h2>Notes</h2>
+  <ul>
+    <li>A strand tag written by the aligner takes priority over these flags: <code>XS</code>
+      (HISAT2; STAR with <code>--outSAMstrandField intronMotif</code>) or minimap2's <code>ts</code>.
+      The flags decide the strand only for records without such a tag, which are mostly
+      unspliced reads.</li>
+    <li><code>--fr</code> and <code>--rf</code> can't be used together.</li>
+    <li>For long reads (<code>--lr</code>, <code>--lr-hq</code>) both flags and strand tags are
+      ignored, and both strands are always tried.</li>
+  </ul>
+  <div id="pager"></div>
+</main>
+</div>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>
