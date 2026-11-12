@@ -48,6 +48,25 @@
     bramble has presets for short reads and for long reads of different accuracies.
   </p>
 
+  <h2>Why project genomic alignments?</h2>
+  <ul>
+    <li><strong>Reads from unannotated transcripts stay out.</strong> Aligning straight to a
+      transcriptome forces every read onto some annotated transcript, so reads from transcripts
+      missing from the annotation (or from transcriptional noise) are counted toward the wrong
+      isoforms. Aligned to the genome, those reads land where they came from, and bramble drops
+      them when they don't fit an annotated transcript.</li>
+    <li><strong>Splice junctions are kept.</strong> A genome alignment knows exactly where each
+      read is spliced, and bramble uses those junctions to decide which isoforms a read fits.</li>
+    <li><strong>One alignment, every compatible transcript.</strong> bramble reports all
+      compatible transcripts in one pass, without aligning to the transcriptome again.</li>
+    <li><strong>Existing BAMs can be reused.</strong> Genome alignments you already have,
+      including public ones, can be quantified without going back to the FASTQ files.</li>
+  </ul>
+  <p>
+    The gains are largest for long reads, which span more splice junctions, and when the
+    annotation is incomplete, as it often is for non-model organisms.
+  </p>
+
   <h2>How it works</h2>
   <p>
     For each alignment, bramble finds the annotated exons that its aligned blocks
@@ -81,6 +100,15 @@
     <li><a href="output-bam.html">Output</a>: what bramble writes.</li>
   </ul>
 
+  <h2 id="citing">Citing bramble</h2>
+  <p>If you use bramble in your work, please cite:</p>
+  <p class="citation">
+    Zoe Rudnick, Ales Varabyou, Rob Patro, Mihaela Pertea.
+    <em>Bramble: projection of spliced genomic alignments into transcriptomic space for improved
+    transcript quantification.</em> bioRxiv (2026).
+    <a href="https://www.biorxiv.org/content/10.64898/2026.09.09.750464v1">doi:10.64898/2026.09.09.750464</a>
+  </p>
+
   <h2>Getting help</h2>
   <p>
     Run <code>bramble --help</code> to see all available options. For issues or
@@ -88,12 +116,12 @@
     on GitHub, or reach out at <a href="mailto:zrudnic1@jh.edu">zrudnic1@jh.edu</a>.
   </p>
   <div id="pager"></div>
-</main>
-</div>
-
 <footer>
   bramble is free, open source software released under an
   <a href="https://opensource.org/license/MIT">MIT License</a>.
 </footer>
+</main>
+</div>
+
 </body>
 </html>

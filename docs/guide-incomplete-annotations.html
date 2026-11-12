@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — incomplete annotations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="nav.js" defer></script>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="index.html">bramble 🌿🫐</a>
+  <nav>
+    <button id="menu-button" aria-controls="sidebar" aria-expanded="false">Menu</button>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<div class="layout">
+<nav id="sidebar" aria-label="Documentation">
+  <noscript><a href="index.html">Introduction</a></noscript>
+</nav>
+
+<main>
+  <h1>Incomplete annotations and non-model organisms</h1>
+  <p class="subtitle">Why bramble helps most when the annotation is missing transcripts.</p>
+
+  <h2 id="problem">The problem with aligning to a transcriptome</h2>
+  <p>
+    No annotation contains every transcript a sample expresses. Human annotations still disagree
+    with each other, a sizable part of cellular RNA is transcriptional noise, and annotations of
+    most other organisms are largely automated. When reads are aligned straight to the annotated
+    transcripts, a read from a missing transcript has nowhere to go but the most similar annotated
+    one, so it is counted toward the wrong isoform.
+  </p>
+
+  <h2 id="bramble">What bramble does differently</h2>
+  <p>
+    Aligned to the genome, a read from a missing transcript lands where it came from. bramble
+    only projects it onto annotated transcripts it actually fits, exon by exon; if it fits none,
+    it isn't projected, instead of being forced onto a wrong one.
+  </p>
+  <p>
+    The bramble paper measured this by removing transcripts from the annotation at random. The
+    fewer transcripts kept, the larger bramble's advantage: with 20% of transcripts kept, for
+    simulated PacBio reads, minimap2 + bramble + oarfish reached a Pearson correlation of 0.62
+    with the true counts, against 0.45 for minimap2 + oarfish on the transcriptome, with a fifth of
+    the mean absolute error. The gains are largest for long reads, which span more splice
+    junctions, but short reads benefit too.
+  </p>
+
+  <h2 id="advice">Practical advice</h2>
+  <ul>
+    <li><strong>Use the most complete annotation available.</strong> For human, a comprehensive
+      annotation such as GENCODE or CHESS 3 rather than a reduced one. For other organisms,
+      Ensembl or RefSeq annotations where they exist.</li>
+    <li><strong>Use the annotation that matches the genome build</strong> the reads were aligned
+      to, with the same chromosome names.</li>
+    <li><strong>Consider extending the annotation</strong> with transcripts assembled from your own
+      data; see <a href="guide-stringtie.html">Sample-specific annotations with StringTie</a>.</li>
+    <li><strong>Reads that don't project aren't lost.</strong> They are still in the genome BAM,
+      where you can look at them, for example to find unannotated genes or isoforms.</li>
+  </ul>
+  <div id="pager"></div>
+</main>
+</div>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — stranded libraries</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="nav.js" defer></script>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="index.html">bramble 🌿🫐</a>
+  <nav>
+    <button id="menu-button" aria-controls="sidebar" aria-expanded="false">Menu</button>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<div class="layout">
+<nav id="sidebar" aria-label="Documentation">
+  <noscript><a href="index.html">Introduction</a></noscript>
+</nav>
+
+<main>
+  <h1>Stranded libraries</h1>
+  <p class="subtitle">Telling bramble, and your quantifier, which strand short reads come from.</p>
+
+  <p>
+    In a stranded library, each read comes from a known strand of the transcript. Telling bramble
+    lets it skip transcripts on the other strand, which matters where genes overlap on opposite
+    strands. This applies to short reads only: for long reads, bramble always checks both strands.
+  </p>
+
+  <h2 id="which">Is my library stranded, and which way?</h2>
+  <p>
+    The kit usually tells you. Most stranded short-read kits are based on dUTP and produce
+    fr-firststrand data, where read 1 is the reverse complement of the transcript; Illumina TruSeq
+    Stranded is one of them. Some kits produce fr-secondstrand data, where read 1 has the
+    transcript's sequence. If you're not sure, check the data, in any of these ways:
+  </p>
+  <ul>
+    <li><strong>salmon:</strong> run it with <code>-l A</code>; it reports the library type it
+      detected in <code>logs/salmon_quant.log</code>.</li>
+    <li><strong>RSeQC:</strong> <code>infer_experiment.py</code> reports the fraction of reads
+      on each strand of known genes.</li>
+    <li><strong>bramble itself:</strong> run it on a sample with <code>--fr</code> and with
+      <code>--rf</code>, and count the reads that project
+      (<code>samtools view -c -F 0x904 transcriptome.bam</code>). The right flag projects far
+      more: in bramble's forward-stranded example data, 69,588 reads project with
+      <code>--fr</code> against 21,441 with <code>--rf</code>.</li>
+  </ul>
+
+  <h2 id="flags">Setting the flags</h2>
+  <table>
+    <tr><th>Library</th><th>bramble</th><th>HISAT2 <code>--rna-strandness</code></th><th>StringTie</th><th>salmon library type</th></tr>
+    <tr><td>fr-firststrand, e.g. dUTP</td><td><code>--rf</code></td><td><code>RF</code> (single-end <code>R</code>)</td><td><code>--rf</code></td><td><code>ISR</code> (single-end <code>SR</code>)</td></tr>
+    <tr><td>fr-secondstrand</td><td><code>--fr</code></td><td><code>FR</code> (single-end <code>F</code>)</td><td><code>--fr</code></td><td><code>ISF</code> (single-end <code>SF</code>)</td></tr>
+    <tr><td>unstranded</td><td>neither</td><td>default</td><td>default</td><td><code>IU</code> (single-end <code>U</code>)</td></tr>
+  </table>
+  <p>
+    The flags mean the same in bramble, HISAT2 and StringTie. For single-end reads, the read
+    counts as read 1.
+  </p>
+
+  <h2 id="effects">What changes in the output</h2>
+  <ul>
+    <li>Reads are only placed on transcripts on their own strand, so a read in a region where
+      genes overlap on opposite strands no longer counts toward both.</li>
+    <li>Reads that carry a strand tag from the aligner (<code>XS</code>, or minimap2's
+      <code>ts</code>) use the tag instead of the flag; in practice the flag decides the strand
+      of unspliced reads.</li>
+    <li>With the wrong flag, most unspliced reads are checked only against the wrong strand, so
+      far fewer reads project. A sudden drop in the fraction of reads that project is the sign
+      to check the flag.</li>
+  </ul>
+  <div id="pager"></div>
+</main>
+</div>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>

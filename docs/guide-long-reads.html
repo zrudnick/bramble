@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — long reads, start to finish</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="nav.js" defer></script>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="index.html">bramble 🌿🫐</a>
+  <nav>
+    <button id="menu-button" aria-controls="sidebar" aria-expanded="false">Menu</button>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<div class="layout">
+<nav id="sidebar" aria-label="Documentation">
+  <noscript><a href="index.html">Introduction</a></noscript>
+</nav>
+
+<main>
+  <h1>Long reads, start to finish</h1>
+  <p class="subtitle">Align PacBio or Oxford Nanopore reads to the genome, project them with bramble, and quantify with oarfish.</p>
+
+  <p>
+    This guide expands the <a href="quick-start.html">Quick start</a> into a complete long-read
+    analysis. It runs on the small example data that comes with bramble, which has both PacBio
+    and Oxford Nanopore (ONT) reads; after each step, a note says what to change for your own data.
+  </p>
+
+  <h2 id="needs">What you need</h2>
+  <ul>
+    <li>bramble (see <a href="installation.html">Installation</a>), minimap2 (with its
+      <code>paftools.js</code> script, which needs <code>k8</code>), samtools, and oarfish.</li>
+  </ul>
+
+  <h2 id="data">Get the example data</h2>
+  <pre><code>git clone https://github.com/zrudnick/bramble.git
+cd bramble/example
+
+# the genome: chr22 of hg38, from UCSC
+curl -LO https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/chr22.fa.gz
+gunzip chr22.fa.gz chess2.2_chr22.gtf.gz</code></pre>
+  <p>
+    <code>pacbio_reads.fa.gz</code> and <code>ont_reads.fq.gz</code> hold about 5,000 simulated
+    reads each from chr22 transcripts. <code>chess2.2_chr22.gtf</code> is the annotation they
+    were simulated from.
+  </p>
+
+  <h2 id="junctions">1. Annotated splice junctions for minimap2</h2>
+  <pre><code>paftools.js gff2bed chess2.2_chr22.gtf &gt; junctions.bed</code></pre>
+  <p>
+    Given the annotation's junctions (<code>--junc-bed</code> below), minimap2 prefers annotated
+    splice sites, which is exactly where bramble looks for exon boundaries.
+  </p>
+
+  <h2 id="align">2. Align to the genome</h2>
+  <pre><code># PacBio
+minimap2 -t 4 -ax splice:hq --junc-bed junctions.bed chr22.fa pacbio_reads.fa.gz \
+  | samtools view -b -o pacbio.genome.bam -
+
+# ONT
+minimap2 -t 4 -ax splice --junc-bed junctions.bed chr22.fa ont_reads.fq.gz \
+  | samtools view -b -o ont.genome.bam -</code></pre>
+  <p>
+    <code>splice:hq</code> is minimap2's preset for accurate long reads such as PacBio HiFi;
+    <code>splice</code> is for noisier reads such as ONT. minimap2's output keeps each read's
+    alignments together, so it goes straight to bramble without sorting.
+  </p>
+  <div class="note">
+    <p><strong>Your data:</strong> use your genome and annotation, with the same chromosome names in
+    both. For a large genome, build minimap2's index once (<code>minimap2 -x splice:hq -d genome.mmi genome.fa</code>)
+    and pass <code>genome.mmi</code> in place of the FASTA. If you only have a coordinate-sorted BAM,
+    collate it first: <code>samtools collate -o sample.collated.bam sample.sorted.bam</code>.</p>
+  </div>
+
+  <h2 id="bramble">3. Project with bramble</h2>
+  <pre><code># PacBio
+bramble pacbio.genome.bam -G chess2.2_chr22.gtf -S chr22.fa -o pacbio.transcriptome.bam --lr-hq -p 4
+
+# ONT
+bramble ont.genome.bam -G chess2.2_chr22.gtf -S chr22.fa -o ont.transcriptome.bam --lr -p 4</code></pre>
+  <p>
+    <code>--lr-hq</code> and <code>--lr</code> are the <a href="cli-presets.html">presets</a> for
+    accurate and noisier long reads: they set how far a read's exon boundaries may be from the
+    annotation, and turn on scoring by similarity. <code>-S</code> gives the genome sequence, which
+    bramble uses to <a href="cli-clip-rescue.html">rescue soft-clipped read ends</a>. Each run
+    takes a second or two.
+  </p>
+  <p>
+    The two presets show up in the result. Under <code>--lr-hq</code>, 61% of the PacBio reads fit
+    exactly one transcript; under the more tolerant <code>--lr</code>, 35% of the ONT reads do, and
+    the rest fit several. The quantifier sorts out those ambiguous reads using the alignment
+    scores bramble writes (<code>AS</code>).
+  </p>
+  <div class="note">
+    <p><strong>Your data:</strong> use <code>--lr-hq</code> for PacBio and <code>--lr</code> for ONT, with
+    the same annotation you gave minimap2. See <a href="cli-presets.html">Read-type presets</a> for
+    what each changes. Always give <code>-S</code> with the genome FASTA you aligned to: clip rescue
+    makes quantification more accurate, and without it, read ends the aligner soft clipped stay
+    clipped.</p>
+  </div>
+
+  <h2 id="oarfish">4. Quantify with oarfish</h2>
+  <pre><code>oarfish -j 4 -a pacbio.transcriptome.bam -o pacbio --filter-group no-filters --model-coverage
+oarfish -j 4 -a ont.transcriptome.bam -o ont --filter-group no-filters --model-coverage</code></pre>
+  <p>
+    <code>--filter-group no-filters</code> turns off oarfish's alignment filters, which are tuned for
+    minimap2's transcriptome alignments; bramble has already decided which transcripts each read
+    fits. <code>--model-coverage</code> turns on oarfish's model of read coverage along each
+    transcript. Estimated read counts per transcript are in <code>pacbio.quant</code>:
+  </p>
+  <pre><code>tname          len   num_reads
+CHS.35882.9    2357  1254.99
+CHS.35786.6    552   530.76
+CHS.35829.5    1086  438.94</code></pre>
+  <p>
+    TranSigner also reads bramble's output; the bramble paper ran it with
+    <code>--keep-low --use-psw</code>.
+  </p>
+  <div class="note warn">
+    <p><strong>Don't sort bramble's output.</strong> oarfish does not accept coordinate-sorted input.</p>
+  </div>
+
+  <h2 id="check">Look at the result</h2>
+  <p>
+    Each read has exactly one primary record in bramble's output, so counting primary records
+    gives the number of reads that projected. Compare it with the genome BAM:
+  </p>
+  <pre><code>samtools view -c -F 0x904 pacbio.genome.bam          # aligned: 4981
+samtools view -c -F 0x904 pacbio.transcriptome.bam   # projected: 4980</code></pre>
+  <p>And to see how many transcripts each read fits (its <code>NH</code> tag):</p>
+  <pre><code>samtools view -F 0x904 pacbio.transcriptome.bam | grep -o 'NH:i:[0-9]*' | sort | uniq -c | sort -k1,1nr | head</code></pre>
+  <p>
+    In the example nearly every read projects, because the reads were simulated from the
+    annotation. A long read only projects if its whole exon chain matches a transcript, so with
+    real data, reads from transcripts missing from the annotation don't project. Expect a lower
+    fraction than for short reads, depending on how complete the annotation is.
+  </p>
+  <div id="pager"></div>
+</main>
+</div>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>

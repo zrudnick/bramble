@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — existing genome BAMs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="nav.js" defer></script>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="index.html">bramble 🌿🫐</a>
+  <nav>
+    <button id="menu-button" aria-controls="sidebar" aria-expanded="false">Menu</button>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<div class="layout">
+<nav id="sidebar" aria-label="Documentation">
+  <noscript><a href="index.html">Introduction</a></noscript>
+</nav>
+
+<main>
+  <h1>Quantifying existing genome BAMs</h1>
+  <p class="subtitle">Reusing genome alignments you already have, including public ones, without realigning.</p>
+
+  <p>
+    If you already have reads aligned to the genome, you can quantify transcripts from them
+    directly: bramble projects the alignments and a quantifier takes it from there, with no need
+    to go back to the FASTQ files.
+  </p>
+
+  <h2 id="works">What bramble needs from the BAM</h2>
+  <ul>
+    <li>Alignments from a spliced aligner, such as STAR, HISAT2, or minimap2.</li>
+    <li>The records of each read next to each other (see <a href="#prepare">below</a>).</li>
+    <li>Ideally, the secondary alignments of reads that align to several places. If they were
+      filtered out, bramble still runs, but those reads are only projected from the alignment that
+      was kept.</li>
+  </ul>
+  <p>
+    What the BAM doesn't contain can't be recovered: reads the aligner left unmapped, and
+    alignments it never reported.
+  </p>
+
+  <h2 id="build">Find the genome build</h2>
+  <p>
+    The annotation must be for the same genome build the reads were aligned to. The BAM header
+    usually tells you: the <code>@PG</code> lines show the aligner command (often with the index
+    name), and the <code>@SQ</code> lines give chromosome lengths.
+  </p>
+  <pre><code>samtools view -H genome.bam | grep '^@PG'
+samtools view -H genome.bam | grep '^@SQ' | head -3</code></pre>
+  <p>For human, chr1 is 248,956,422 bases long in hg38 (GRCh38) and 249,250,621 in hg19 (GRCh37).</p>
+
+  <h2 id="names">Match the chromosome names</h2>
+  <p>
+    The annotation must name chromosomes as the BAM does. UCSC and GENCODE use <code>chr1</code>,
+    Ensembl uses <code>1</code>, and the mitochondrial genome is <code>chrM</code> in one and
+    <code>MT</code> in the other. If the BAM uses <code>chr1</code> and the annotation uses
+    <code>1</code>, add the prefix:
+  </p>
+  <pre><code>awk 'BEGIN {FS = OFS = "\t"} /^#/ {print; next} {$1 = ($1 == "MT" ? "chrM" : "chr" $1); print}' \
+  annotation.gtf &gt; annotation.chr.gtf</code></pre>
+  <p>
+    Check the result against the BAM's <code>@SQ</code> names; unplaced contigs and patches are
+    named differently between sources, and reads on them won't project if the names don't match.
+  </p>
+
+  <h2 id="prepare">Prepare the BAM</h2>
+  <p>
+    Public BAMs are usually sorted by coordinate, which separates each read's records. Collate
+    them first:
+  </p>
+  <pre><code>samtools collate -@ 8 -o genome.collated.bam genome.bam</code></pre>
+
+  <h2 id="run">Run bramble and quantify</h2>
+  <ul>
+    <li>Choose the preset from the sequencing technology in the data's metadata; see
+      <a href="guide-presets.html">Choosing a preset</a>.</li>
+    <li>For short reads, find out whether the library is stranded, from the protocol or from the
+      data; see <a href="guide-stranded.html">Stranded libraries</a>.</li>
+    <li>Then follow the <a href="guide-short-reads.html#bramble">short-read</a> or
+      <a href="guide-long-reads.html#bramble">long-read</a> guide from the bramble step on.</li>
+  </ul>
+  <div id="pager"></div>
+</main>
+</div>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>

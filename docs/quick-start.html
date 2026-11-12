@@ -26,7 +26,25 @@
 
 <main>
   <h1>Quick start</h1>
-  <p class="subtitle">From reads aligned to the genome to transcript quantities, in three steps.</p>
+  <p class="subtitle">From reads to transcript quantities, through the genome.</p>
+
+  <h2>0. Align to the genome</h2>
+  <p>
+    Any spliced aligner works. Giving the aligner the annotation's splice junctions helps it place
+    reads at annotated exon boundaries, which is where bramble looks for them. For example:
+  </p>
+  <pre><code># short reads: STAR, with the annotation built into the index
+STAR --runMode genomeGenerate --genomeDir star_index --genomeFastaFiles genome.fa \
+     --sjdbGTFfile annotation.gtf --sjdbOverhang 100
+STAR --genomeDir star_index --readFilesIn reads_1.fq reads_2.fq --outSAMtype BAM Unsorted
+
+# long reads: minimap2, with annotated junctions
+paftools.js gff2bed annotation.gtf &gt; junctions.bed
+minimap2 -ax splice:hq --junc-bed junctions.bed genome.fa reads.fq &gt; genome.sam   # PacBio
+minimap2 -ax splice    --junc-bed junctions.bed genome.fa reads.fq &gt; genome.sam   # ONT</code></pre>
+  <p>
+    HISAT2 works as well. Keep the aligner's secondary alignments: bramble projects them too.
+  </p>
 
   <h2>1. Group each read's alignments together</h2>
   <p>
@@ -52,7 +70,8 @@ bramble genome.collated.bam -G annotation.gtf -S genome.fa -o transcriptome.bam 
   <p>
     <code>-G</code> is the annotation the reads are projected onto, <code>-o</code> the output
     BAM, and <code>-p</code> the number of threads. For long reads, <code>-S</code> gives the
-    genome sequence, which bramble uses to <a href="cli-clip-rescue.html">rescue soft-clipped read ends</a>.
+    genome sequence, which bramble uses to <a href="cli-clip-rescue.html">rescue soft-clipped read ends</a>;
+    always give it when you have the genome, because it makes long-read quantification more accurate.
     If your short reads come from a stranded library, also add
     <a href="cli-strandedness.html"><code>--rf</code> or <code>--fr</code></a>.
     The Rust version takes the same arguments: replace <code>bramble</code> with <code>bramble-rs</code>.
@@ -84,12 +103,12 @@ oarfish -a transcriptome.bam -o oarfish_out -j 8 --filter-group no-filters --mod
     coordinate-sorted input.</p>
   </div>
   <div id="pager"></div>
-</main>
-</div>
-
 <footer>
   bramble is free, open source software released under an
   <a href="https://opensource.org/license/MIT">MIT License</a>.
 </footer>
+</main>
+</div>
+
 </body>
 </html>

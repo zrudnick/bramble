@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — single-cell and umi data</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="nav.js" defer></script>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="index.html">bramble 🌿🫐</a>
+  <nav>
+    <button id="menu-button" aria-controls="sidebar" aria-expanded="false">Menu</button>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<div class="layout">
+<nav id="sidebar" aria-label="Documentation">
+  <noscript><a href="index.html">Introduction</a></noscript>
+</nav>
+
+<main>
+  <h1>Single-cell and UMI data</h1>
+  <p class="subtitle">Projecting single-cell alignments, with their cell barcodes and UMIs.</p>
+
+  <p>
+    bramble has no single-cell-specific features, but it works on single-cell data: it projects
+    each alignment on its own, whatever cell it came from, and keeps the barcode and UMI tags. Cell
+    demultiplexing, UMI deduplication, and per-cell counting happen downstream, in tools that read
+    those tags.
+  </p>
+
+  <h2 id="tags">What is kept</h2>
+  <p>Every projected record keeps these tags from its genome alignment:</p>
+  <ul>
+    <li>cell barcodes and UMIs: <code>CB CR CY UB UR UY</code>, and also
+      <code>BC QT MI OX BZ RX QX BX</code>;</li>
+    <li>the read group (<code>RG</code>), with its <code>@RG</code> header line.</li>
+  </ul>
+  <p>
+    So a read's barcode and UMI are on all of its projected records, one per transcript it fits.
+    See <a href="output-bam.html#tags">Transcriptome BAM</a> for the full list of tags.
+  </p>
+
+  <h2 id="run">Running bramble</h2>
+  <ul>
+    <li>Use the BAM from your single-cell aligner, with the barcode tags in it. These BAMs are
+      often sorted by coordinate; collate them first
+      (<code>samtools collate -o genome.collated.bam genome.bam</code>).</li>
+    <li>Choose the preset from the technology, as for bulk data: the default for short reads,
+      <code>--lr-hq</code> for PacBio, <code>--lr</code> for Nanopore, with <code>-S</code> for long
+      reads. See <a href="guide-presets.html">Choosing a preset</a>.</li>
+    <li>For short-read protocols that read the transcript from one end, set the strand flag; see
+      <a href="guide-stranded.html">Stranded libraries</a>.</li>
+  </ul>
+
+  <h2 id="after">After bramble</h2>
+  <p>
+    The output is a transcriptome BAM with barcodes and UMIs, so any tool that quantifies
+    transcripts from such a BAM per cell can use it. To quantify a group of cells together
+    (pseudobulk), for example one cell type, select its cells by barcode and quantify the result
+    like bulk data:
+  </p>
+  <pre><code># cells.txt: one barcode per line, as in the CB tag
+samtools view -b -D CB:cells.txt -o celltype.transcriptome.bam transcriptome.bam</code></pre>
+  <p>
+    Each read keeps all of its records in the selected file, so the output can go straight to
+    salmon or oarfish.
+  </p>
+  <div id="pager"></div>
+</main>
+</div>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>

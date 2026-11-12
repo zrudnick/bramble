@@ -65,6 +65,8 @@
       has several), the pair is not written.</li>
     <li>When the mate is unmapped in the input, the mapped read is written on its own, as a
       paired read with an unmapped mate (<code>0x1</code> and <code>0x8</code>).</li>
+    <li>When the two mates are on different chromosomes, they can't share a transcript, so each
+      is projected and written on its own, in the same way.</li>
     <li>The two mates of a pair are always written next to each other.</li>
   </ul>
 
@@ -112,12 +114,12 @@
     oarfish does not accept coordinate-sorted input.</p>
   </div>
   <div id="pager"></div>
-</main>
-</div>
-
 <footer>
   bramble is free, open source software released under an
   <a href="https://opensource.org/license/MIT">MIT License</a>.
 </footer>
+</main>
+</div>
+
 </body>
 </html>

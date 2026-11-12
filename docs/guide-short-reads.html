@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — short reads, start to finish</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="nav.js" defer></script>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="index.html">bramble 🌿🫐</a>
+  <nav>
+    <button id="menu-button" aria-controls="sidebar" aria-expanded="false">Menu</button>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<div class="layout">
+<nav id="sidebar" aria-label="Documentation">
+  <noscript><a href="index.html">Introduction</a></noscript>
+</nav>
+
+<main>
+  <h1>Short reads, start to finish</h1>
+  <p class="subtitle">Align short reads to the genome, project them with bramble, and quantify with salmon.</p>
+
+  <p>
+    This guide expands the <a href="quick-start.html">Quick start</a> into a complete short-read
+    analysis. It runs on the small example data that comes with bramble, so every step finishes
+    in seconds; after each step, a note says what to change for your own data.
+  </p>
+
+  <h2 id="needs">What you need</h2>
+  <ul>
+    <li>bramble (see <a href="installation.html">Installation</a>), STAR (or HISAT2), samtools,
+      gffread, and salmon.</li>
+    <li>About 2 GB of memory for the example. A full human genome needs about 32 GB for STAR.</li>
+  </ul>
+
+  <h2 id="data">Get the example data</h2>
+  <pre><code>git clone https://github.com/zrudnick/bramble.git
+cd bramble/example
+
+# the genome: chr22 of hg38, from UCSC
+curl -LO https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/chr22.fa.gz
+gunzip chr22.fa.gz chess2.2_chr22.gtf.gz</code></pre>
+  <p>
+    <code>short_reads.fq.gz</code> holds about 100,000 simulated single-end reads of 101 bases
+    from chr22 transcripts, from a forward-stranded library: each read has the sequence of its
+    transcript. <code>chess2.2_chr22.gtf</code> is the annotation they were simulated from.
+  </p>
+
+  <h2 id="index">1. Build the aligner index</h2>
+  <pre><code>STAR --runMode genomeGenerate --runThreadN 4 --genomeDir star_index \
+     --genomeFastaFiles chr22.fa --sjdbGTFfile chess2.2_chr22.gtf \
+     --sjdbOverhang 100 --genomeSAindexNbases 11</code></pre>
+  <p>
+    Building the index with the annotation (<code>--sjdbGTFfile</code>) makes STAR prefer
+    annotated exon boundaries, which is exactly where bramble looks for them.
+  </p>
+  <div class="note">
+    <p><strong>Your data:</strong> use your genome and annotation, with the same chromosome names
+    in both. Set <code>--sjdbOverhang</code> to your read length minus one, and leave out
+    <code>--genomeSAindexNbases 11</code>, which is only for small genomes like this one chromosome.
+    With HISAT2, build the index with the annotation's splice sites and exons:</p>
+    <pre><code>hisat2_extract_splice_sites.py annotation.gtf &gt; splice_sites.txt
+hisat2_extract_exons.py annotation.gtf &gt; exons.txt
+hisat2-build -p 8 --ss splice_sites.txt --exon exons.txt genome.fa hisat2_index</code></pre>
+  </div>
+
+  <h2 id="align">2. Align to the genome</h2>
+  <pre><code>STAR --runThreadN 4 --genomeDir star_index \
+     --readFilesIn short_reads.fq.gz --readFilesCommand zcat \
+     --outSAMtype BAM Unsorted --outSAMstrandField intronMotif \
+     --outFileNamePrefix short.</code></pre>
+  <p>
+    This writes <code>short.Aligned.out.bam</code>. Ask for unsorted output: it keeps each read's
+    alignments together, which is what bramble needs. <code>--outSAMstrandField intronMotif</code>
+    adds the <code>XS</code> strand tag to spliced reads, which bramble uses to skip transcripts on
+    the wrong strand.
+  </p>
+  <div class="note">
+    <p><strong>Your data:</strong> for paired-end reads give both files,
+    <code>--readFilesIn reads_1.fq.gz reads_2.fq.gz</code>. Keep the secondary alignments that
+    STAR reports for reads that align to several places (up to 10 by default): bramble projects
+    each of them, and the quantifier decides between them. With HISAT2:
+    <code>hisat2 -p 8 -x hisat2_index -1 reads_1.fq.gz -2 reads_2.fq.gz | samtools view -b -o sample.bam -</code>.
+    If you only have a coordinate-sorted BAM, collate it first:
+    <code>samtools collate -o sample.collated.bam sample.sorted.bam</code>.</p>
+  </div>
+
+  <h2 id="bramble">3. Project with bramble</h2>
+  <pre><code>bramble short.Aligned.out.bam -G chess2.2_chr22.gtf -o short.transcriptome.bam --fr -p 4</code></pre>
+  <p>
+    The default preset is for short reads, so the only option needed is the strandedness: these
+    reads have the sequence of their transcript, so the library is <code>--fr</code>. bramble
+    finishes in a few seconds and reports what it did; nearly all of the 99,776 aligned reads
+    project, onto about 10 transcripts each on average.
+  </p>
+  <div class="note">
+    <p><strong>Your data:</strong> use the same annotation you gave the aligner. Most stranded kits
+    (dUTP-based, such as Illumina TruSeq Stranded) need <code>--rf</code>; leave both flags out for
+    an unstranded library. See <a href="cli-strandedness.html">Strandedness</a>.</p>
+  </div>
+
+  <h2 id="fasta">4. Build the transcript sequences</h2>
+  <pre><code>gffread -w transcripts.fa -g chr22.fa chess2.2_chr22.gtf</code></pre>
+  <p>
+    salmon needs the sequence of every transcript, named as in bramble's output. gffread names
+    each sequence by its transcript ID, so the names match.
+  </p>
+  <div class="note">
+    <p><strong>Your data:</strong> build the sequences from the same annotation. Avoid transcript
+    FASTA files whose headers pack several fields into the name, such as GENCODE's
+    <code>|</code>-separated headers, unless you trim them to the transcript ID.</p>
+  </div>
+
+  <h2 id="salmon">5. Quantify with salmon</h2>
+  <pre><code>salmon quant -t transcripts.fa -l SF -a short.transcriptome.bam -o short_salmon -p 4</code></pre>
+  <p>
+    <code>-l SF</code> is salmon's name for single-end reads from a forward-stranded library.
+    Estimated read counts and TPM per transcript are in <code>short_salmon/quant.sf</code>:
+  </p>
+  <pre><code>Name           Length  EffectiveLength  TPM            NumReads
+CHS.35786.5    719     469.000          238722.430735  5542.565
+CHS.36093.10   6541    6291.000         10530.548681   3279.559
+CHS.35882.18   1161    911.000          63162.728320   2848.551</code></pre>
+  <div class="note">
+    <p><strong>Your data:</strong> <code>-l A</code> lets salmon detect the library type, or give it
+    yourself (<code>ISR</code> for paired-end dUTP, <code>IU</code> for paired-end unstranded).</p>
+  </div>
+  <div class="note warn">
+    <p><strong>Don't sort bramble's output.</strong> salmon expects the two mates of a pair next
+    to each other; sorting separates them.</p>
+  </div>
+
+  <h2 id="check">Look at the result</h2>
+  <p>
+    Each read end has exactly one primary record in bramble's output, so counting primary records
+    gives the number of read ends that projected. Compare it with the genome BAM:
+  </p>
+  <pre><code>samtools view -c -F 0x904 short.Aligned.out.bam        # aligned: 99776
+samtools view -c -F 0x904 short.transcriptome.bam      # projected: 99762</code></pre>
+  <p>And to see how many transcripts each read fits (its <code>NH</code> tag):</p>
+  <pre><code>samtools view -F 0x904 short.transcriptome.bam | grep -o 'NH:i:[0-9]*' | sort | uniq -c | sort -k1,1nr | head</code></pre>
+  <p>
+    In the example nearly every read projects, because the reads were simulated from the
+    annotation. In real data, reads from introns, intergenic regions, and transcripts missing
+    from the annotation don't project, so expect a lower fraction; how much lower depends on the
+    sample and on how complete the annotation is.
+  </p>
+  <div id="pager"></div>
+</main>
+</div>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>

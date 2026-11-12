@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — choosing a preset</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="nav.js" defer></script>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="index.html">bramble 🌿🫐</a>
+  <nav>
+    <button id="menu-button" aria-controls="sidebar" aria-expanded="false">Menu</button>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<div class="layout">
+<nav id="sidebar" aria-label="Documentation">
+  <noscript><a href="index.html">Introduction</a></noscript>
+</nav>
+
+<main>
+  <h1>Choosing a preset and tuning tolerances</h1>
+  <p class="subtitle">Which preset fits your data, and when to change its settings.</p>
+
+  <h2 id="choose">Choosing a preset</h2>
+  <table>
+    <tr><th>Data</th><th>Preset</th></tr>
+    <tr><td>Illumina and other short reads</td><td>default (no option)</td></tr>
+    <tr><td>PacBio HiFi (including Kinnex and Revio)</td><td><code>--lr-hq</code></td></tr>
+    <tr><td>Oxford Nanopore</td><td><code>--lr</code></td></tr>
+  </table>
+  <p>
+    For other long-read data, choose by accuracy: <code>--lr-hq</code> for reads that are about as
+    accurate as PacBio HiFi, <code>--lr</code> for anything noisier, such as older PacBio CLR reads.
+    For recent, more accurate Nanopore chemistries, try both on a sample and compare (see
+    <a href="#measure">below</a>). The <a href="cli-presets.html">Read-type presets</a> page lists
+    every value each preset sets.
+  </p>
+
+  <h2 id="tradeoff">What the tolerances trade off</h2>
+  <p>
+    Every tolerance trades the same two things. A wider tolerance keeps reads whose exon
+    boundaries the aligner put a few bases off, which is common for noisy long reads; but it also
+    lets a read fit more transcripts, including ones it didn't come from, so more reads end up
+    ambiguous. A narrower tolerance makes each placement more certain, at the cost of dropping
+    reads.
+  </p>
+  <ul>
+    <li><a href="cli-boundaries.html#max-junction-insertion"><code>--max-junction-insertion</code></a>
+      and <a href="cli-boundaries.html#max-junction-deletion"><code>--max-junction-deletion</code></a>:
+      how far a read's exon may run past, or stop short of, an annotated splice site.</li>
+    <li><a href="cli-boundaries.html#max-soft-clip"><code>--max-soft-clip</code></a>: how far the
+      read's two ends may reach past the transcript's exons.</li>
+    <li><a href="cli-long-reads.html#max-error-exon"><code>--max-error-exon</code></a>: the longest
+      short exon that may be missing from the read, or extra in it, as a sequencing error.</li>
+    <li><a href="cli-long-reads.html#similarity-threshold"><code>--similarity-threshold</code></a>:
+      how closely the projected alignment must match the transcript, for long reads.</li>
+  </ul>
+  <p>
+    In bramble's example data, this shows up directly: under <code>--lr-hq</code>, 61% of the PacBio
+    reads fit exactly one transcript; under the more tolerant <code>--lr</code>, 35% of the
+    Nanopore reads do.
+  </p>
+
+  <h2 id="measure">Measuring the effect on your data</h2>
+  <p>
+    Run bramble on a sample with each setting you are considering, and compare two numbers: how
+    many reads project, and how many transcripts each read fits.
+  </p>
+  <pre><code>samtools view -c -F 0x904 genome.bam            # aligned reads
+samtools view -c -F 0x904 transcriptome.bam     # projected reads
+samtools view -F 0x904 transcriptome.bam | grep -o 'NH:i:[0-9]*' | sort | uniq -c | sort -k1,1nr | head</code></pre>
+  <p>
+    If a looser setting projects many more reads, the stricter one was dropping reads that the
+    aligner placed slightly off. If it projects about the same number but each read fits more
+    transcripts, the looser setting only adds ambiguity, and the stricter one is the better choice.
+  </p>
+
+  <h2 id="override">Changing one setting</h2>
+  <p>
+    Any option you give overrides the preset, and the rest of the preset stays as it is. For
+    example, to keep <code>--lr</code> but allow longer soft clips:
+  </p>
+  <pre><code>bramble genome.bam -G annotation.gtf -S genome.fa -o transcriptome.bam --lr --max-soft-clip 100</code></pre>
+
+  <h2 id="strict">When to use --strict</h2>
+  <p>
+    <code>--strict</code> requires every exon boundary of a read to match the annotation exactly and
+    turns the similarity filter off. Use it when you want only placements that agree perfectly
+    with the annotation, for example to study reads that support a transcript's exact structure,
+    and are willing to lose reads the aligner placed slightly off. Added to <code>--lr</code> or
+    <code>--lr-hq</code>, it keeps their long-read behaviour.
+  </p>
+  <div id="pager"></div>
+</main>
+</div>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>

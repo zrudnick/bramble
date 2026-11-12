@@ -28,7 +28,18 @@ const NAV = [
   },
   {
     section: "Guides",
-    pages: [["guides.html", "About guides"]],
+    pages: [
+      ["guides.html", "Overview"],
+      ["guide-short-reads.html", "Short reads, start to finish"],
+      ["guide-long-reads.html", "Long reads, start to finish"],
+      ["guide-public-bams.html", "Existing genome BAMs"],
+      ["guide-stringtie.html", "Annotations from StringTie"],
+      ["guide-incomplete-annotations.html", "Incomplete annotations"],
+      ["guide-presets.html", "Choosing a preset"],
+      ["guide-stranded.html", "Stranded libraries"],
+      ["guide-single-cell.html", "Single-cell and UMI data"],
+      ["guide-troubleshooting.html", "Troubleshooting"],
+    ],
   },
 ];
 

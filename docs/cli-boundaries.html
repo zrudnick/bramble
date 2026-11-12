@@ -37,10 +37,16 @@
     <a href="cli-presets.html">preset</a>.
   </p>
 
-  <pre><code>annotation   ==========-------------==========
-read exon    ============                       junction insertion (2 bases into the intron)
-read exon    ========                           junction deletion (2 bases short)
-read start            ===========               soft clip at the read's outer end</code></pre>
+  <pre><code>annotation     ==========-------------==========   two exons and the intron between them
+
+read           ============...........==========   junction insertion: the exon runs 2 bases into the intron
+read           ========...............==========   junction deletion: the exon stops 2 bases short
+read        =============.............==========   soft clip: the read starts 3 bases before the transcript
+read              =======.............==========   fine: a read may start anywhere inside an exon</code></pre>
+  <p>
+    Here the first exon is the start of the transcript, and <code>.</code> marks where the read is
+    spliced. The same rules apply at the other end of the read.
+  </p>
 
   <div class="option" id="max-junction-insertion">
     <h3><code>--max-junction-insertion &lt;UINT&gt;</code></h3>
@@ -74,12 +80,12 @@ read start            ===========               soft clip at the read's outer en
     </p>
   </div>
   <div id="pager"></div>
-</main>
-</div>
-
 <footer>
   bramble is free, open source software released under an
   <a href="https://opensource.org/license/MIT">MIT License</a>.
 </footer>
+</main>
+</div>
+
 </body>
 </html>

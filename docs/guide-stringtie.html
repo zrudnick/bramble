@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — annotations from stringtie</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="nav.js" defer></script>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="index.html">bramble 🌿🫐</a>
+  <nav>
+    <button id="menu-button" aria-controls="sidebar" aria-expanded="false">Menu</button>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<div class="layout">
+<nav id="sidebar" aria-label="Documentation">
+  <noscript><a href="index.html">Introduction</a></noscript>
+</nav>
+
+<main>
+  <h1>Sample-specific annotations with StringTie</h1>
+  <p class="subtitle">Assemble transcripts from your own reads, add them to the annotation, then project.</p>
+
+  <p>
+    bramble only projects reads onto annotated transcripts, so transcripts your samples express but
+    the annotation lacks get no reads. One way to add them is to assemble transcripts from the
+    reads with <a href="https://ccb.jhu.edu/software/stringtie/">StringTie</a>, guided by the
+    reference annotation, and project onto the result. This guide walks through it on the example
+    short reads; the bramble paper suggests this approach but has not benchmarked it.
+  </p>
+
+  <h2 id="needs">What you need</h2>
+  <ul>
+    <li>Everything from the <a href="guide-short-reads.html">short-read guide</a>, plus StringTie
+      and gffcompare.</li>
+    <li>The STAR alignment from that guide, <code>short.Aligned.out.bam</code>, in the
+      <code>example</code> folder.</li>
+  </ul>
+
+  <h2 id="sort">1. Sort a copy for StringTie</h2>
+  <pre><code>samtools sort -o short.sorted.bam short.Aligned.out.bam</code></pre>
+  <p>
+    StringTie needs alignments sorted by coordinate, but bramble needs each read's records
+    together. Keep both: the sorted copy for StringTie, the unsorted original for bramble.
+  </p>
+
+  <h2 id="assemble">2. Assemble transcripts</h2>
+  <pre><code>stringtie short.sorted.bam -G chess2.2_chr22.gtf --fr -p 4 -o short.stringtie.gtf</code></pre>
+  <p>
+    <code>-G</code> guides the assembly with the reference annotation, so known transcripts keep
+    their IDs. <code>--fr</code> is the strandedness, with the same meaning as in bramble.
+  </p>
+  <div class="note">
+    <p><strong>Your data:</strong> assemble each sample separately. For long reads, add
+    <code>-L</code>.</p>
+  </div>
+
+  <h2 id="merge">3. Merge into one annotation</h2>
+  <pre><code>stringtie --merge -G chess2.2_chr22.gtf -o merged.gtf short.stringtie.gtf</code></pre>
+  <p>
+    The merged annotation contains the reference transcripts plus the new ones, which StringTie
+    names <code>MSTRG.*</code>. In the example, it holds the 7,071 reference transcripts and 40 new
+    ones.
+  </p>
+  <div class="note">
+    <p><strong>Your data:</strong> merge all samples at once
+    (<code>stringtie --merge -G annotation.gtf -o merged.gtf sample1.gtf sample2.gtf ...</code>) and
+    use the merged annotation for every sample, so their quantities are comparable.
+    <code>stringtie --merge</code> also has options to leave out lowly expressed transcripts; see
+    <code>stringtie --help</code>.</p>
+  </div>
+
+  <h2 id="compare">4. See what is new</h2>
+  <pre><code>gffcompare -r chess2.2_chr22.gtf -o cmp merged.gtf</code></pre>
+  <p>
+    <code>cmp.stats</code> summarizes how the merged annotation compares with the reference, and
+    <code>cmp.merged.gtf.tmap</code> gives each transcript a class code: <code>=</code> for an
+    exact match to a reference transcript, <code>j</code> for a new isoform that shares a splice
+    junction with one, <code>u</code> for a new gene, and so on. In the example, 7,069 transcripts
+    match the reference exactly and most of the new ones are class <code>j</code>.
+  </p>
+
+  <h2 id="project">5. Project and quantify</h2>
+  <pre><code>bramble short.Aligned.out.bam -G merged.gtf -o merged.transcriptome.bam --fr -p 4
+gffread -w merged.fa -g chr22.fa merged.gtf
+salmon quant -t merged.fa -l SF -a merged.transcriptome.bam -o merged_salmon -p 4</code></pre>
+  <p>
+    From here on it is the same as the <a href="guide-short-reads.html#bramble">short-read guide</a>,
+    with the merged annotation in place of the reference: bramble projects onto the new transcripts
+    too, and they appear in <code>merged_salmon/quant.sf</code> under their <code>MSTRG</code> names.
+  </p>
+
+  <h2 id="caveats">Caveats</h2>
+  <ul>
+    <li><strong>Assembly errors become annotation errors.</strong> An assembled transcript that
+      doesn't exist can take reads from real ones. In the example, every read was simulated from
+      a reference transcript, yet the 40 assembled transcripts take about 4,500 of the 100,000
+      reads. Filtering lowly expressed transcripts when merging, and checking the new ones with
+      gffcompare, keeps this in check.</li>
+    <li><strong>Use one merged annotation for all samples,</strong> so every sample is quantified
+      against the same set of transcripts.</li>
+  </ul>
+  <div id="pager"></div>
+</main>
+</div>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>

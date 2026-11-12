@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bramble — troubleshooting</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="nav.js" defer></script>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="index.html">bramble 🌿🫐</a>
+  <nav>
+    <button id="menu-button" aria-controls="sidebar" aria-expanded="false">Menu</button>
+    <a href="https://github.com/zrudnick/bramble">GitHub</a>
+  </nav>
+</div>
+
+<div class="layout">
+<nav id="sidebar" aria-label="Documentation">
+  <noscript><a href="index.html">Introduction</a></noscript>
+</nav>
+
+<main>
+  <h1>Troubleshooting</h1>
+  <p class="subtitle">Common problems, how to recognize them, and how to fix them.</p>
+
+  <h2 id="few-reads">Few or no reads project</h2>
+  <p>Compare the number of reads aligned with the number projected:</p>
+  <pre><code>samtools view -c -F 0x904 genome.bam            # aligned reads
+samtools view -c -F 0x904 transcriptome.bam     # projected reads</code></pre>
+  <p>If the second number is much lower than you expect, check these, in order:</p>
+  <ul>
+    <li><strong>Chromosome names.</strong> The BAM and the annotation must name chromosomes the same
+      way (<code>chr1</code> in both, or <code>1</code> in both). Compare
+      <code>samtools view -H genome.bam | grep '^@SQ' | head -3</code> with
+      <code>grep -v '^#' annotation.gtf | cut -f1 | sort -u | head -3</code>. See
+      <a href="guide-public-bams.html#names">Existing genome BAMs</a> for how to rename.</li>
+    <li><strong>Genome build.</strong> The annotation must be for the genome the reads were aligned
+      to. In the BAM header, chr1 is 248,956,422 bases long in hg38 and 249,250,621 in hg19.</li>
+    <li><strong>Strand flag.</strong> With the wrong <code>--fr</code>/<code>--rf</code>, most
+      unspliced short reads don't project. Try the other flag, or none; see
+      <a href="guide-stranded.html">Stranded libraries</a>.</li>
+    <li><strong>Preset.</strong> Long reads need <code>--lr-hq</code> or <code>--lr</code>; with the
+      short-read default, few of them fit exactly. See
+      <a href="guide-presets.html">Choosing a preset</a>.</li>
+    <li><strong>Annotation coverage.</strong> A long read only projects if its whole exon chain
+      matches an annotated transcript. If your sample expresses many transcripts the annotation
+      lacks, many long reads won't project; a more complete annotation helps. See
+      <a href="guide-incomplete-annotations.html">Incomplete annotations</a>.</li>
+  </ul>
+
+  <h2 id="wrong-output">The output looks wrong</h2>
+  <p>
+    <strong>Several primary alignments for one read, wrong <code>NH</code>, or mates not
+    paired</strong> usually mean the input wasn't grouped by read name. bramble treats each run of
+    consecutive records with the same name as one read; if a read's records are scattered (as in
+    a coordinate-sorted BAM), each piece is handled as a separate read. To check, this prints
+    names that appear in more than one place:
+  </p>
+  <pre><code>samtools view genome.bam | cut -f1 | uniq | sort | uniq -d | head</code></pre>
+  <p>If it prints anything, collate the BAM first: <code>samtools collate -o genome.collated.bam genome.bam</code>.</p>
+
+  <h2 id="quantifier">The quantifier complains</h2>
+  <ul>
+    <li><strong>Transcript names don't match.</strong> The quantifier's transcript sequences must be
+      named exactly as in bramble's output (the annotation's transcript IDs). Build them from the
+      same annotation with <code>gffread -w transcripts.fa -g genome.fa annotation.gtf</code>.</li>
+    <li><strong>salmon warns about mates.</strong> The output was probably sorted. salmon expects
+      the two mates of a pair next to each other, which is how bramble writes them; use bramble's
+      output as it is.</li>
+    <li><strong>oarfish rejects the file.</strong> oarfish does not accept coordinate-sorted BAMs;
+      again, use bramble's output as it is.</li>
+  </ul>
+
+  <h2 id="inspect">Looking at one read</h2>
+  <p>To see what bramble did with a particular read, pull its records from both files:</p>
+  <pre><code>samtools view genome.bam | awk '$1 == "READ_NAME"'
+samtools view transcriptome.bam | awk '$1 == "READ_NAME"'</code></pre>
+  <p>
+    Each output record is one placement on one transcript; <code>NH</code> is the number of
+    placements of that read end, mates share the same <code>HI</code>, and exactly one record per
+    read end is primary. See <a href="output-bam.html">Transcriptome BAM</a>.
+  </p>
+
+  <h2 id="report">Reporting a problem</h2>
+  <p>
+    Please <a href="https://github.com/zrudnick/bramble/issues">open an issue</a> with the bramble
+    version (<code>bramble -V</code>), the exact command, and, if you can, a small BAM that shows
+    the problem. The records of one read are often enough:
+  </p>
+  <pre><code>samtools view -h genome.bam | awk '/^@/ || $1 == "READ_NAME"' | samtools view -b -o example.bam -</code></pre>
+  <div id="pager"></div>
+</main>
+</div>
+
+<footer>
+  bramble is free, open source software released under an
+  <a href="https://opensource.org/license/MIT">MIT License</a>.
+</footer>
+</body>
+</html>
