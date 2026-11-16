@@ -1,7 +1,5 @@
 # MacOS --- arghh
 .DS_Store
-/test
-tx_header.sam
 .cache
 
 # meson 
@@ -35,6 +33,7 @@ build.ninja
 
 # Misc
 compile_commands.json
+.claude/
 
 # build directory
 /builddir

@@ -1,4 +1,10 @@
 :root {
+  /* fonts: Atkinson Hyperlegible for text (every easily confused character is
+     distinct), Crimson Pro semibold for titles */
+  --font-body: "Atkinson Hyperlegible", "Helvetica Neue", Arial, sans-serif;
+  --font-head: "Crimson Pro", Georgia, serif;
+  --font-code: "SF Mono", Consolas, Menlo, monospace;
+  --head-weight: 600;
   --bg: #fbfbf9;
   --fg: #16201a;
   --muted: #55684f;
@@ -36,13 +42,13 @@
 
 * { box-sizing: border-box; }
 
-html { scroll-behavior: smooth; }
+html { scroll-behavior: smooth; font-size: 104%; }
 
 body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font-family: "Literata", Georgia, "Times New Roman", serif;
+  font-family: var(--font-body);
   line-height: 1.65;
 }
 
@@ -65,7 +71,7 @@ a:hover { text-decoration: underline; }
 .topbar .brand:hover { text-decoration: none; }
 .topbar .brand {
   font-weight: 700;
-  font-size: 1.15rem;
+  font-size: 1.35rem;
   color: var(--accent);
   margin-right: auto;
 }
@@ -185,14 +191,14 @@ main {
 .note.warn { background: var(--warn-soft); border-left-color: var(--warn); }
 .note.warn strong { color: var(--warn); }
 
-h1 { font-size: 2.2rem; margin-bottom: 0.3rem; color: var(--accent); }
+h1 { font-size: 2.6rem; margin-bottom: 0.3rem; color: var(--accent); }
 h2 {
-  font-size: 1.45rem;
+  font-size: 1.75rem;
   margin-top: 2.5rem;
   border-bottom: 2px solid var(--accent-soft);
   padding-bottom: 0.4rem;
 }
-h3 { font-size: 1.15rem; margin-top: 1.8rem; color: var(--accent); }
+h3 { font-size: 1.4rem; margin-top: 1.8rem; color: var(--accent); }
 
 .subtitle { color: var(--accent2); font-size: 1.1rem; margin-top: 0; }
 
@@ -216,7 +222,7 @@ pre {
   overflow-x: auto;
   border: 1px solid var(--code-border);
   font-size: 0.88rem;
-  font-family: "SF Mono", Consolas, Menlo, monospace;
+  font-family: var(--font-code);
 }
 
 code {
@@ -224,7 +230,7 @@ code {
   padding: 0.15rem 0.35rem;
   border-radius: 4px;
   font-size: 0.9em;
-  font-family: "SF Mono", Consolas, Menlo, monospace;
+  font-family: var(--font-code);
 }
 
 pre code { background: none; padding: 0; }
@@ -277,3 +283,7 @@ footer {
   padding: 0.2rem 0 0.2rem 1rem;
   margin: 1rem 0;
 }
+
+h1, h2, h3, .topbar .brand, #sidebar summary { font-family: var(--font-head); }
+#sidebar summary { font-size: 1.12rem; }
+h1, h2, h3 { font-weight: var(--head-weight); }
