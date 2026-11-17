@@ -127,3 +127,104 @@ fn long_read_count_matches_golden() {
         "long-read record count mismatch: got {got}, expected {golden}"
     );
 }
+
+// ── HI-aware mate pairing (self-contained fixture) ───────────────────────────
+
+/// Write a 4-record SAM in the shape STAR reports one read pair with two
+/// alignments at the same positions, told apart only by HI: HI:1 both mates
+/// unspliced (150M), HI:2 both spliced (100M200N50M). Plus a GTF where the
+/// unspliced pair fits tx1 (one exon 1001-1400) and the spliced pair fits tx2
+/// (exons 1001-1100, 1301-1400).
+fn write_hi_fixture(dir: &Path) -> (PathBuf, PathBuf) {
+    use std::io::Write;
+    std::fs::create_dir_all(dir).unwrap();
+    let gtf = dir.join("anno.gtf");
+    let mut f = std::fs::File::create(&gtf).unwrap();
+    for (ty, s, e, id) in [
+        ("transcript", 1001, 1400, "tx1"),
+        ("exon", 1001, 1400, "tx1"),
+        ("transcript", 1001, 1400, "tx2"),
+        ("exon", 1001, 1100, "tx2"),
+        ("exon", 1301, 1400, "tx2"),
+    ] {
+        writeln!(
+            f,
+            "chr1\ttest\t{ty}\t{s}\t{e}\t.\t+\t.\tgene_id \"g\"; transcript_id \"{id}\";"
+        )
+        .unwrap();
+    }
+    let sam = dir.join("pairs.sam");
+    let mut f = std::fs::File::create(&sam).unwrap();
+    writeln!(
+        f,
+        "@HD\tVN:1.6\tSO:unsorted\tGO:query\n@SQ\tSN:chr1\tLN:5000"
+    )
+    .unwrap();
+    let seq = "ACGT".repeat(38)[..150].to_string();
+    // STAR order: read1 HI:2, read1 HI:1, read2 HI:1, read2 HI:2
+    for (flag, cigar, tlen, hi) in [
+        (355, "100M200N50M", 350, 2),
+        (99, "150M", 150, 1),
+        (147, "150M", -150, 1),
+        (403, "100M200N50M", -350, 2),
+    ] {
+        writeln!(
+            f,
+            "frag\t{flag}\tchr1\t1001\t3\t{cigar}\t=\t1001\t{tlen}\t{seq}\t*\tNH:i:2\tHI:i:{hi}\tAS:i:298"
+        )
+        .unwrap();
+    }
+    (sam, gtf)
+}
+
+/// (flag, transcript, pos, CIGAR, TLEN) of every output record, sorted.
+fn bam_records(path: &Path) -> Vec<(u16, String, i64, String, i64)> {
+    let mut reader = bam::Reader::from_path(path).expect("open BAM");
+    let names: Vec<String> = reader
+        .header()
+        .target_names()
+        .iter()
+        .map(|n| String::from_utf8_lossy(n).into_owned())
+        .collect();
+    let mut out = Vec::new();
+    for r in reader.records() {
+        let r = r.expect("read record");
+        out.push((
+            r.flags(),
+            names[r.tid() as usize].clone(),
+            r.pos(),
+            r.cigar().to_string(),
+            r.insert_size(),
+        ));
+    }
+    out.sort();
+    out
+}
+
+/// Each alignment of the fragment projects as a proper pair onto the transcript
+/// it fits. Pairing on positions alone would join read1 HI:2 with read2 HI:1
+/// (spliced with unspliced: no shared transcript) and write nothing. If
+/// `BRAMBLE_CPP` names the C++ binary, its output must be the same.
+#[test]
+fn alignments_at_one_position_pair_by_hi() {
+    let dir = std::env::temp_dir().join("bramble_cli_hi_pairs");
+    let (sam, gtf) = write_hi_fixture(&dir);
+    let out = dir.join("rs.bam");
+    run_binary(&[sam.to_str().unwrap(), "-G", gtf.to_str().unwrap()], &out);
+    let got = bam_records(&out);
+    let proper: Vec<_> = got.iter().filter(|r| r.0 & 0x2 != 0).collect();
+    assert_eq!(proper.len(), 4, "records: {got:?}");
+    let on = |tx: &str| proper.iter().filter(|r| r.1 == tx).count();
+    assert_eq!((on("tx1"), on("tx2")), (2, 2), "records: {got:?}");
+
+    if let Ok(cpp) = std::env::var("BRAMBLE_CPP") {
+        let cpp_out = dir.join("cpp.bam");
+        let status = Command::new(cpp)
+            .args([sam.to_str().unwrap(), "-G", gtf.to_str().unwrap(), "-o"])
+            .arg(&cpp_out)
+            .status()
+            .expect("failed to spawn C++ bramble");
+        assert!(status.success(), "C++ bramble exited with status {status}");
+        assert_eq!(bam_records(&cpp_out), got, "C++ and Rust outputs differ");
+    }
+}

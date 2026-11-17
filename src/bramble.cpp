@@ -315,15 +315,29 @@ void process_pairs(std::vector<CReadAln> &reads,
   // mates must reference each other's start). Several identical waiting
   // alignments are paired first-in, first-out.
   // read end in the key too: only read1 pairs with read2
+  //
+  // Positions alone do not identify the mate when an aligner reports several
+  // alignments of one fragment at the same positions (STAR does, with
+  // different CIGARs: e.g. both mates unspliced as HI:1, both spliced as HI:2).
+  // When both records carry an HI tag, the HI values must agree, and the first
+  // waiting alignment whose HI agrees is taken; without HI, pair on positions
+  // only (as before). Matches Rust find_mate_pairs.
   std::string name = brec->name();
+  const int64_t hi = brec->tag_int("HI", 0);
+  auto hi_compatible = [&](read_id_t other) {
+    const int64_t other_hi = reads[other].brec->tag_int("HI", 0);
+    return hi <= 0 || other_hi <= 0 || hi == other_hi;
+  };
   int end = (flag & BAM_FREAD1) ? 1 : ((flag & BAM_FREAD2) ? 2 : 0);
   int mate_end = (end == 1) ? 2 : ((end == 2) ? 1 : 0);
   std::string mate_key = create_read_id(name.c_str(), mate_start) + '-' +
     std::to_string(read_start) + '-' + std::to_string(mate_end);
   auto it = hashread.find(mate_key);
-  if (it != hashread.end() && !it->second.empty()) {
-    read_id_t mate_id = it->second.front();
-    it->second.erase(it->second.begin());
+  auto waiting = (it == hashread.end()) ? std::vector<read_id_t>::iterator() :
+    std::find_if(it->second.begin(), it->second.end(), hi_compatible);
+  if (it != hashread.end() && waiting != it->second.end()) {
+    read_id_t mate_id = *waiting;
+    it->second.erase(waiting);
     if (it->second.empty()) hashread.erase(it);
     add_pair_if_new(reads, id, mate_id);
     add_pair_if_new(reads, mate_id, id);
