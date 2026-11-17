@@ -242,6 +242,15 @@ pub fn assign_primary_and_hit_indices(
     }
 }
 
+/// Positions alone do not identify the mate when an aligner reports several
+/// alignments of one fragment at the same positions (STAR does, with different
+/// CIGARs: e.g. both mates unspliced as HI:1, both spliced as HI:2). When both
+/// records carry an HI tag (`hit_index > 0`), the HI values must agree; without
+/// HI, mates are paired on positions only. Matches C++ process_pairs.
+fn hi_compatible(a: &ReadEval, b: &ReadEval) -> bool {
+    a.hit_index <= 0 || b.hit_index <= 0 || a.hit_index == b.hit_index
+}
+
 #[doc(hidden)]
 pub fn find_mate_pairs(reads: &[ReadEval]) -> Vec<(usize, usize)> {
     // Pair mates that MUTUALLY reference each other's alignment start (same name
@@ -302,6 +311,7 @@ pub fn find_mate_pairs(reads: &[ReadEval]) -> Vec<(usize, usize)> {
                 if let Some((_, m_ms)) = eligible(&reads[m])
                     && m_ms == rs
                     && end(&reads[m]) != end(read)
+                    && hi_compatible(read, &reads[m])
                 {
                     pairs.push((idx, m));
                     paired[idx] = true;
@@ -571,4 +581,66 @@ pub fn segs_from_ops(ref_start: i64, ops: &[(u32, CigarKind)]) -> Vec<alignment:
         });
     }
     segs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A paired record of read `end` (1 or 2), all at one position with the
+    /// mate at the same position, as STAR reports overlapping mates.
+    fn rec(idx: usize, end: u8, hi: i32) -> ReadEval {
+        let end_flag = if end == 1 { FLAG_READ1 } else { FLAG_READ2 };
+        ReadEval {
+            record_idx: idx,
+            matches: HashMap::new(),
+            read_len: 100,
+            flags: FLAG_PAIRED | end_flag,
+            alignment_start: Some(1000),
+            mate_alignment_start: Some(1000),
+            ref_id: Some(0),
+            mate_ref_id: Some(0),
+            hit_index: hi,
+        }
+    }
+
+    fn sorted(mut pairs: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+        for p in &mut pairs {
+            if p.0 > p.1 {
+                *p = (p.1, p.0);
+            }
+        }
+        pairs.sort();
+        pairs
+    }
+
+    #[test]
+    fn mates_at_the_same_position_are_matched_by_hi() {
+        // STAR order for one fragment with three alignments at one position:
+        // read1 HI:2, read1 HI:3, read1 HI:1, read2 HI:1, read2 HI:2, read2 HI:3
+        let reads = vec![
+            rec(0, 1, 2),
+            rec(1, 1, 3),
+            rec(2, 1, 1),
+            rec(3, 2, 1),
+            rec(4, 2, 2),
+            rec(5, 2, 3),
+        ];
+        assert_eq!(sorted(find_mate_pairs(&reads)), vec![(0, 4), (1, 5), (2, 3)]);
+    }
+
+    #[test]
+    fn without_hi_mates_are_matched_by_position() {
+        let reads = vec![rec(0, 1, 0), rec(1, 2, 0)];
+        assert_eq!(sorted(find_mate_pairs(&reads)), vec![(0, 1)]);
+        // HI on one record only: positions decide
+        let reads = vec![rec(0, 1, 1), rec(1, 2, 0)];
+        assert_eq!(sorted(find_mate_pairs(&reads)), vec![(0, 1)]);
+    }
+
+    #[test]
+    fn mates_with_different_hi_are_not_paired() {
+        let reads = vec![rec(0, 1, 1), rec(1, 2, 2)];
+        assert!(find_mate_pairs(&reads).is_empty());
+    }
 }

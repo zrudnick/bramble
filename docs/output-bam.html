@@ -56,6 +56,10 @@
 
   <h2 id="pairs">Read pairs</h2>
   <ul>
+    <li>bramble finds a read's mate from the positions the two records point at
+      (<code>POS</code> and <code>PNEXT</code>). When the aligner reports several alignments of
+      a pair at the same positions, as STAR does, the mates are also matched on their
+      <code>HI</code> tag. Without <code>HI</code>, positions alone decide.</li>
     <li>When both mates project onto some of the same transcripts, bramble writes one pair per
       shared transcript, as a proper pair (<code>0x2</code>) with the mate on the same
       transcript (<code>RNEXT</code> is <code>=</code>) and a template length.</li>
